@@ -136,6 +136,23 @@
   when: bootstrap_router | bool
   tags: ["bootstrap_router"]
 
+- name: Allow MySQL Router ports through UFW
+  ansible.builtin.shell: |
+    set -euo pipefail
+    if ! command -v ufw >/dev/null 2>&1; then
+      exit 0
+    fi
+    if ! ufw status 2>/dev/null | grep -qw "active"; then
+      exit 0
+    fi
+    ufw allow 6446/tcp comment 'MySQL Router RW'
+    ufw allow 6447/tcp comment 'MySQL Router RO'
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: bootstrap_router | bool
+  tags: ["bootstrap_router"]
+
 - name: Bootstrap mysqlrouter
   ansible.builtin.shell: |
     set -euo pipefail

@@ -20,6 +20,21 @@
     erawan_server_id: "{{ (groups['all'] | list).index(inventory_hostname) + 1 }}"
   tags: ["configure_instances", "configure_mysql"]
 
+- name: Allow MySQL port through UFW for cluster communication
+  ansible.builtin.shell: |
+    set -euo pipefail
+    if ! command -v ufw >/dev/null 2>&1; then
+      exit 0
+    fi
+    if ! ufw status 2>/dev/null | grep -qw "active"; then
+      exit 0
+    fi
+    ufw allow {{ mysql_port }}/tcp comment 'MySQL InnoDB Cluster'
+  args:
+    executable: /bin/bash
+  changed_when: false
+  tags: ["configure_instances", "configure_mysql"]
+
 - name: Ensure minimal MySQL config for InnoDB Cluster
   ansible.builtin.copy:
     dest: /etc/mysql/mysql.conf.d/99-erawan-cluster.cnf
