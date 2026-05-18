@@ -101,16 +101,27 @@
     cluster = dba.get_cluster(cluster_name)
     for host in standby_hosts:
       endpoint = f"{cluster_admin_user}@{host}:{mysql_port}"
+      add_options = {
+        "password": cluster_admin_pass,
+        "recoveryMethod": recovery_method,
+        "waitRecovery": 0,
+      }
       try:
-        cluster.add_instance(endpoint, {
-          "password": cluster_admin_pass,
-          "recoveryMethod": recovery_method,
-          "waitRecovery": 0,
-        })
+        cluster.add_instance(endpoint, add_options)
         print("added " + host)
       except Exception as e:
-        if "already" in str(e).lower():
+        msg = str(e).lower()
+        if "already" in msg:
           print("already in cluster " + host)
+        elif recovery_method != "clone" and (
+          "instance provisioning required" in msg
+          or "errant gtid" in msg
+          or "must be either cloned or fully provisioned" in msg
+        ):
+          clone_options = dict(add_options)
+          clone_options["recoveryMethod"] = "clone"
+          cluster.add_instance(endpoint, clone_options)
+          print("added via clone " + host)
         else:
           raise
 
