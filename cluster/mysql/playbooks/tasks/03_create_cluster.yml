@@ -1,28 +1,25 @@
 - name: Ensure cluster exists
   ansible.builtin.shell: |
     set -euo pipefail
-    cat >/tmp/create_cluster.py <<'PY'
+    _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
+    trap 'rm -f "$_tmp"' EXIT
+    cat >"$_tmp" <<'PY'
     import os
 
     shell.options["useWizards"] = False
     shell.options["dba.restartWaitTimeout"] = {{ step_timeout_seconds | default(900) | int }}
-    cluster_name = {{ cluster_name | to_json }}
-    primary_host = {{ primary_ip | to_json }}
-    mysql_port = {{ mysql_port }}
+    cluster_name   = {{ cluster_name | to_json }}
+    primary_host   = {{ primary_ip | to_json }}
+    mysql_port     = {{ mysql_port }}
     assume_prepared = {{ (assume_prepared | default(false) | bool) | ternary('True', 'False') }}
 
     def connect_local_root():
       last_error = None
-      for socket_path in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
-        if not os.path.exists(socket_path):
+      for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
+        if not os.path.exists(sock):
           continue
         try:
-          shell.connect({
-            "user": "root",
-            "scheme": "mysql",
-            "host": "localhost",
-            "socket": socket_path
-          })
+          shell.connect({"user": "root", "scheme": "mysql", "host": "localhost", "socket": sock})
           return shell.get_session()
         except Exception as exc:
           last_error = exc
@@ -32,88 +29,70 @@
 
     session = connect_local_root()
 
-    def run_sql_relaxed(stmt):
-      ignored = (
-        "unknown system variable",
-        "read only variable",
-        "group replication is not running",
-        "not configured properly to be an active member of the group",
-        "mysql error (3092)",
-        "plugin group_replication is not loaded",
-        "doesn't exist",
-      )
+    ignored = (
+      "unknown system variable",
+      "read only variable",
+      "group replication is not running",
+      "not configured properly to be an active member of the group",
+      "mysql error (3092)",
+      "plugin group_replication is not loaded",
+      "doesn't exist",
+    )
+
+    def run_relaxed(stmt):
       try:
         session.run_sql(stmt)
       except Exception as e:
-        message = str(e).lower()
-        if any(token in message for token in ignored):
+        if any(t in str(e).lower() for t in ignored):
           return
         raise
 
-    # Force primary into deterministic standalone state before create/recover.
-    run_sql_relaxed("STOP GROUP_REPLICATION")
-    run_sql_relaxed("SET GLOBAL group_replication_bootstrap_group = OFF")
-    run_sql_relaxed("SET GLOBAL group_replication_start_on_boot = OFF")
-    run_sql_relaxed("SET PERSIST group_replication_start_on_boot = OFF")
-    run_sql_relaxed("RESET PERSIST IF EXISTS group_replication_group_seeds")
-    run_sql_relaxed(f"SET PERSIST group_replication_local_address = '{primary_host}:{mysql_port}'")
-    run_sql_relaxed("SET PERSIST group_replication_communication_stack = 'MYSQL'")
-    run_sql_relaxed("SET GLOBAL super_read_only = OFF")
-    run_sql_relaxed("SET GLOBAL read_only = OFF")
+    run_relaxed("STOP GROUP_REPLICATION")
+    run_relaxed("SET GLOBAL group_replication_bootstrap_group = OFF")
+    run_relaxed("SET GLOBAL group_replication_start_on_boot = OFF")
+    run_relaxed("SET PERSIST group_replication_start_on_boot = OFF")
+    run_relaxed("RESET PERSIST IF EXISTS group_replication_group_seeds")
+    run_relaxed(f"SET PERSIST group_replication_local_address = '{primary_host}:{mysql_port}'")
+    run_relaxed("SET PERSIST group_replication_communication_stack = 'MYSQL'")
+    run_relaxed("SET GLOBAL super_read_only = OFF")
+    run_relaxed("SET GLOBAL read_only = OFF")
 
     if not assume_prepared:
-      # Clean deploy mode: remove any stale metadata and rebuild from scratch.
       try:
         dba.drop_metadata_schema({"force": True})
         print("metadata dropped")
       except Exception as e:
-        message = str(e).lower()
-        if "metadata schema" in message and "does not exist" in message:
-          pass
-        elif "this function is not available through a session to a standalone instance" in message:
-          pass
-        elif "no metadata schema found" in message:
-          pass
-        else:
+        msg = str(e).lower()
+        if not any(t in msg for t in ("does not exist", "standalone instance", "no metadata schema")):
           raise
 
+    local_addr = f"{primary_host}:{mysql_port}"
     try:
       dba.get_cluster(cluster_name)
       print("cluster already exists")
     except Exception as e:
-      message = str(e).lower()
-      # Metadata exists but GR is down: recover instead of attempting create.
-      if "metadata exists" in message and "belongs to that metadata" in message:
+      msg = str(e).lower()
+      if "metadata exists" in msg and "belongs to that metadata" in msg:
         if assume_prepared:
           dba.reboot_cluster_from_complete_outage(cluster_name, {"force": True})
           print("cluster rebooted from complete outage")
         else:
           dba.drop_metadata_schema({"force": True})
-          dba.create_cluster(cluster_name, {
-            "multiPrimary": False,
-            "localAddress": f"{primary_host}:{mysql_port}"
-          })
+          dba.create_cluster(cluster_name, {"multiPrimary": False, "localAddress": local_addr})
           print("cluster created")
-      elif "standalone instance" in message and "gr is not active" in message:
+      elif "standalone instance" in msg and "gr is not active" in msg:
         if assume_prepared:
           dba.reboot_cluster_from_complete_outage(cluster_name, {"force": True})
           print("cluster rebooted from complete outage")
         else:
-          dba.create_cluster(cluster_name, {
-            "multiPrimary": False,
-            "localAddress": f"{primary_host}:{mysql_port}"
-          })
+          dba.create_cluster(cluster_name, {"multiPrimary": False, "localAddress": local_addr})
           print("cluster created")
       else:
-        dba.create_cluster(cluster_name, {
-          "multiPrimary": False,
-          "localAddress": f"{primary_host}:{mysql_port}"
-        })
+        dba.create_cluster(cluster_name, {"multiPrimary": False, "localAddress": local_addr})
         print("cluster created")
     PY
     timeout {{ mysqlsh_create_cluster_timeout_seconds | default(step_timeout_seconds | default(900)) | int }} \
-      mysqlsh --no-wizard --py --file /tmp/create_cluster.py
-    rm -f /tmp/create_cluster.py
+      mysqlsh --no-wizard --py --file "$_tmp"
   args:
     executable: /bin/bash
   register: create_cluster

@@ -1,22 +1,20 @@
 - name: Normalize clusteradmin grants for router bootstrap
   ansible.builtin.shell: |
     set -euo pipefail
-    cat >/tmp/router_user_hosts.py <<'PY'
+    _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
+    trap 'rm -f "$_tmp"' EXIT
+    cat >"$_tmp" <<'PY'
     import os
 
     shell.options["useWizards"] = False
+
     def connect_local_root():
       last_error = None
-      for socket_path in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
-        if not os.path.exists(socket_path):
+      for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
+        if not os.path.exists(sock):
           continue
         try:
-          shell.connect({
-            "user": "root",
-            "scheme": "mysql",
-            "host": "localhost",
-            "socket": socket_path
-          })
+          shell.connect({"user": "root", "scheme": "mysql", "host": "localhost", "socket": sock})
           return shell.get_session()
         except Exception as exc:
           last_error = exc
@@ -27,69 +25,52 @@
     session = connect_local_root()
     admin_user = {{ cluster_admin_username | to_json }}
     admin_pass = {{ cluster_admin_password | to_json }}
-    escaped_user = admin_user.replace("`", "``")
+    eu = admin_user.replace("`", "``")
 
-    desired = {"%", "localhost", "127.0.0.1", "::1",
-               {{ primary_ip | to_json }}}
+    desired = {"%", "localhost", "127.0.0.1", "::1", {{ primary_ip | to_json }}}
     for ip in {{ standby_ips | to_json }}:
       desired.add(str(ip))
-
-    existing = session.run_sql(
-      "SELECT host FROM mysql.user WHERE user = ?", [admin_user]
-    ).fetch_all()
-    for row in existing:
+    for row in session.run_sql("SELECT host FROM mysql.user WHERE user = ?", [admin_user]).fetch_all():
       if row and row[0] is not None:
         desired.add(str(row[0]))
 
     for host in sorted(desired):
-      escaped_host = str(host).replace("\\", "\\\\").replace("'", "''")
+      eh = str(host).replace("\\", "\\\\").replace("'", "''")
       session.run_sql(
-        f"CREATE USER IF NOT EXISTS `{escaped_user}`@'{escaped_host}' "
-        f"IDENTIFIED WITH mysql_native_password BY ?", [admin_pass]
+        f"CREATE USER IF NOT EXISTS `{eu}`@'{eh}' IDENTIFIED WITH mysql_native_password BY ?", [admin_pass]
       )
       session.run_sql(
-        f"ALTER USER `{escaped_user}`@'{escaped_host}' "
-        f"IDENTIFIED WITH mysql_native_password BY ?", [admin_pass]
+        f"ALTER USER `{eu}`@'{eh}' IDENTIFIED WITH mysql_native_password BY ?", [admin_pass]
       )
-      session.run_sql(
-        f"GRANT ALL PRIVILEGES ON *.* TO `{escaped_user}`@'{escaped_host}' "
-        f"WITH GRANT OPTION"
-      )
+      session.run_sql(f"GRANT ALL PRIVILEGES ON *.* TO `{eu}`@'{eh}' WITH GRANT OPTION")
     session.run_sql("FLUSH PRIVILEGES")
     PY
-    timeout 180 mysqlsh --no-wizard --py --file /tmp/router_user_hosts.py
-    rm -f /tmp/router_user_hosts.py
+    timeout 180 mysqlsh --no-wizard --py --file "$_tmp"
   args:
     executable: /bin/bash
   run_once: true
   delegate_to: primary
+  changed_when: false
   when: bootstrap_router | bool
   tags: ["bootstrap_router"]
 
-# -----------------------------------------------------------------------
-# Step 2: Clean stale router metadata so --conf-base-port is respected
-# This is the key fix for ports being assigned at +2 offset (6448/6449)
-# instead of base port (6446/6447)
-# -----------------------------------------------------------------------
 - name: Clean stale router metadata from MySQL cluster
   ansible.builtin.shell: |
     set -euo pipefail
-    cat >/tmp/clean_router_metadata.py <<'PY'
+    _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
+    trap 'rm -f "$_tmp"' EXIT
+    cat >"$_tmp" <<'PY'
     import os
 
     shell.options["useWizards"] = False
+
     def connect_local_root():
       last_error = None
-      for socket_path in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
-        if not os.path.exists(socket_path):
+      for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
+        if not os.path.exists(sock):
           continue
         try:
-          shell.connect({
-            "user": "root",
-            "scheme": "mysql",
-            "host": "localhost",
-            "socket": socket_path
-          })
+          shell.connect({"user": "root", "scheme": "mysql", "host": "localhost", "socket": sock})
           return shell.get_session()
         except Exception as exc:
           last_error = exc
@@ -99,12 +80,12 @@
 
     session = connect_local_root()
     try:
-      result = session.run_sql(
+      rows = session.run_sql(
         "SELECT router_id FROM mysql_innodb_cluster_metadata.routers"
       ).fetch_all()
-      if result:
+      if rows:
         session.run_sql("DELETE FROM mysql_innodb_cluster_metadata.routers")
-        print(f"cleaned {len(result)} stale router metadata entries")
+        print(f"cleaned {len(rows)} stale router metadata entries")
       else:
         print("no stale router metadata found")
     except Exception as e:
@@ -113,18 +94,15 @@
       else:
         raise
     PY
-    timeout 60 mysqlsh --no-wizard --py --file /tmp/clean_router_metadata.py
-    rm -f /tmp/clean_router_metadata.py
+    timeout 60 mysqlsh --no-wizard --py --file "$_tmp"
   args:
     executable: /bin/bash
   run_once: true
   delegate_to: primary
+  changed_when: false
   when: bootstrap_router | bool
   tags: ["bootstrap_router"]
 
-# -----------------------------------------------------------------------
-# Step 3: Clean up any previous router installation on each node
-# -----------------------------------------------------------------------
 - name: Ensure mysqlrouter system user exists
   ansible.builtin.user:
     name: mysqlrouter
@@ -133,15 +111,7 @@
   when: bootstrap_router | bool
   tags: ["bootstrap_router"]
 
-- name: Stop mysqlrouter service if running
-  ansible.builtin.systemd:
-    name: "{{ router_service_name }}"
-    state: stopped
-  failed_when: false
-  when: bootstrap_router | bool
-  tags: ["bootstrap_router"]
-
-- name: Remove stale router directory before bootstrap
+- name: Remove stale router installation
   ansible.builtin.file:
     path: "/etc/mysqlrouter/{{ cluster_name }}"
     state: absent
@@ -158,37 +128,25 @@
   when: bootstrap_router | bool
   tags: ["bootstrap_router"]
 
-# -----------------------------------------------------------------------
-# Step 4: Bootstrap router — no --force so metadata port is always fresh
-# -----------------------------------------------------------------------
+- name: Stop mysqlrouter service if running
+  ansible.builtin.systemd:
+    name: "{{ router_service_name }}"
+    state: stopped
+  failed_when: false
+  when: bootstrap_router | bool
+  tags: ["bootstrap_router"]
+
 - name: Bootstrap mysqlrouter
   ansible.builtin.shell: |
     set -euo pipefail
-
-    bootstrap_with_user() {
-      local u="$1" p="$2"
-      printf '%s\n' "$p" | \
-        timeout {{ mysqlrouter_bootstrap_timeout_seconds | default(180) | int }} \
-        mysqlrouter \
-          --bootstrap "${u}@{{ primary_ip }}:{{ mysql_port }}" \
-          --conf-use-gr-notifications \
-          --conf-base-port "6446" \
-          --directory "/etc/mysqlrouter/{{ cluster_name }}" \
-          --user=mysqlrouter
-    }
-
-    set +e
-    out="$(bootstrap_with_user {{ cluster_admin_username | quote }} {{ cluster_admin_password | quote }} 2>&1)"
-    rc=$?
-    set -e
-
-    if [ "$rc" -eq 0 ]; then
-      echo "$out"
-      exit 0
-    fi
-
-    echo "$out" >&2
-    exit "$rc"
+    printf '%s\n' {{ cluster_admin_password | quote }} | \
+      timeout {{ mysqlrouter_bootstrap_timeout_seconds | default(180) | int }} \
+      mysqlrouter \
+        --bootstrap {{ cluster_admin_username | quote }}@{{ primary_ip }}:{{ mysql_port }} \
+        --conf-use-gr-notifications \
+        --conf-base-port 6446 \
+        --directory /etc/mysqlrouter/{{ cluster_name }} \
+        --user=mysqlrouter
   args:
     executable: /bin/bash
   register: bootstrap_router_result
@@ -196,14 +154,11 @@
   delay: "{{ bootstrap_router_retry_delay_seconds | default(20) | int }}"
   until: bootstrap_router_result.rc == 0
   changed_when: bootstrap_router_result.rc == 0
-  failed_when:  bootstrap_router_result.rc != 0
+  failed_when: bootstrap_router_result.rc != 0
   when: bootstrap_router | bool
   tags: ["bootstrap_router"]
 
-# -----------------------------------------------------------------------
-# Step 5: Verify and fix config
-# -----------------------------------------------------------------------
-- name: Verify mysqlrouter config exists
+- name: Ensure mysqlrouter config exists
   ansible.builtin.stat:
     path: "/etc/mysqlrouter/{{ cluster_name }}/mysqlrouter.conf"
   register: mysqlrouter_config
@@ -219,21 +174,7 @@
   when: bootstrap_router | bool
   tags: ["bootstrap_router"]
 
-- name: Show assigned router ports for debugging
-  ansible.builtin.shell: |
-    grep -i "bind_port\|bind_address" /etc/mysqlrouter/{{ cluster_name }}/mysqlrouter.conf
-  register: router_ports_debug
-  changed_when: false
-  when: bootstrap_router | bool
-  tags: ["bootstrap_router"]
-
-- name: Print router ports
-  ansible.builtin.debug:
-    msg: "{{ router_ports_debug.stdout_lines }}"
-  when: bootstrap_router | bool
-  tags: ["bootstrap_router"]
-
-- name: Verify router RW port is configured in conf
+- name: Verify router RW port is configured
   ansible.builtin.command:
     argv:
       - grep
@@ -244,7 +185,7 @@
   when: bootstrap_router | bool
   tags: ["bootstrap_router"]
 
-- name: Verify router RO port is configured in conf
+- name: Verify router RO port is configured
   ansible.builtin.command:
     argv:
       - grep
@@ -255,9 +196,6 @@
   when: bootstrap_router | bool
   tags: ["bootstrap_router"]
 
-# -----------------------------------------------------------------------
-# Step 6: Install, enable and start service
-# -----------------------------------------------------------------------
 - name: Install mysqlrouter systemd service
   ansible.builtin.copy:
     dest: "/etc/systemd/system/{{ router_service_name }}.service"
@@ -291,9 +229,6 @@
   when: bootstrap_router | bool
   tags: ["bootstrap_router"]
 
-# -----------------------------------------------------------------------
-# Step 7: Verify ports reachable — use ansible_host (real IP) not 127.0.0.1
-# -----------------------------------------------------------------------
 - name: Wait for router RW port reachable from controller
   ansible.builtin.wait_for:
     host: "{{ ansible_host }}"
@@ -316,18 +251,18 @@
   when: bootstrap_router | bool
   tags: ["bootstrap_router"]
 
-- name: Verify router RW port reachable on node interface
+- name: Verify router RW port reachable on node
   ansible.builtin.wait_for:
-    host: "{{ ansible_host }}"
+    host: "127.0.0.1"
     port: 6446
     state: started
     timeout: 30
   when: bootstrap_router | bool
   tags: ["bootstrap_router"]
 
-- name: Verify router RO port reachable on node interface
+- name: Verify router RO port reachable on node
   ansible.builtin.wait_for:
-    host: "{{ ansible_host }}"
+    host: "127.0.0.1"
     port: 6447
     state: started
     timeout: 30

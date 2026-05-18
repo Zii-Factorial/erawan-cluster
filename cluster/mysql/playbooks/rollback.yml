@@ -4,24 +4,19 @@
   gather_facts: false
   become: true
   tasks:
-    - name: Stop mysqlrouter service if present
+    - name: Stop and disable mysqlrouter service
       ansible.builtin.systemd:
         name: "{{ router_service_name }}"
         state: stopped
-      ignore_errors: true
-      tags: ["rollback"]
-
-    - name: Disable mysqlrouter service if present
-      ansible.builtin.systemd:
-        name: "{{ router_service_name }}"
         enabled: false
-      ignore_errors: true
+      failed_when: false
       tags: ["rollback"]
 
     - name: Remove mysqlrouter systemd service file
       ansible.builtin.file:
         path: "/etc/systemd/system/{{ router_service_name }}.service"
         state: absent
+      notify: reload systemd
       tags: ["rollback"]
 
     - name: Remove mysqlrouter directory
@@ -29,6 +24,11 @@
         path: "/etc/mysqlrouter/{{ cluster_name }}"
         state: absent
       tags: ["rollback"]
+
+  handlers:
+    - name: reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
 
 - name: Dissolve cluster from primary
   hosts: mysql_primary
@@ -38,23 +38,20 @@
     - name: Dissolve InnoDB cluster if exists
       ansible.builtin.shell: |
         set -euo pipefail
-        cat >/tmp/rollback_cluster.py <<'PY'
+        _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
+        trap 'rm -f "$_tmp"' EXIT
+        cat >"$_tmp" <<'PY'
         import os
 
         shell.options["useWizards"] = False
         cluster_name = {{ cluster_name | to_json }}
 
         last_error = None
-        for socket_path in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
-          if not os.path.exists(socket_path):
+        for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
+          if not os.path.exists(sock):
             continue
           try:
-            shell.connect({
-              "user": "root",
-              "scheme": "mysql",
-              "host": "localhost",
-              "socket": socket_path
-            })
+            shell.connect({"user": "root", "scheme": "mysql", "host": "localhost", "socket": sock})
             break
           except Exception as exc:
             last_error = exc
@@ -64,19 +61,17 @@
           raise RuntimeError("unable to find a usable MySQL local socket for root")
 
         try:
-          cluster = dba.get_cluster(cluster_name)
-          cluster.dissolve({"force": True})
+          dba.get_cluster(cluster_name).dissolve({"force": True})
           print("cluster dissolved")
         except Exception as e:
-          message = str(e).lower()
-          if "does not exist" in message or "unknown cluster" in message or "standalone instance" in message:
+          msg = str(e).lower()
+          if any(t in msg for t in ("does not exist", "unknown cluster", "standalone instance")):
             print("cluster already absent")
           else:
             raise
         PY
         timeout {{ mysqlsh_rollback_timeout_seconds | default(180) | int }} \
-          mysqlsh --no-wizard --py --file /tmp/rollback_cluster.py
-        rm -f /tmp/rollback_cluster.py
+          mysqlsh --no-wizard --py --file "$_tmp"
       args:
         executable: /bin/bash
       register: rollback_cluster

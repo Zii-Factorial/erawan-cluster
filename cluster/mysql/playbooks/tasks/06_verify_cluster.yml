@@ -1,55 +1,45 @@
-- name: Install cluster status script
-  ansible.builtin.copy:
-    dest: /usr/local/bin/mysql-cluster-status.py
-    mode: "0755"
-    content: |
-      import json, os
-      cluster_name = os.environ["CLUSTER_NAME"]
-      expected     = int(os.environ["EXPECTED_CLUSTER_NODES"])
-
-      last_error = None
-      for socket_path in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
-        if not os.path.exists(socket_path):
-          continue
-        try:
-          shell.connect({
-            "user": "root",
-            "scheme": "mysql",
-            "host": "localhost",
-            "socket": socket_path
-          })
-          break
-        except Exception as exc:
-          last_error = exc
-      else:
-        if last_error is not None:
-          raise last_error
-        raise RuntimeError("unable to find a usable MySQL local socket for root")
-
-      cluster   = dba.get_cluster(cluster_name)
-      status    = cluster.status()
-      rs        = status.get("defaultReplicaSet", {})
-      topology  = rs.get("topology", {})
-      rs_status = str(rs.get("status", ""))
-
-      if not rs_status.startswith("OK"):
-        raise RuntimeError(f"cluster status is not healthy: {rs_status}")
-      if len(topology) < expected:
-        raise RuntimeError(f"expected {expected} nodes, got {len(topology)}")
-
-      print(json.dumps(status, indent=2))
-  tags: ["verify_cluster", "status_check"]
-
 - name: Verify cluster status
   ansible.builtin.shell: |
     set -euo pipefail
+    _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
+    trap 'rm -f "$_tmp"' EXIT
+    cat >"$_tmp" <<'PY'
+    import json, os
+
+    cluster_name   = os.environ["CLUSTER_NAME"]
+    expected_nodes = int(os.environ["EXPECTED_CLUSTER_NODES"])
+
+    last_error = None
+    for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
+      if not os.path.exists(sock):
+        continue
+      try:
+        shell.connect({"user": "root", "scheme": "mysql", "host": "localhost", "socket": sock})
+        break
+      except Exception as exc:
+        last_error = exc
+    else:
+      if last_error is not None:
+        raise last_error
+      raise RuntimeError("unable to find a usable MySQL local socket for root")
+
+    status   = dba.get_cluster(cluster_name).status()
+    rs       = status.get("defaultReplicaSet", {})
+    rs_status = str(rs.get("status", ""))
+
+    if not rs_status.startswith("OK"):
+      raise RuntimeError(f"cluster status is not healthy: {rs_status}")
+    if len(rs.get("topology", {})) < expected_nodes:
+      raise RuntimeError(f"expected {expected_nodes} nodes, got {len(rs.get('topology', {}))}")
+
+    print(json.dumps(status, indent=2))
+    PY
     timeout {{ mysqlsh_verify_timeout_seconds | default(180) | int }} \
-      mysqlsh --no-wizard --py --file /usr/local/bin/mysql-cluster-status.py
+      mysqlsh --no-wizard --py --file "$_tmp"
   args:
     executable: /bin/bash
   environment:
     CLUSTER_NAME:           "{{ cluster_name }}"
     EXPECTED_CLUSTER_NODES: "{{ (standby_ips | length + 1) | string }}"
-  register: verify_cluster
   changed_when: false
   tags: ["verify_cluster", "status_check"]

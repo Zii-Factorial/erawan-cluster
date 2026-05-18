@@ -1,5 +1,6 @@
-- name: Derive deterministic unique server_id per host
+- name: Set deployment mode facts
   ansible.builtin.set_fact:
+    _assume_prepared: "{{ assume_prepared | default(false) | bool }}"
     erawan_server_id: "{{ (groups['all'] | list).index(inventory_hostname) + 1 }}"
   tags: ["configure_instances", "configure_mysql"]
 
@@ -11,7 +12,7 @@
       [mysqld]
       bind-address = 0.0.0.0
       report_host = {{ ansible_host }}
-      mysqlx-bind-address = 0.0.0.0
+      mysqlx_bind_address = 0.0.0.0
       loose-group_replication_start_on_boot = OFF
       loose-group_replication_communication_stack = MYSQL
       loose-group_replication_local_address = {{ ansible_host }}:{{ mysql_port }}
@@ -36,7 +37,7 @@
 
 - name: Wait for MySQL to come back after restart
   ansible.builtin.wait_for:
-    host: "{{ ansible_host }}"
+    host: "127.0.0.1"
     port: "{{ mysql_port }}"
     state: started
     delay: 5
@@ -44,10 +45,12 @@
   when: mysql_cluster_config.changed
   tags: ["configure_instances", "configure_mysql"]
 
-- name: Reset stale GR state when assume_prepared is false
+- name: Reset stale GR state
   ansible.builtin.shell: |
     set -euo pipefail
-    cat >/tmp/reset_gr_state.py <<'PY'
+    _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
+    trap 'rm -f "$_tmp"' EXIT
+    cat >"$_tmp" <<'PY'
     import os
 
     shell.options["useWizards"] = False
@@ -57,16 +60,11 @@
 
     def connect_local_root():
       last_error = None
-      for socket_path in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
-        if not os.path.exists(socket_path):
+      for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
+        if not os.path.exists(sock):
           continue
         try:
-          shell.connect({
-            "user": "root",
-            "scheme": "mysql",
-            "host": "localhost",
-            "socket": socket_path
-          })
+          shell.connect({"user": "root", "scheme": "mysql", "host": "localhost", "socket": sock})
           return shell.get_session()
         except Exception as exc:
           last_error = exc
@@ -87,7 +85,7 @@
       "doesn't exist",
     )
 
-    statements = [
+    for stmt in [
       "STOP GROUP_REPLICATION",
       "SET GLOBAL super_read_only = OFF",
       "SET GLOBAL read_only = OFF",
@@ -97,78 +95,65 @@
       "RESET PERSIST IF EXISTS group_replication_group_seeds",
       f"SET PERSIST group_replication_local_address = '{local_addr}'",
       "SET PERSIST group_replication_communication_stack = 'MYSQL'",
-    ]
-
-    for stmt in statements:
+    ]:
       try:
         session.run_sql(stmt)
       except Exception as e:
-        message = str(e).lower()
-        if any(token in message for token in ignored):
+        if any(t in str(e).lower() for t in ignored):
           continue
         raise
 
     try:
       dba.drop_metadata_schema({"force": True})
     except Exception as e:
-      message = str(e).lower()
-      if "metadata schema" in message and "does not exist" in message:
-        pass
-      elif "this function is not available through a session to a standalone instance" in message:
-        pass
-      elif "no metadata schema found" in message:
-        pass
-      else:
+      msg = str(e).lower()
+      if not any(t in msg for t in ("does not exist", "standalone instance", "no metadata schema")):
         raise
     PY
     timeout {{ mysqlsh_reset_gr_timeout_seconds | default(180) | int }} \
-      mysqlsh --no-wizard --py --file /tmp/reset_gr_state.py
-    rm -f /tmp/reset_gr_state.py
+      mysqlsh --no-wizard --py --file "$_tmp"
   args:
     executable: /bin/bash
-  register: reset_gr_state
   changed_when: false
-  when: not (assume_prepared | default(false) | bool)
+  when: not _assume_prepared
   tags: ["configure_instances", "configure_mysql", "configure_instances_mysqlsh"]
 
 - name: Restart MySQL after stale GR reset
   ansible.builtin.systemd:
     name: mysql
     state: restarted
-  when: not (assume_prepared | default(false) | bool)
+  when: not _assume_prepared
   tags: ["configure_instances", "configure_mysql"]
 
 - name: Wait for MySQL after stale GR reset restart
   ansible.builtin.wait_for:
-    host: "{{ ansible_host }}"
+    host: "127.0.0.1"
     port: "{{ mysql_port }}"
     state: started
     delay: 5
     timeout: "{{ mysql_start_timeout_seconds | default(300) | int }}"
-  when: not (assume_prepared | default(false) | bool)
+  when: not _assume_prepared
   tags: ["configure_instances", "configure_mysql"]
 
 - name: Configure instance for InnoDB Cluster
   ansible.builtin.shell: |
     set -euo pipefail
-    cat >/tmp/configure_instance.py <<'PY'
+    _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
+    trap 'rm -f "$_tmp"' EXIT
+    cat >"$_tmp" <<'PY'
     import os
 
     shell.options["useWizards"] = False
+
     def local_root_connection():
       last_error = None
-      for socket_path in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
-        if not os.path.exists(socket_path):
+      for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
+        if not os.path.exists(sock):
           continue
-        connection = {
-          "user": "root",
-          "scheme": "mysql",
-          "host": "localhost",
-          "socket": socket_path
-        }
+        conn = {"user": "root", "scheme": "mysql", "host": "localhost", "socket": sock}
         try:
-          shell.connect(connection)
-          return connection
+          shell.connect(conn)
+          return conn
         except Exception as exc:
           last_error = exc
       if last_error is not None:
@@ -180,49 +165,44 @@
       "clusterAdmin": {{ cluster_admin_username | to_json }},
       "clusterAdminPassword": {{ cluster_admin_password | to_json }},
       "restart": True,
-      "interactive": False
+      "interactive": False,
     }
     try:
       dba.configure_instance(instance, options)
     except Exception as e:
-      msg = str(e)
-      msg_l = msg.lower()
-      if "belongs to an innodb cluster" in msg_l and "clusteradmin option is not allowed" in msg_l:
+      msg = str(e).lower()
+      if "belongs to an innodb cluster" in msg and "clusteradmin option is not allowed" in msg:
         print("instance already belongs to a cluster; skipping configure_instance")
-      elif "clusteradminpassword is not allowed for an existing account" in msg_l or "account already exists" in msg_l:
+      elif "clusteradminpassword is not allowed for an existing account" in msg or "account already exists" in msg:
         options.pop("clusterAdminPassword", None)
         dba.configure_instance(instance, options)
       else:
         raise
     PY
     timeout {{ mysqlsh_configure_timeout_seconds | default(600) | int }} \
-      mysqlsh --no-wizard --py --file /tmp/configure_instance.py
-    rm -f /tmp/configure_instance.py
+      mysqlsh --no-wizard --py --file "$_tmp"
   args:
     executable: /bin/bash
-  register: configure_instance
   changed_when: false
   tags: ["configure_instances", "configure_instances_mysqlsh"]
 
 - name: Normalize cluster admin password and grants
   ansible.builtin.shell: |
     set -euo pipefail
-    cat >/tmp/normalize_cluster_admin.py <<'PY'
+    _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
+    trap 'rm -f "$_tmp"' EXIT
+    cat >"$_tmp" <<'PY'
     import os
 
     shell.options["useWizards"] = False
+
     def connect_local_root():
       last_error = None
-      for socket_path in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
-        if not os.path.exists(socket_path):
+      for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
+        if not os.path.exists(sock):
           continue
         try:
-          shell.connect({
-            "user": "root",
-            "scheme": "mysql",
-            "host": "localhost",
-            "socket": socket_path
-          })
+          shell.connect({"user": "root", "scheme": "mysql", "host": "localhost", "socket": sock})
           return shell.get_session()
         except Exception as exc:
           last_error = exc
@@ -233,51 +213,36 @@
     session = connect_local_root()
     admin_user = {{ cluster_admin_username | to_json }}
     admin_pass = {{ cluster_admin_password | to_json }}
-    escaped_user = admin_user.replace("`", "``")
+    eu = admin_user.replace("`", "``")
 
-    state_row = session.run_sql(
-      "SELECT @@GLOBAL.super_read_only, @@GLOBAL.read_only"
-    ).fetch_one()
-    super_ro = int(state_row[0]) if state_row and state_row[0] is not None else 0
-    ro       = int(state_row[1]) if state_row and state_row[1] is not None else 0
-    if super_ro == 1 or ro == 1:
+    row = session.run_sql("SELECT @@GLOBAL.super_read_only, @@GLOBAL.read_only").fetch_one()
+    if row and (int(row[0] or 0) or int(row[1] or 0)):
       session.run_sql("SET GLOBAL super_read_only = OFF")
       session.run_sql("SET GLOBAL read_only = OFF")
 
     session.run_sql(
-      f"CREATE USER IF NOT EXISTS `{escaped_user}`@'%' IDENTIFIED WITH mysql_native_password BY ?",
-      [admin_pass],
+      f"CREATE USER IF NOT EXISTS `{eu}`@'%' IDENTIFIED WITH mysql_native_password BY ?", [admin_pass]
     )
     session.run_sql(
-      f"ALTER USER `{escaped_user}`@'%' IDENTIFIED WITH mysql_native_password BY ?",
-      [admin_pass],
+      f"ALTER USER `{eu}`@'%' IDENTIFIED WITH mysql_native_password BY ?", [admin_pass]
     )
-    session.run_sql(
-      f"GRANT ALL PRIVILEGES ON *.* TO `{escaped_user}`@'%' WITH GRANT OPTION"
-    )
+    session.run_sql(f"GRANT ALL PRIVILEGES ON *.* TO `{eu}`@'%' WITH GRANT OPTION")
 
-    hosts = session.run_sql(
-      "SELECT host FROM mysql.user WHERE user = ?", [admin_user]
-    ).fetch_all()
-    for row in hosts:
-      host = row[0]
-      if host == "%":
+    for row in session.run_sql("SELECT host FROM mysql.user WHERE user = ?", [admin_user]).fetch_all():
+      h = row[0]
+      if h == "%":
         continue
-      escaped_host = str(host).replace("\\", "\\\\").replace("'", "''")
+      eh = str(h).replace("\\", "\\\\").replace("'", "''")
       session.run_sql(
-        f"ALTER USER `{escaped_user}`@'{escaped_host}' IDENTIFIED WITH mysql_native_password BY ?",
-        [admin_pass],
+        f"ALTER USER `{eu}`@'{eh}' IDENTIFIED WITH mysql_native_password BY ?", [admin_pass]
       )
-      session.run_sql(
-        f"GRANT ALL PRIVILEGES ON *.* TO `{escaped_user}`@'{escaped_host}' WITH GRANT OPTION"
-      )
+      session.run_sql(f"GRANT ALL PRIVILEGES ON *.* TO `{eu}`@'{eh}' WITH GRANT OPTION")
+
     session.run_sql("FLUSH PRIVILEGES")
     PY
     timeout {{ mysqlsh_normalize_timeout_seconds | default(180) | int }} \
-      mysqlsh --no-wizard --py --file /tmp/normalize_cluster_admin.py
-    rm -f /tmp/normalize_cluster_admin.py
+      mysqlsh --no-wizard --py --file "$_tmp"
   args:
     executable: /bin/bash
-  register: normalize_cluster_admin
   changed_when: false
   tags: ["configure_instances", "configure_instances_mysqlsh"]

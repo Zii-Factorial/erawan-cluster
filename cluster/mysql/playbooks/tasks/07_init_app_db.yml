@@ -1,21 +1,19 @@
 - name: Initialize application database and user
   ansible.builtin.shell: |
     set -euo pipefail
-    cat >/tmp/init_app_db.py <<'PY'
+    _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
+    trap 'rm -f "$_tmp"' EXIT
+    cat >"$_tmp" <<'PY'
     import os
 
     shell.options["useWizards"] = False
+
     last_error = None
-    for socket_path in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
-      if not os.path.exists(socket_path):
+    for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
+      if not os.path.exists(sock):
         continue
       try:
-        shell.connect({
-          "user": "root",
-          "scheme": "mysql",
-          "host": "localhost",
-          "socket": socket_path
-        })
+        shell.connect({"user": "root", "scheme": "mysql", "host": "localhost", "socket": sock})
         break
       except Exception as exc:
         last_error = exc
@@ -24,38 +22,29 @@
         raise last_error
       raise RuntimeError("unable to find a usable MySQL local socket for root")
 
-    session = shell.get_session()
-    db_name = {{ new_db | to_json }}
+    session  = shell.get_session()
+    db_name  = {{ new_db | to_json }}
     app_user = {{ new_user | to_json }}
     app_pass = {{ new_user_password | to_json }}
-    ssl_required = {{ (new_user_ssl_required | default(false) | bool) | ternary('True', 'False') }}
+    ssl_req  = {{ (new_user_ssl_required | default(false) | bool) | ternary('True', 'False') }}
+    edb = db_name.replace("`", "``")
+    eu  = app_user.replace("`", "``")
 
-    escaped_db = db_name.replace("`", "``")
-    escaped_user = app_user.replace("`", "``")
-
-    session.run_sql(f"CREATE DATABASE IF NOT EXISTS `{escaped_db}`")
+    session.run_sql(f"CREATE DATABASE IF NOT EXISTS `{edb}`")
     session.run_sql(
-      f"CREATE USER IF NOT EXISTS `{escaped_user}`@'%' IDENTIFIED WITH mysql_native_password BY ?",
-      [app_pass],
+      f"CREATE USER IF NOT EXISTS `{eu}`@'%' IDENTIFIED WITH mysql_native_password BY ?", [app_pass]
     )
     session.run_sql(
-      f"ALTER USER `{escaped_user}`@'%' IDENTIFIED WITH mysql_native_password BY ?",
-      [app_pass],
+      f"ALTER USER `{eu}`@'%' IDENTIFIED WITH mysql_native_password BY ?", [app_pass]
     )
-    if ssl_required:
-      session.run_sql(f"ALTER USER `{escaped_user}`@'%' REQUIRE SSL")
-    else:
-      session.run_sql(f"ALTER USER `{escaped_user}`@'%' REQUIRE NONE")
-    session.run_sql(
-      f"GRANT ALL PRIVILEGES ON *.* TO `{escaped_user}`@'%' WITH GRANT OPTION"
-    )
-    session.run_sql(f"GRANT ALL PRIVILEGES ON `{escaped_db}`.* TO `{escaped_user}`@'%'")
+    session.run_sql(f"ALTER USER `{eu}`@'%' {'REQUIRE SSL' if ssl_req else 'REQUIRE NONE'}")
+    session.run_sql(f"GRANT ALL PRIVILEGES ON *.* TO `{eu}`@'%' WITH GRANT OPTION")
+    session.run_sql(f"GRANT ALL PRIVILEGES ON `{edb}`.* TO `{eu}`@'%'")
     session.run_sql("FLUSH PRIVILEGES")
     print("application database and user initialized")
     PY
     timeout {{ mysqlsh_init_app_db_timeout_seconds | default(180) | int }} \
-      mysqlsh --no-wizard --py --file /tmp/init_app_db.py
-    rm -f /tmp/init_app_db.py
+      mysqlsh --no-wizard --py --file "$_tmp"
   args:
     executable: /bin/bash
   changed_when: false
