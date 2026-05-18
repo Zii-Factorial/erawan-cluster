@@ -40,7 +40,8 @@
     host: "{{ ansible_host }}"
     port: "{{ mysql_port }}"
     state: started
-    timeout: 120
+    delay: 5
+    timeout: "{{ mysql_start_timeout_seconds | default(300) | int }}"
   when: mysql_cluster_config.changed
   tags: ["configure_instances", "configure_mysql"]
 
@@ -143,7 +144,8 @@
     host: "{{ ansible_host }}"
     port: "{{ mysql_port }}"
     state: started
-    timeout: 120
+    delay: 5
+    timeout: "{{ mysql_start_timeout_seconds | default(300) | int }}"
   when: not (assume_prepared | default(false) | bool)
   tags: ["configure_instances", "configure_mysql"]
 
