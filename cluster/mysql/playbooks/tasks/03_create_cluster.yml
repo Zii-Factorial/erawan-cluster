@@ -8,26 +8,29 @@
 
     shell.options["useWizards"] = False
     shell.options["dba.restartWaitTimeout"] = {{ step_timeout_seconds | default(900) | int }}
-    cluster_name   = {{ cluster_name | to_json }}
-    primary_host   = {{ primary_ip | to_json }}
-    mysql_port     = {{ mysql_port }}
+    cluster_name    = {{ cluster_name | to_json }}
+    primary_host    = {{ primary_ip | to_json }}
+    mysql_port      = {{ mysql_port }}
+    admin_user      = {{ cluster_admin_username | to_json }}
+    admin_pass      = {{ cluster_admin_password | to_json }}
     assume_prepared = {{ (assume_prepared | default(false) | bool) | ternary('True', 'False') }}
 
-    def connect_local_root():
-      last_error = None
-      for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
-        if not os.path.exists(sock):
-          continue
-        try:
-          shell.connect({"user": "root", "scheme": "mysql", "host": "localhost", "socket": sock})
-          return shell.get_session()
-        except Exception as exc:
-          last_error = exc
+    # --- Step 1: cleanup via root socket (root is localhost-only, safe for SQL) ---
+    last_error = None
+    for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
+      if not os.path.exists(sock):
+        continue
+      try:
+        shell.connect({"user": "root", "scheme": "mysql", "host": "localhost", "socket": sock})
+        break
+      except Exception as exc:
+        last_error = exc
+    else:
       if last_error is not None:
         raise last_error
       raise RuntimeError("unable to find a usable MySQL local socket for root")
 
-    session = connect_local_root()
+    session = shell.get_session()
 
     ignored = (
       "unknown system variable",
@@ -65,6 +68,17 @@
         msg = str(e).lower()
         if not any(t in msg for t in ("does not exist", "standalone instance", "no metadata schema")):
           raise
+
+    # --- Step 2: reconnect as clusterAdmin for dba operations ---
+    # dba.create_cluster validates that the connected user can reach the instance
+    # from all cluster member IPs. root@'localhost' fails that check; clusterAdmin@'%' passes.
+    shell.connect({
+      "user": admin_user,
+      "password": admin_pass,
+      "host": "127.0.0.1",
+      "port": mysql_port,
+      "scheme": "mysql",
+    })
 
     local_addr = f"{primary_host}:{mysql_port}"
     try:
