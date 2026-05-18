@@ -32,6 +32,42 @@ SUDOERS_FILE="/etc/sudoers.d/${APP_USER}-haproxy-reload"
 UNIT_FILE="/etc/systemd/system/${APP_NAME}.service"
 HAPROXY_OVERRIDE_DIR="/etc/systemd/system/haproxy.service.d"
 HAPROXY_OVERRIDE_FILE="${HAPROXY_OVERRIDE_DIR}/override.conf"
+APP_ROOT_PARENT="$(dirname "${APP_ROOT}")"
+CLUSTER_INSTALL_DIR="${APP_ROOT}/cluster"
+TMP_CLUSTER_STAGE=""
+TMP_CLUSTER_DIR=""
+BACKUP_CLUSTER_DIR=""
+
+cleanup() {
+  rm -rf "${TMP_CLUSTER_DIR}" "${TMP_CLUSTER_STAGE}" "${BACKUP_CLUSTER_DIR}"
+}
+trap cleanup EXIT
+
+required_cluster_files=(
+  "mysql/playbooks/deploy.yml"
+  "mysql/playbooks/rollback.yml"
+  "mysql/playbooks/tasks/01_preflight.yml"
+  "mysql/playbooks/tasks/02_configure_instances.yml"
+  "mysql/playbooks/tasks/03_create_cluster.yml"
+  "mysql/playbooks/tasks/04_add_instances.yml"
+  "mysql/playbooks/tasks/05_bootstrap_router.yml"
+  "mysql/playbooks/tasks/06_verify_cluster.yml"
+  "mysql/playbooks/tasks/07_init_app_db.yml"
+  "pgsql/playbooks/deploy.yml"
+)
+
+validate_cluster_tree() {
+  local root="$1"
+  local missing=0
+  local rel
+  for rel in "${required_cluster_files[@]}"; do
+    if [[ ! -f "${root}/${rel}" ]]; then
+      echo "Missing required cluster file: ${root}/${rel}" >&2
+      missing=1
+    fi
+  done
+  [[ "${missing}" -eq 0 ]]
+}
 
 echo "==> Installing packages"
 apt update
@@ -40,6 +76,10 @@ apt install -y haproxy ansible ca-certificates openssh-client
 echo "==> Validating sources"
 [[ -f "${BIN_SRC}" ]] || { echo "Missing binary: ${BIN_SRC}" >&2; exit 1; }
 [[ -d "${CLUSTER_SRC}" ]] || { echo "Missing cluster dir: ${CLUSTER_SRC}" >&2; exit 1; }
+validate_cluster_tree "${CLUSTER_SRC}" || {
+  echo "Cluster source tree is incomplete; aborting install." >&2
+  exit 1
+}
 
 echo "==> Creating user and directories"
 id -u "${APP_USER}" >/dev/null 2>&1 || useradd -r -m -d "${APP_STATE_DIR}" -s /usr/sbin/nologin "${APP_USER}"
@@ -47,13 +87,31 @@ install -d -o "${APP_USER}" -g "${APP_GROUP}" -m 0750 "${APP_STATE_DIR}"
 install -d -o "${APP_USER}" -g "${APP_GROUP}" -m 0750 "${JOBS_DIR}"
 install -d -o "${APP_USER}" -g "${APP_GROUP}" -m 0700 "${KEYS_DIR}"
 install -d -o "${APP_USER}" -g "${APP_GROUP}" -m 0755 "${TENANTS_DIR}"
+install -d -o root -g root -m 0755 "${APP_ROOT_PARENT}"
 install -d -o root -g root -m 0755 "${APP_ROOT}"
 install -d -o root -g "${APP_GROUP}" -m 0750 "${APP_ENV_DIR}"
 
 echo "==> Installing binary and playbooks"
 install -m 0755 "${BIN_SRC}" "${APP_BIN}"
-rm -rf "${APP_ROOT}/cluster"
-cp -a "${CLUSTER_SRC}" "${APP_ROOT}/cluster"
+TMP_CLUSTER_STAGE="$(mktemp -d "${APP_ROOT_PARENT}/.erawan-cluster-cluster.XXXXXX")"
+TMP_CLUSTER_DIR="${TMP_CLUSTER_STAGE}/cluster"
+BACKUP_CLUSTER_DIR="${APP_ROOT_PARENT}/.erawan-cluster-cluster.backup.$$"
+cp -a "${CLUSTER_SRC}" "${TMP_CLUSTER_DIR}"
+validate_cluster_tree "${TMP_CLUSTER_DIR}" || {
+  echo "Staged cluster tree is incomplete; aborting install." >&2
+  exit 1
+}
+if [[ -d "${CLUSTER_INSTALL_DIR}" ]]; then
+  mv "${CLUSTER_INSTALL_DIR}" "${BACKUP_CLUSTER_DIR}"
+fi
+if ! mv "${TMP_CLUSTER_DIR}" "${CLUSTER_INSTALL_DIR}"; then
+  if [[ -d "${BACKUP_CLUSTER_DIR}" ]]; then
+    mv "${BACKUP_CLUSTER_DIR}" "${CLUSTER_INSTALL_DIR}" || true
+  fi
+  echo "Failed to install cluster tree." >&2
+  exit 1
+fi
+rm -rf "${BACKUP_CLUSTER_DIR}"
 
 echo "==> Writing env file template (only if missing)"
 if [[ ! -f "${APP_ENV_FILE}" ]]; then
@@ -82,6 +140,18 @@ EOF
 fi
 chown root:"${APP_GROUP}" "${APP_ENV_FILE}"
 chmod 0640 "${APP_ENV_FILE}"
+expected_mysql_playbook="${APP_ROOT}/cluster/mysql/playbooks/deploy.yml"
+expected_pgsql_playbook="${APP_ROOT}/cluster/pgsql/playbooks/deploy.yml"
+current_mysql_playbook="$(sed -n 's/^MYSQL_DEPLOY_PLAYBOOK=//p' "${APP_ENV_FILE}" | tail -n 1)"
+current_pgsql_playbook="$(sed -n 's/^PGSQL_DEPLOY_PLAYBOOK=//p' "${APP_ENV_FILE}" | tail -n 1)"
+if [[ -n "${current_mysql_playbook}" && "${current_mysql_playbook}" != "${expected_mysql_playbook}" ]]; then
+  echo "WARNING: ${APP_ENV_FILE} still points MYSQL_DEPLOY_PLAYBOOK to ${current_mysql_playbook}" >&2
+  echo "         Expected for this install: ${expected_mysql_playbook}" >&2
+fi
+if [[ -n "${current_pgsql_playbook}" && "${current_pgsql_playbook}" != "${expected_pgsql_playbook}" ]]; then
+  echo "WARNING: ${APP_ENV_FILE} still points PGSQL_DEPLOY_PLAYBOOK to ${current_pgsql_playbook}" >&2
+  echo "         Expected for this install: ${expected_pgsql_playbook}" >&2
+fi
 
 echo "==> Configuring HAProxy global socket"
 if grep -qE '^\s*stats socket /run/haproxy/admin\.sock' /etc/haproxy/haproxy.cfg; then
