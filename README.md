@@ -28,6 +28,7 @@ REST API for automated database cluster lifecycle management and HAProxy configu
 - Automated MySQL InnoDB Cluster deployment via Ansible
 - Supports single-node bootstrap or primary-plus-secondary topologies
 - Auto-failover using MySQL InnoDB Cluster native HA
+- Explicit Group Replication auto-rejoin and restart rejoin settings for multi-node clusters
 - MySQL Router bootstrap and service configuration on DB nodes
 - MySQL Shell (`mysqlsh`) for cluster operations (`dba.configure_instance`, `dba.createCluster`, `dba.addInstance`)
 - Optional prepared-node mode via `assume_prepared`

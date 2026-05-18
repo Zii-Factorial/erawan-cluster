@@ -37,6 +37,9 @@
     - name: Include add-instances tasks
       ansible.builtin.import_tasks: tasks/04_add_instances.yml
 
+    - name: Include auto-rejoin tasks
+      ansible.builtin.import_tasks: tasks/07_enable_auto_rejoin.yml
+
     - name: Include verify-cluster tasks
       ansible.builtin.import_tasks: tasks/06_verify_cluster.yml
 

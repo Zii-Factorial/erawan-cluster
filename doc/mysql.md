@@ -20,6 +20,8 @@ Supported topologies:
   - 1 primary node
   - 1 or more secondary nodes
 
+For production automatic failover, use at least 3 database nodes so Group Replication can keep quorum after a single node loss.
+
 ## API payload
 
 Use a MySQL deploy body like this:
@@ -80,9 +82,10 @@ The generated MySQL instance config also points to MySQL's default auto-generate
 2. Instance configuration prepares each node for InnoDB Cluster and creates or updates the cluster admin account.
 3. Cluster creation runs on the requested primary node.
 4. Secondary nodes are added with clone-based recovery when `standby_ips` is not empty.
-5. MySQL Router is bootstrapped on all nodes when `bootstrap_router` is enabled.
-6. Verification checks cluster health and router state.
-7. Optional application database and user creation runs on the primary.
+5. Group Replication auto-start and auto-rejoin settings are enabled on all members.
+6. MySQL Router is bootstrapped on all nodes when `bootstrap_router` is enabled.
+7. Verification checks cluster health and router state.
+8. Optional application database and user creation runs on the primary.
 
 ## Architecture Overview
 
@@ -146,3 +149,8 @@ The MySQL playbooks manage:
 - MySQL supports both single-node and multi-node deployments in this project.
 - Rollback support exists for MySQL jobs through the rollback API.
 - If `bootstrap_router` is enabled, router services are created on all target DB nodes.
+- Auto-rejoin behavior is explicitly configured after cluster formation:
+  - `group_replication_start_on_boot = ON`
+  - `group_replication_autorejoin_tries = 3`
+  - `group_replication_unreachable_majority_timeout = 30`
+  - `group_replication_exit_state_action = READ_ONLY`

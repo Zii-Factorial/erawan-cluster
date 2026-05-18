@@ -45,6 +45,9 @@
       report_host = {{ erawan_node_ip }}
       mysqlx_bind_address = 0.0.0.0
       loose-group_replication_start_on_boot = OFF
+      loose-group_replication_autorejoin_tries = {{ mysql_gr_autorejoin_tries | default(3) | int }}
+      loose-group_replication_unreachable_majority_timeout = {{ mysql_gr_unreachable_majority_timeout | default(30) | int }}
+      loose-group_replication_exit_state_action = {{ mysql_gr_exit_state_action | default('READ_ONLY') }}
       loose-group_replication_communication_stack = MYSQL
       server_id = {{ erawan_server_id }}
       enforce_gtid_consistency = ON
