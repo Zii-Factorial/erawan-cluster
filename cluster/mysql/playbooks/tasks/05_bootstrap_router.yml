@@ -142,7 +142,7 @@
     printf '%s\n' {{ cluster_admin_password | quote }} | \
       timeout {{ mysqlrouter_bootstrap_timeout_seconds | default(180) | int }} \
       mysqlrouter \
-        --bootstrap {{ cluster_admin_username | quote }}@{{ primary_ip }}:{{ mysql_port }} \
+        --bootstrap {{ cluster_admin_username | quote }}@{{ hostvars['primary'].erawan_node_ip }}:{{ mysql_port }} \
         --conf-use-gr-notifications \
         --conf-base-port 6446 \
         --directory /etc/mysqlrouter/{{ cluster_name }} \

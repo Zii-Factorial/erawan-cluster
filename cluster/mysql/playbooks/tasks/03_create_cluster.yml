@@ -9,8 +9,6 @@
     import os
 
     shell.options["useWizards"] = False
-    primary_host    = {{ primary_ip | to_json }}
-    mysql_port      = {{ mysql_port }}
     assume_prepared = {{ (assume_prepared | default(false) | bool) | ternary('True', 'False') }}
 
     last_error = None
@@ -52,7 +50,7 @@
     run_relaxed("SET GLOBAL group_replication_start_on_boot = OFF")
     run_relaxed("SET PERSIST group_replication_start_on_boot = OFF")
     run_relaxed("RESET PERSIST IF EXISTS group_replication_group_seeds")
-    run_relaxed(f"SET PERSIST group_replication_local_address = '{primary_host}:{mysql_port}'")
+    run_relaxed("RESET PERSIST IF EXISTS group_replication_local_address")
     run_relaxed("SET PERSIST group_replication_communication_stack = 'MYSQL'")
     run_relaxed("SET GLOBAL super_read_only = OFF")
     run_relaxed("SET GLOBAL read_only = OFF")
@@ -74,7 +72,7 @@
     shell.options["useWizards"] = False
     shell.options["dba.restartWaitTimeout"] = {{ step_timeout_seconds | default(900) | int }}
     cluster_name    = {{ cluster_name | to_json }}
-    primary_host    = {{ primary_ip | to_json }}
+    primary_host    = {{ erawan_node_ip | to_json }}
     mysql_port      = {{ mysql_port }}
     admin_user      = {{ cluster_admin_username | to_json }}
     admin_pass      = {{ cluster_admin_password | to_json }}
@@ -88,7 +86,6 @@
       "scheme": "mysql",
     })
 
-    local_addr = f"{primary_host}:{mysql_port}"
     try:
       dba.get_cluster(cluster_name)
       print("cluster already exists")
@@ -100,17 +97,17 @@
           print("cluster rebooted from complete outage")
         else:
           dba.drop_metadata_schema({"force": True})
-          dba.create_cluster(cluster_name, {"multiPrimary": False, "localAddress": local_addr})
+          dba.create_cluster(cluster_name, {"multiPrimary": False, "communicationStack": "MYSQL"})
           print("cluster created")
       elif "standalone instance" in msg and "gr is not active" in msg:
         if assume_prepared:
           dba.reboot_cluster_from_complete_outage(cluster_name, {"force": True})
           print("cluster rebooted from complete outage")
         else:
-          dba.create_cluster(cluster_name, {"multiPrimary": False, "localAddress": local_addr})
+          dba.create_cluster(cluster_name, {"multiPrimary": False, "communicationStack": "MYSQL"})
           print("cluster created")
       else:
-        dba.create_cluster(cluster_name, {"multiPrimary": False, "localAddress": local_addr})
+        dba.create_cluster(cluster_name, {"multiPrimary": False, "communicationStack": "MYSQL"})
         print("cluster created")
     PY
     timeout {{ mysqlsh_create_cluster_timeout_seconds | default(step_timeout_seconds | default(900)) | int }} \

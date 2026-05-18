@@ -7,6 +7,7 @@ set -euo pipefail
 # Optional environment overrides:
 #   BIN_SRC=./bin/erawan-cluster
 #   CLUSTER_SRC=./cluster
+#   APP_ROOT=/opt/erawan-cluster
 
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   echo "Run as root (sudo)." >&2
@@ -16,14 +17,14 @@ fi
 BIN_SRC="${BIN_SRC:-./bin/erawan-cluster}"
 CLUSTER_SRC="${CLUSTER_SRC:-./cluster}"
 
-APP_USER="erawan"
-APP_GROUP="erawan"
-APP_NAME="erawan-cluster"
-APP_ROOT="/opt/erawan-cluster"
-APP_BIN="/usr/local/bin/erawan-cluster"
-APP_ENV_DIR="/etc/erawan-cluster"
-APP_ENV_FILE="${APP_ENV_DIR}/.env"
-APP_STATE_DIR="/var/lib/erawan-cluster"
+APP_USER="${APP_USER:-erawan}"
+APP_GROUP="${APP_GROUP:-erawan}"
+APP_NAME="${APP_NAME:-erawan-cluster}"
+APP_ROOT="${APP_ROOT:-/opt/erawan-cluster}"
+APP_BIN="${APP_BIN:-/usr/local/bin/erawan-cluster}"
+APP_ENV_DIR="${APP_ENV_DIR:-/etc/erawan-cluster}"
+APP_ENV_FILE="${APP_ENV_FILE:-${APP_ENV_DIR}/.env}"
+APP_STATE_DIR="${APP_STATE_DIR:-/var/lib/erawan-cluster}"
 JOBS_DIR="${APP_STATE_DIR}/cluster/jobs"
 KEYS_DIR="${APP_STATE_DIR}/keys"
 TENANTS_DIR="${APP_STATE_DIR}/haproxy/tenants"

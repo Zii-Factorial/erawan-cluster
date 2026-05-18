@@ -1,3 +1,19 @@
+- name: Gather minimal network facts
+  ansible.builtin.setup:
+    gather_subset:
+      - network
+  tags: ["configure_instances", "configure_mysql"]
+
+- name: Derive node IP used for MySQL cluster identity
+  ansible.builtin.set_fact:
+    erawan_node_ip: >-
+      {{
+        ansible_host
+        if (ansible_host | default('')) in (ansible_all_ipv4_addresses | default([]))
+        else (ansible_default_ipv4.address | default(ansible_host))
+      }}
+  tags: ["configure_instances", "configure_mysql"]
+
 - name: Set deployment mode facts
   ansible.builtin.set_fact:
     _assume_prepared: "{{ assume_prepared | default(false) | bool }}"
@@ -11,11 +27,10 @@
     content: |
       [mysqld]
       bind-address = 0.0.0.0
-      report_host = {{ ansible_host }}
+      report_host = {{ erawan_node_ip }}
       mysqlx_bind_address = 0.0.0.0
       loose-group_replication_start_on_boot = OFF
       loose-group_replication_communication_stack = MYSQL
-      loose-group_replication_local_address = {{ ansible_host }}:{{ mysql_port }}
       server_id = {{ erawan_server_id }}
       enforce_gtid_consistency = ON
       gtid_mode = ON
@@ -54,9 +69,6 @@
     import os
 
     shell.options["useWizards"] = False
-    host = {{ ansible_host | to_json }}
-    port = {{ mysql_port }}
-    local_addr = f"{host}:{port}"
 
     def connect_local_root():
       last_error = None
@@ -93,7 +105,7 @@
       "SET GLOBAL group_replication_start_on_boot = OFF",
       "SET PERSIST group_replication_start_on_boot = OFF",
       "RESET PERSIST IF EXISTS group_replication_group_seeds",
-      f"SET PERSIST group_replication_local_address = '{local_addr}'",
+      "RESET PERSIST IF EXISTS group_replication_local_address",
       "SET PERSIST group_replication_communication_stack = 'MYSQL'",
     ]:
       try:

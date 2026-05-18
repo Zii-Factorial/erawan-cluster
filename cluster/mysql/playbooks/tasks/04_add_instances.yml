@@ -55,10 +55,11 @@
 
     shell.options["useWizards"] = False
     shell.options["dba.restartWaitTimeout"] = {{ step_timeout_seconds | default(900) | int }}
-    primary_host          = {{ primary_ip | to_json }}
-    mysql_port           = {{ mysql_port }}
-    cluster_admin_user   = {{ cluster_admin_username | to_json }}
-    cluster_admin_pass   = {{ cluster_admin_password | to_json }}
+    primary_host        = {{ erawan_node_ip | to_json }}
+    mysql_port          = {{ mysql_port }}
+    cluster_admin_user  = {{ cluster_admin_username | to_json }}
+    cluster_admin_pass  = {{ cluster_admin_password | to_json }}
+    standby_hosts       = {{ groups['mysql_standby'] | map('extract', hostvars, 'erawan_node_ip') | list | to_json }}
 
     shell.connect({
       "user": cluster_admin_user,
@@ -68,13 +69,12 @@
       "port": mysql_port,
     })
     cluster = dba.get_cluster({{ cluster_name | to_json }})
-    for host in {{ standby_ips | to_json }}:
+    for host in standby_hosts:
       endpoint = f"{cluster_admin_user}@{host}:{mysql_port}"
       try:
         cluster.add_instance(endpoint, {
           "password": cluster_admin_pass,
           "recoveryMethod": "clone",
-          "localAddress": f"{host}:{mysql_port}",
           "waitRecovery": 1,
         })
         print("added " + host)

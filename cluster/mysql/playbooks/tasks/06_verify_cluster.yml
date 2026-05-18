@@ -8,7 +8,7 @@
 
     cluster_name   = os.environ["CLUSTER_NAME"]
     expected_nodes = int(os.environ["EXPECTED_CLUSTER_NODES"])
-    primary_host    = {{ primary_ip | to_json }}
+    primary_host    = {{ erawan_node_ip | to_json }}
     mysql_port      = {{ mysql_port }}
     admin_user      = {{ cluster_admin_username | to_json }}
     admin_pass      = {{ cluster_admin_password | to_json }}
