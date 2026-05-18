@@ -24,7 +24,7 @@
   when: bootstrap_router | bool
   tags: ["bootstrap_router"]
 
-- name: Normalize clusteradmin grants for router bootstrap
+- name: Wait for MySQL to be ready on primary before router bootstrap
   ansible.builtin.wait_for:
     host: "127.0.0.1"
     port: "{{ mysql_port }}"
@@ -37,43 +37,6 @@
   tags: ["bootstrap_router"]
 
 - name: Normalize clusteradmin grants for router bootstrap
-  ansible.builtin.shell: |
-    set -euo pipefail
-    _tmp_sql=$(mktemp /tmp/erawan-XXXXXX.sql)
-    trap 'rm -f "$_tmp_sql"' EXIT
-    python3 - <<'PY' >"$_tmp_sql"
-    admin_user = {{ cluster_admin_username | to_json }}
-    admin_pass = {{ cluster_admin_password | to_json }}
-    eu = admin_user.replace("`", "``")
-    ep = admin_pass.replace("\\", "\\\\").replace("'", "''")
-    print(f"CREATE USER IF NOT EXISTS `{eu}`@'%' IDENTIFIED WITH mysql_native_password BY '{ep}';")
-    print(f"ALTER USER `{eu}`@'%' IDENTIFIED WITH mysql_native_password BY '{ep}';")
-    print(f"GRANT ALL PRIVILEGES ON *.* TO `{eu}`@'%' WITH GRANT OPTION;")
-    print("FLUSH PRIVILEGES;")
-    PY
-    for sock in /var/run/mysqld/mysqld.sock /run/mysqld/mysqld.sock /var/lib/mysql/mysql.sock; do
-      if [[ ! -S "$sock" ]]; then
-        continue
-      fi
-      if timeout 60 mysql --protocol=socket --socket="$sock" -uroot <"$_tmp_sql"; then
-        exit 0
-      fi
-    done
-    echo "unable to find a usable MySQL local socket for root" >&2
-    exit 1
-  args:
-    executable: /bin/bash
-  run_once: true
-  delegate_to: primary
-  register: normalize_router_grants
-  retries: "{{ bootstrap_router_prepare_retries | default(6) | int }}"
-  delay: "{{ bootstrap_router_prepare_retry_delay_seconds | default(10) | int }}"
-  until: normalize_router_grants.rc == 0
-  changed_when: false
-  when: bootstrap_router | bool
-  tags: ["bootstrap_router"]
-
-- name: Clean stale router metadata from MySQL cluster
   ansible.builtin.shell: |
     set -euo pipefail
     _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
@@ -97,23 +60,69 @@
         raise last_error
       raise RuntimeError("unable to find a usable MySQL local socket for root")
 
-    session = connect_local_root()
-    try:
-      rows = session.run_sql(
-        "SELECT router_id FROM mysql_innodb_cluster_metadata.routers"
-      ).fetch_all()
-      if rows:
-        session.run_sql("DELETE FROM mysql_innodb_cluster_metadata.routers")
-        print(f"cleaned {len(rows)} stale router metadata entries")
-      else:
-        print("no stale router metadata found")
-    except Exception as e:
-      if "doesn't exist" in str(e).lower() or "unknown table" in str(e).lower():
-        print("metadata table not found - skipping")
-      else:
-        raise
+    session    = connect_local_root()
+    admin_user = {{ cluster_admin_username | to_json }}
+    admin_pass = {{ cluster_admin_password | to_json }}
+    eu         = admin_user.replace("`", "``")
+
+    session.run_sql(
+      f"CREATE USER IF NOT EXISTS `{eu}`@'%' IDENTIFIED WITH mysql_native_password BY ?", [admin_pass]
+    )
+    session.run_sql(
+      f"ALTER USER `{eu}`@'%' IDENTIFIED WITH mysql_native_password BY ?", [admin_pass]
+    )
+    session.run_sql(f"GRANT ALL PRIVILEGES ON *.* TO `{eu}`@'%' WITH GRANT OPTION")
+    session.run_sql("FLUSH PRIVILEGES")
+    print("clusteradmin grants normalized")
     PY
     timeout 60 mysqlsh --no-wizard --py --file "$_tmp"
+  args:
+    executable: /bin/bash
+  run_once: true
+  delegate_to: primary
+  register: normalize_router_grants
+  retries: "{{ bootstrap_router_prepare_retries | default(6) | int }}"
+  delay: "{{ bootstrap_router_prepare_retry_delay_seconds | default(10) | int }}"
+  until: normalize_router_grants.rc == 0
+  changed_when: false
+  when: bootstrap_router | bool
+  tags: ["bootstrap_router"]
+
+- name: Clean stale router metadata from MySQL cluster
+  ansible.builtin.shell: |
+    set -euo pipefail
+    _run_mysql() {
+      if mysql -uroot "$@"; then
+        return 0
+      fi
+      local sock
+      for sock in /var/run/mysqld/mysqld.sock /run/mysqld/mysqld.sock /var/lib/mysql/mysql.sock; do
+        if [[ -S "$sock" ]] && mysql --protocol=socket --socket="$sock" -uroot "$@"; then
+          return 0
+        fi
+      done
+      return 1
+    }
+
+    if ! _run_mysql -Nse "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='mysql_innodb_cluster_metadata' AND table_name='routers'"; then
+      echo "unable to connect to local MySQL as root" >&2
+      exit 1
+    fi
+
+    router_table_count="$(_run_mysql -Nse "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='mysql_innodb_cluster_metadata' AND table_name='routers'")"
+    if [[ "${router_table_count}" != "1" ]]; then
+      echo "metadata table not found - skipping"
+      exit 0
+    fi
+
+    router_count="$(_run_mysql -Nse "SELECT COUNT(*) FROM mysql_innodb_cluster_metadata.routers")"
+    if [[ "${router_count}" == "0" ]]; then
+      echo "no stale router metadata found"
+      exit 0
+    fi
+
+    _run_mysql -e "DELETE FROM mysql_innodb_cluster_metadata.routers"
+    echo "cleaned ${router_count} stale router metadata entries"
   args:
     executable: /bin/bash
   run_once: true
@@ -193,7 +202,7 @@
   retries: "{{ bootstrap_router_retries | default(2) | int }}"
   delay: "{{ bootstrap_router_retry_delay_seconds | default(20) | int }}"
   until: bootstrap_router_result.rc == 0
-  changed_when: bootstrap_router_result.rc == 0
+  changed_when: true
   failed_when: bootstrap_router_result.rc != 0
   when: bootstrap_router | bool
   tags: ["bootstrap_router"]

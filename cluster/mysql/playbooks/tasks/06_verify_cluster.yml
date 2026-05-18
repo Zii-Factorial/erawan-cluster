@@ -45,14 +45,20 @@
       "port": mysql_port,
     })
 
-    status   = dba.get_cluster(cluster_name).status()
-    rs       = status.get("defaultReplicaSet", {})
+    status    = dba.get_cluster(cluster_name).status()
+    rs        = status.get("defaultReplicaSet", {})
     rs_status = str(rs.get("status", ""))
+    topology  = rs.get("topology", {})
+    online    = [k for k, v in topology.items() if v.get("status") == "ONLINE"]
+    not_ready = {k: v.get("status") for k, v in topology.items() if v.get("status") != "ONLINE"}
 
     if not rs_status.startswith("OK"):
-      raise RuntimeError(f"cluster status is not healthy: {rs_status}")
-    if len(rs.get("topology", {})) < expected_nodes:
-      raise RuntimeError(f"expected {expected_nodes} nodes, got {len(rs.get('topology', {}))}")
+      raise RuntimeError(f"cluster not healthy — status: {rs_status}")
+    if len(online) < expected_nodes:
+      raise RuntimeError(
+        f"expected {expected_nodes} ONLINE nodes, got {len(online)}"
+        + (f" — not ready: {not_ready}" if not_ready else "")
+      )
 
     print(json.dumps(status, indent=2))
     PY

@@ -89,8 +89,6 @@
     recovery_method     = {{ mysql_recovery_method | default('auto') | to_json }}
     standby_hosts       = {{ groups['mysql_standby'] | map('extract', hostvars, 'erawan_node_ip') | list | to_json }}
     expected_nodes      = 1 + len(standby_hosts)
-    wait_deadline       = time.time() + {{ mysqlsh_add_instances_wait_seconds | default(300) | int }}
-
     shell.connect({
       "user": cluster_admin_user,
       "password": cluster_admin_pass,
@@ -99,6 +97,11 @@
       "port": mysql_port,
     })
     cluster = dba.get_cluster(cluster_name)
+
+    # Add each standby one at a time and wait for it to be ONLINE before
+    # proceeding to the next. Parallel clones compete for the primary's I/O
+    # and make both slower; sequential is more predictable.
+    node_wait = {{ mysqlsh_add_instances_wait_seconds | default(600) | int }}
     for host in standby_hosts:
       endpoint = f"{cluster_admin_user}@{host}:{mysql_port}"
       add_options = {
@@ -108,43 +111,38 @@
       }
       try:
         cluster.add_instance(endpoint, add_options)
-        print("added " + host)
+        print(f"clone initiated: {host}")
       except Exception as e:
         msg = str(e).lower()
         if "already" in msg:
-          print("already in cluster " + host)
+          print(f"already in cluster: {host}")
         elif recovery_method != "clone" and (
           "instance provisioning required" in msg
           or "errant gtid" in msg
           or "must be either cloned or fully provisioned" in msg
         ):
-          clone_options = dict(add_options)
-          clone_options["recoveryMethod"] = "clone"
+          clone_options = dict(add_options, recoveryMethod="clone")
           cluster.add_instance(endpoint, clone_options)
-          print("added via clone " + host)
+          print(f"added via clone (fallback): {host}")
         else:
           raise
 
-    while time.time() < wait_deadline:
-      cluster = dba.get_cluster(cluster_name)
-      status = cluster.status()
-      rs = status.get("defaultReplicaSet", {})
-      topology = rs.get("topology", {})
-      if len(topology) >= expected_nodes:
-        print(json.dumps(status, indent=2))
-        break
-      time.sleep(5)
-    else:
-      cluster = dba.get_cluster(cluster_name)
-      status = cluster.status()
-      rs = status.get("defaultReplicaSet", {})
-      topology = rs.get("topology", {})
-      raise RuntimeError(
-        f"expected {expected_nodes} nodes after add_instance, got {len(topology)}: "
-        + json.dumps(status, indent=2)
-      )
+      # Poll until this node is ONLINE before adding the next.
+      deadline = time.time() + node_wait
+      while time.time() < deadline:
+        topo = dba.get_cluster(cluster_name).status().get("defaultReplicaSet", {}).get("topology", {})
+        node_status = next((v.get("status") for k, v in topo.items() if host in k), "unknown")
+        print(f"  {host}: {node_status}")
+        if node_status == "ONLINE":
+          break
+        time.sleep(10)
+      else:
+        status = dba.get_cluster(cluster_name).status()
+        raise RuntimeError(f"timed out waiting for {host} to be ONLINE: " + json.dumps(status, indent=2))
+
+    print(json.dumps(dba.get_cluster(cluster_name).status(), indent=2))
     PY
-    timeout {{ mysqlsh_add_instances_timeout_seconds | default(900) | int }} \
+    timeout {{ mysqlsh_add_instances_timeout_seconds | default(1800) | int }} \
       mysqlsh --no-wizard --py --file "$_tmp"
   args:
     executable: /bin/bash
