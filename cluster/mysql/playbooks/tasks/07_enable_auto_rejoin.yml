@@ -16,11 +16,13 @@
     trap 'rm -f "$_tmp"' EXIT
     cat >"$_tmp" <<'PY'
     import os
+    import time
 
     shell.options["useWizards"] = False
     autorejoin_tries = {{ mysql_gr_autorejoin_tries | default(3) | int }}
     unreachable_majority_timeout = {{ mysql_gr_unreachable_majority_timeout | default(30) | int }}
     exit_state_action = {{ mysql_gr_exit_state_action | default('READ_ONLY') | to_json }}
+    retry_deadline = time.time() + {{ mysql_gr_option_retry_seconds | default(90) | int }}
 
     def connect_local_root():
       last_error = None
@@ -38,6 +40,22 @@
 
     session = connect_local_root()
 
+    def run_sql_retry(stmt):
+      last_error = None
+      while time.time() < retry_deadline:
+        try:
+          session.run_sql(stmt)
+          return
+        except Exception as exc:
+          msg = str(exc).lower()
+          last_error = exc
+          if "start or stop group_replication is ongoing" in msg:
+            time.sleep(3)
+            continue
+          raise
+      if last_error is not None:
+        raise last_error
+
     for stmt in [
       "SET GLOBAL group_replication_start_on_boot = ON",
       "SET PERSIST group_replication_start_on_boot = ON",
@@ -48,7 +66,7 @@
       f"SET GLOBAL group_replication_exit_state_action = '{exit_state_action}'",
       f"SET PERSIST group_replication_exit_state_action = '{exit_state_action}'",
     ]:
-      session.run_sql(stmt)
+      run_sql_retry(stmt)
 
     print("group replication auto-rejoin settings enabled")
     PY
