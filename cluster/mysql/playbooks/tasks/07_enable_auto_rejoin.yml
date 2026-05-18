@@ -45,5 +45,7 @@
       mysqlsh --no-wizard --py --file "$_tmp"
   args:
     executable: /bin/bash
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['all'] }}"
   changed_when: false
   tags: ["enable_auto_rejoin"]

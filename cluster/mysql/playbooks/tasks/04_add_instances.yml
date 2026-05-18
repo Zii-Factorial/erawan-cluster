@@ -75,7 +75,9 @@
     _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
     trap 'rm -f "$_tmp"' EXIT
     cat >"$_tmp" <<'PY'
+    import json
     import os
+    import time
 
     shell.options["useWizards"] = False
     shell.options["dba.restartWaitTimeout"] = {{ step_timeout_seconds | default(900) | int }}
@@ -83,7 +85,10 @@
     mysql_port          = {{ mysql_port }}
     cluster_admin_user  = {{ cluster_admin_username | to_json }}
     cluster_admin_pass  = {{ cluster_admin_password | to_json }}
+    cluster_name        = {{ cluster_name | to_json }}
     standby_hosts       = {{ groups['mysql_standby'] | map('extract', hostvars, 'erawan_node_ip') | list | to_json }}
+    expected_nodes      = 1 + len(standby_hosts)
+    wait_deadline       = time.time() + {{ mysqlsh_add_instances_wait_seconds | default(300) | int }}
 
     shell.connect({
       "user": cluster_admin_user,
@@ -92,7 +97,7 @@
       "host": primary_host,
       "port": mysql_port,
     })
-    cluster = dba.get_cluster({{ cluster_name | to_json }})
+    cluster = dba.get_cluster(cluster_name)
     for host in standby_hosts:
       endpoint = f"{cluster_admin_user}@{host}:{mysql_port}"
       try:
@@ -107,6 +112,25 @@
           print("already in cluster " + host)
         else:
           raise
+
+    while time.time() < wait_deadline:
+      cluster = dba.get_cluster(cluster_name)
+      status = cluster.status()
+      rs = status.get("defaultReplicaSet", {})
+      topology = rs.get("topology", {})
+      if len(topology) >= expected_nodes:
+        print(json.dumps(status, indent=2))
+        break
+      time.sleep(5)
+    else:
+      cluster = dba.get_cluster(cluster_name)
+      status = cluster.status()
+      rs = status.get("defaultReplicaSet", {})
+      topology = rs.get("topology", {})
+      raise RuntimeError(
+        f"expected {expected_nodes} nodes after add_instance, got {len(topology)}: "
+        + json.dumps(status, indent=2)
+      )
     PY
     timeout {{ mysqlsh_add_instances_timeout_seconds | default(900) | int }} \
       mysqlsh --no-wizard --py --file "$_tmp"
