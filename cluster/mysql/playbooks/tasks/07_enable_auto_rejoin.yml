@@ -1,3 +1,14 @@
+- name: Wait for MySQL before enabling auto-rejoin settings
+  ansible.builtin.wait_for:
+    host: "127.0.0.1"
+    port: "{{ mysql_port }}"
+    state: started
+    delay: 5
+    timeout: "{{ mysql_start_timeout_seconds | default(300) | int }}"
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['all'] }}"
+  tags: ["enable_auto_rejoin"]
+
 - name: Enable Group Replication auto-start and rejoin
   ansible.builtin.shell: |
     set -euo pipefail
@@ -47,5 +58,9 @@
     executable: /bin/bash
   delegate_to: "{{ item }}"
   loop: "{{ groups['all'] }}"
+  register: enable_auto_rejoin_result
+  retries: "{{ enable_auto_rejoin_retries | default(6) | int }}"
+  delay: "{{ enable_auto_rejoin_retry_delay_seconds | default(10) | int }}"
+  until: enable_auto_rejoin_result.rc == 0
   changed_when: false
   tags: ["enable_auto_rejoin"]
