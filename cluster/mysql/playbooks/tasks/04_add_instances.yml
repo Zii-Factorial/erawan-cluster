@@ -96,49 +96,43 @@
       "host": primary_host,
       "port": mysql_port,
     })
-    cluster = dba.get_cluster(cluster_name)
-
-    # Add each standby one at a time and wait for it to be ONLINE before
-    # proceeding to the next. Parallel clones compete for the primary's I/O
-    # and make both slower; sequential is more predictable.
+    cluster   = dba.get_cluster(cluster_name)
     node_wait = {{ mysqlsh_add_instances_wait_seconds | default(600) | int }}
+
     for host in standby_hosts:
-      endpoint = f"{cluster_admin_user}@{host}:{mysql_port}"
-      add_options = {
-        "password": cluster_admin_pass,
-        "recoveryMethod": recovery_method,
-        "waitRecovery": 0,
-      }
+      endpoint   = cluster_admin_user + "@" + host + ":" + str(mysql_port)
+      add_options = {"password": cluster_admin_pass, "recoveryMethod": recovery_method, "waitRecovery": 0}
       try:
         cluster.add_instance(endpoint, add_options)
-        print(f"clone initiated: {host}")
+        print("clone initiated: " + host)
       except Exception as e:
         msg = str(e).lower()
+        needs_clone = (
+          recovery_method != "clone"
+          and ("instance provisioning required" in msg
+               or "errant gtid" in msg
+               or "must be either cloned or fully provisioned" in msg)
+        )
         if "already" in msg:
-          print(f"already in cluster: {host}")
-        elif recovery_method != "clone" and (
-          "instance provisioning required" in msg
-          or "errant gtid" in msg
-          or "must be either cloned or fully provisioned" in msg
-        ):
-          clone_options = dict(add_options, recoveryMethod="clone")
+          print("already in cluster: " + host)
+        elif needs_clone:
+          clone_options = {"password": cluster_admin_pass, "recoveryMethod": "clone", "waitRecovery": 0}
           cluster.add_instance(endpoint, clone_options)
-          print(f"added via clone (fallback): {host}")
+          print("added via clone (fallback): " + host)
         else:
           raise
 
-      # Poll until this node is ONLINE before adding the next.
       deadline = time.time() + node_wait
       while time.time() < deadline:
-        topo = dba.get_cluster(cluster_name).status().get("defaultReplicaSet", {}).get("topology", {})
+        rs   = dba.get_cluster(cluster_name).status().get("defaultReplicaSet", {})
+        topo = rs.get("topology", {})
         node_status = next((v.get("status") for k, v in topo.items() if host in k), "unknown")
-        print(f"  {host}: {node_status}")
+        print("  " + host + ": " + str(node_status))
         if node_status == "ONLINE":
           break
         time.sleep(10)
       else:
-        status = dba.get_cluster(cluster_name).status()
-        raise RuntimeError(f"timed out waiting for {host} to be ONLINE: " + json.dumps(status, indent=2))
+        raise RuntimeError("timed out waiting for " + host + " to be ONLINE: " + json.dumps(dba.get_cluster(cluster_name).status(), indent=2))
 
     print(json.dumps(dba.get_cluster(cluster_name).status(), indent=2))
     PY
