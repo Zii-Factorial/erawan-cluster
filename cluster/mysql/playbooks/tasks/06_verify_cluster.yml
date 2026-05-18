@@ -8,20 +8,18 @@
 
     cluster_name   = os.environ["CLUSTER_NAME"]
     expected_nodes = int(os.environ["EXPECTED_CLUSTER_NODES"])
+    primary_host    = {{ primary_ip | to_json }}
+    mysql_port      = {{ mysql_port }}
+    admin_user      = {{ cluster_admin_username | to_json }}
+    admin_pass      = {{ cluster_admin_password | to_json }}
 
-    last_error = None
-    for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
-      if not os.path.exists(sock):
-        continue
-      try:
-        shell.connect({"user": "root", "scheme": "mysql", "host": "localhost", "socket": sock})
-        break
-      except Exception as exc:
-        last_error = exc
-    else:
-      if last_error is not None:
-        raise last_error
-      raise RuntimeError("unable to find a usable MySQL local socket for root")
+    shell.connect({
+      "user": admin_user,
+      "password": admin_pass,
+      "scheme": "mysql",
+      "host": primary_host,
+      "port": mysql_port,
+    })
 
     status   = dba.get_cluster(cluster_name).status()
     rs       = status.get("defaultReplicaSet", {})

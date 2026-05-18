@@ -75,7 +75,7 @@
     shell.connect({
       "user": admin_user,
       "password": admin_pass,
-      "host": "127.0.0.1",
+      "host": primary_host,
       "port": mysql_port,
       "scheme": "mysql",
     })
