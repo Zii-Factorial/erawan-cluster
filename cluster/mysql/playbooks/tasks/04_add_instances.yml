@@ -104,7 +104,7 @@
         cluster.add_instance(endpoint, {
           "password": cluster_admin_pass,
           "recoveryMethod": "clone",
-          "waitRecovery": 1,
+          "waitRecovery": 0,
         })
         print("added " + host)
       except Exception as e:
