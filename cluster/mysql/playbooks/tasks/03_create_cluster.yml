@@ -1,21 +1,18 @@
 - name: Ensure cluster exists
   ansible.builtin.shell: |
     set -euo pipefail
-    _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
-    trap 'rm -f "$_tmp"' EXIT
-    cat >"$_tmp" <<'PY'
+    _cleanup=$(mktemp /tmp/erawan-cleanup-XXXXXX.py)
+    _cluster=$(mktemp /tmp/erawan-cluster-XXXXXX.py)
+    trap 'rm -f "$_cleanup" "$_cluster"' EXIT
+
+    cat >"$_cleanup" <<'PY'
     import os
 
     shell.options["useWizards"] = False
-    shell.options["dba.restartWaitTimeout"] = {{ step_timeout_seconds | default(900) | int }}
-    cluster_name    = {{ cluster_name | to_json }}
     primary_host    = {{ primary_ip | to_json }}
     mysql_port      = {{ mysql_port }}
-    admin_user      = {{ cluster_admin_username | to_json }}
-    admin_pass      = {{ cluster_admin_password | to_json }}
     assume_prepared = {{ (assume_prepared | default(false) | bool) | ternary('True', 'False') }}
 
-    # --- Step 1: cleanup via root socket (root is localhost-only, safe for SQL) ---
     last_error = None
     for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
       if not os.path.exists(sock):
@@ -68,10 +65,21 @@
         msg = str(e).lower()
         if not any(t in msg for t in ("does not exist", "standalone instance", "no metadata schema")):
           raise
+    PY
 
-    # --- Step 2: reconnect as clusterAdmin for dba operations ---
-    # dba.create_cluster validates that the connected user can reach the instance
-    # from all cluster member IPs. root@'localhost' fails that check; clusterAdmin@'%' passes.
+    timeout {{ mysqlsh_create_cluster_timeout_seconds | default(step_timeout_seconds | default(900)) | int }} \
+      mysqlsh --no-wizard --py --file "$_cleanup"
+
+    cat >"$_cluster" <<'PY'
+    shell.options["useWizards"] = False
+    shell.options["dba.restartWaitTimeout"] = {{ step_timeout_seconds | default(900) | int }}
+    cluster_name    = {{ cluster_name | to_json }}
+    primary_host    = {{ primary_ip | to_json }}
+    mysql_port      = {{ mysql_port }}
+    admin_user      = {{ cluster_admin_username | to_json }}
+    admin_pass      = {{ cluster_admin_password | to_json }}
+    assume_prepared = {{ (assume_prepared | default(false) | bool) | ternary('True', 'False') }}
+
     shell.connect({
       "user": admin_user,
       "password": admin_pass,
@@ -106,7 +114,7 @@
         print("cluster created")
     PY
     timeout {{ mysqlsh_create_cluster_timeout_seconds | default(step_timeout_seconds | default(900)) | int }} \
-      mysqlsh --no-wizard --py --file "$_tmp"
+      mysqlsh --no-wizard --py --file "$_cluster"
   args:
     executable: /bin/bash
   register: create_cluster
