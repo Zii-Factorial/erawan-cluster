@@ -5,17 +5,14 @@ set -euo pipefail
 # Usage:
 #   sudo bash scripts/install-ubuntu.sh
 # Optional environment overrides:
-#   BIN_SRC=./bin/erawan-cluster
-#   CLUSTER_SRC=./cluster
+#   BIN_SRC=./bin/erawan-cluster   (auto-detected from snap if not set)
+#   CLUSTER_SRC=./cluster          (auto-detected from snap if not set)
 #   APP_ROOT=/opt/erawan-cluster
 
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   echo "Run as root (sudo)." >&2
   exit 1
 fi
-
-BIN_SRC="${BIN_SRC:-./bin/erawan-cluster}"
-CLUSTER_SRC="${CLUSTER_SRC:-./cluster}"
 
 APP_USER="${APP_USER:-erawan}"
 APP_GROUP="${APP_GROUP:-erawan}"
@@ -43,6 +40,37 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# ---------------------------------------------------------------------------
+# Auto-detect sources: prefer explicit env override, then local build output,
+# then snap installation, then fail with a clear message.
+# ---------------------------------------------------------------------------
+SNAP_CURRENT="/snap/${APP_NAME}/current"
+
+if [[ -z "${BIN_SRC:-}" ]]; then
+  if [[ -f "./bin/${APP_NAME}" ]]; then
+    BIN_SRC="./bin/${APP_NAME}"
+  elif [[ -f "${SNAP_CURRENT}/bin/${APP_NAME}" ]]; then
+    BIN_SRC="${SNAP_CURRENT}/bin/${APP_NAME}"
+    echo "==> Snap binary detected: ${BIN_SRC}"
+  elif [[ -f "${SNAP_CURRENT}/${APP_NAME}" ]]; then
+    BIN_SRC="${SNAP_CURRENT}/${APP_NAME}"
+    echo "==> Snap binary detected: ${BIN_SRC}"
+  else
+    BIN_SRC="./bin/${APP_NAME}"
+  fi
+fi
+
+if [[ -z "${CLUSTER_SRC:-}" ]]; then
+  if [[ -d "./cluster" ]]; then
+    CLUSTER_SRC="./cluster"
+  elif [[ -d "${SNAP_CURRENT}/cluster" ]]; then
+    CLUSTER_SRC="${SNAP_CURRENT}/cluster"
+    echo "==> Snap cluster detected: ${CLUSTER_SRC}"
+  else
+    CLUSTER_SRC="./cluster"
+  fi
+fi
+
 required_cluster_files=(
   "mysql/playbooks/deploy.yml"
   "mysql/playbooks/rollback.yml"
@@ -52,6 +80,7 @@ required_cluster_files=(
   "mysql/playbooks/tasks/04_add_instances.yml"
   "mysql/playbooks/tasks/05_bootstrap_router.yml"
   "mysql/playbooks/tasks/06_verify_cluster.yml"
+  "mysql/playbooks/tasks/07_enable_auto_rejoin.yml"
   "mysql/playbooks/tasks/07_init_app_db.yml"
   "pgsql/playbooks/deploy.yml"
 )
@@ -70,12 +99,12 @@ validate_cluster_tree() {
 }
 
 echo "==> Installing packages"
-apt update
-apt install -y haproxy ansible ca-certificates openssh-client
+apt-get update -qq
+apt-get install -y haproxy ansible ca-certificates openssh-client
 
 echo "==> Validating sources"
-[[ -f "${BIN_SRC}" ]] || { echo "Missing binary: ${BIN_SRC}" >&2; exit 1; }
-[[ -d "${CLUSTER_SRC}" ]] || { echo "Missing cluster dir: ${CLUSTER_SRC}" >&2; exit 1; }
+[[ -f "${BIN_SRC}" ]] || { echo "Binary not found: ${BIN_SRC}" >&2; echo "Set BIN_SRC= or install the snap first." >&2; exit 1; }
+[[ -d "${CLUSTER_SRC}" ]] || { echo "Cluster dir not found: ${CLUSTER_SRC}" >&2; echo "Set CLUSTER_SRC= or install the snap first." >&2; exit 1; }
 validate_cluster_tree "${CLUSTER_SRC}" || {
   echo "Cluster source tree is incomplete; aborting install." >&2
   exit 1
@@ -113,7 +142,7 @@ if ! mv "${TMP_CLUSTER_DIR}" "${CLUSTER_INSTALL_DIR}"; then
 fi
 rm -rf "${BACKUP_CLUSTER_DIR}"
 
-echo "==> Writing env file template (only if missing)"
+echo "==> Writing env file"
 if [[ ! -f "${APP_ENV_FILE}" ]]; then
   cat >"${APP_ENV_FILE}" <<EOF
 API_HOST=127.0.0.1
@@ -130,6 +159,7 @@ CLUSTER_STATE_DIR=${JOBS_DIR}
 ANSIBLE_PLAYBOOK_BIN=/usr/bin/ansible-playbook
 MYSQL_DEPLOY_PLAYBOOK=${APP_ROOT}/cluster/mysql/playbooks/deploy.yml
 MYSQL_ROLLBACK_PLAYBOOK=${APP_ROOT}/cluster/mysql/playbooks/rollback.yml
+PGSQL_DEPLOY_PLAYBOOK=${APP_ROOT}/cluster/pgsql/playbooks/deploy.yml
 CLUSTER_SSH_USER=
 CLUSTER_SSH_PRIVATE_KEY_PATH=
 
@@ -140,18 +170,24 @@ EOF
 fi
 chown root:"${APP_GROUP}" "${APP_ENV_FILE}"
 chmod 0640 "${APP_ENV_FILE}"
-expected_mysql_playbook="${APP_ROOT}/cluster/mysql/playbooks/deploy.yml"
-expected_pgsql_playbook="${APP_ROOT}/cluster/pgsql/playbooks/deploy.yml"
-current_mysql_playbook="$(sed -n 's/^MYSQL_DEPLOY_PLAYBOOK=//p' "${APP_ENV_FILE}" | tail -n 1)"
-current_pgsql_playbook="$(sed -n 's/^PGSQL_DEPLOY_PLAYBOOK=//p' "${APP_ENV_FILE}" | tail -n 1)"
-if [[ -n "${current_mysql_playbook}" && "${current_mysql_playbook}" != "${expected_mysql_playbook}" ]]; then
-  echo "WARNING: ${APP_ENV_FILE} still points MYSQL_DEPLOY_PLAYBOOK to ${current_mysql_playbook}" >&2
-  echo "         Expected for this install: ${expected_mysql_playbook}" >&2
-fi
-if [[ -n "${current_pgsql_playbook}" && "${current_pgsql_playbook}" != "${expected_pgsql_playbook}" ]]; then
-  echo "WARNING: ${APP_ENV_FILE} still points PGSQL_DEPLOY_PLAYBOOK to ${current_pgsql_playbook}" >&2
-  echo "         Expected for this install: ${expected_pgsql_playbook}" >&2
-fi
+
+# Always ensure path-sensitive keys point to the current install location.
+# This fixes stale paths on re-install and snap-based installs where the env
+# file was written by a previous run with different paths.
+upsert_env() {
+  local key="$1" val="$2" file="$3"
+  if grep -q "^${key}=" "${file}" 2>/dev/null; then
+    sed -i "s|^${key}=.*|${key}=${val}|" "${file}"
+  else
+    echo "${key}=${val}" >> "${file}"
+  fi
+}
+
+upsert_env "MYSQL_DEPLOY_PLAYBOOK"   "${APP_ROOT}/cluster/mysql/playbooks/deploy.yml"   "${APP_ENV_FILE}"
+upsert_env "MYSQL_ROLLBACK_PLAYBOOK" "${APP_ROOT}/cluster/mysql/playbooks/rollback.yml" "${APP_ENV_FILE}"
+upsert_env "PGSQL_DEPLOY_PLAYBOOK"   "${APP_ROOT}/cluster/pgsql/playbooks/deploy.yml"   "${APP_ENV_FILE}"
+upsert_env "CLUSTER_STATE_DIR"       "${JOBS_DIR}"                                       "${APP_ENV_FILE}"
+upsert_env "TENANTS_DIR"             "${TENANTS_DIR}"                                    "${APP_ENV_FILE}"
 
 echo "==> Configuring HAProxy global socket"
 if grep -qE '^\s*stats socket /run/haproxy/admin\.sock' /etc/haproxy/haproxy.cfg; then
@@ -224,8 +260,17 @@ else
 fi
 systemctl restart "${APP_NAME}"
 
+echo ""
 echo "==> Done"
-echo "Edit ${APP_ENV_FILE} and set API_KEY, CLUSTER_SSH_USER, and CLUSTER_SSH_PRIVATE_KEY_PATH before running cluster jobs."
+echo "Binary:   ${APP_BIN}"
+echo "Cluster:  ${CLUSTER_INSTALL_DIR}"
+echo "Env file: ${APP_ENV_FILE}"
+echo ""
+echo "Before running cluster jobs, edit ${APP_ENV_FILE} and set:"
+echo "  API_KEY                  — strong random key"
+echo "  CLUSTER_SSH_USER         — SSH user for cluster nodes"
+echo "  CLUSTER_SSH_PRIVATE_KEY_PATH — path to the SSH private key"
+echo ""
 echo "Check status:"
 echo "  systemctl status ${APP_NAME} --no-pager"
 echo "  systemctl status haproxy --no-pager"
