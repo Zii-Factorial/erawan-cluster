@@ -2,13 +2,13 @@
 set -euo pipefail
 
 # Production installer for Ubuntu 24.04+
-# Usage (run from the repo root):
+# Usage:
 #   sudo bash scripts/install-ubuntu.sh
 #
 # Optional environment overrides:
-#   APP_ROOT=/snap/erawan-cluster   — where the repo lives (default)
-#   BIN_SRC=./bin/erawan-cluster    — pre-built binary path
-#   CLUSTER_SRC=./cluster           — cluster playbooks source
+#   APP_ROOT=/snap/erawan-cluster                         — runtime project root
+#   BIN_SRC=/snap/erawan-cluster/bin/erawan-cluster      — pre-built binary path
+#   CLUSTER_SRC=/snap/erawan-cluster/cluster             — cluster playbooks source
 
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   echo "Run as root (sudo)." >&2
@@ -18,7 +18,9 @@ fi
 APP_USER="${APP_USER:-erawan}"
 APP_GROUP="${APP_GROUP:-erawan}"
 APP_NAME="${APP_NAME:-erawan-cluster}"
-APP_ROOT="${APP_ROOT:-/snap/erawan-cluster}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
+APP_ROOT="${APP_ROOT:-${PROJECT_ROOT}}"
 APP_BIN="${APP_BIN:-/usr/local/bin/erawan-cluster}"
 APP_ENV_DIR="${APP_ENV_DIR:-/etc/erawan-cluster}"
 APP_ENV_FILE="${APP_ENV_FILE:-${APP_ENV_DIR}/.env}"
@@ -26,6 +28,9 @@ APP_STATE_DIR="${APP_STATE_DIR:-/var/lib/erawan-cluster}"
 JOBS_DIR="${APP_STATE_DIR}/cluster/jobs"
 KEYS_DIR="${APP_STATE_DIR}/keys"
 TENANTS_DIR="${APP_STATE_DIR}/haproxy/tenants"
+HAPROXY_DEFAULTS_FILE="/etc/default/haproxy"
+HAPROXY_CONFIG_FILE="/etc/haproxy/haproxy.cfg"
+HAPROXY_SOCKET_LINE='    stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners'
 SUDOERS_FILE="/etc/sudoers.d/${APP_USER}-haproxy-reload"
 UNIT_FILE="/etc/systemd/system/${APP_NAME}.service"
 HAPROXY_OVERRIDE_DIR="/etc/systemd/system/haproxy.service.d"
@@ -38,29 +43,32 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# ---------------------------------------------------------------------------
-# Resolve binary source — prefer explicit override, then local build output
-# ---------------------------------------------------------------------------
+log_step() {
+  echo "==> $*"
+}
+
+die() {
+  echo "$*" >&2
+  exit 1
+}
+
 if [[ -z "${BIN_SRC:-}" ]]; then
-  if [[ -f "./bin/${APP_NAME}" ]]; then
-    BIN_SRC="./bin/${APP_NAME}"
+  if [[ -f "${PROJECT_ROOT}/bin/${APP_NAME}" ]]; then
+    BIN_SRC="${PROJECT_ROOT}/bin/${APP_NAME}"
   elif [[ -f "${APP_ROOT}/bin/${APP_NAME}" ]]; then
     BIN_SRC="${APP_ROOT}/bin/${APP_NAME}"
   else
-    BIN_SRC="./bin/${APP_NAME}"
+    BIN_SRC="${PROJECT_ROOT}/bin/${APP_NAME}"
   fi
 fi
 
-# ---------------------------------------------------------------------------
-# Resolve cluster source
-# ---------------------------------------------------------------------------
 if [[ -z "${CLUSTER_SRC:-}" ]]; then
-  if [[ -d "./cluster" ]]; then
-    CLUSTER_SRC="./cluster"
+  if [[ -d "${PROJECT_ROOT}/cluster" ]]; then
+    CLUSTER_SRC="${PROJECT_ROOT}/cluster"
   elif [[ -d "${APP_ROOT}/cluster" ]]; then
     CLUSTER_SRC="${APP_ROOT}/cluster"
   else
-    CLUSTER_SRC="./cluster"
+    CLUSTER_SRC="${PROJECT_ROOT}/cluster"
   fi
 fi
 
@@ -76,80 +84,139 @@ required_cluster_files=(
   "mysql/playbooks/tasks/07_enable_auto_rejoin.yml"
   "mysql/playbooks/tasks/07_init_app_db.yml"
   "pgsql/playbooks/deploy.yml"
+  "pgsql/playbooks/tasks/01_preflight.yml"
+  "pgsql/playbooks/tasks/02_base_config.yml"
+  "pgsql/playbooks/tasks/03_primary.yml"
+  "pgsql/playbooks/tasks/04_standby.yml"
+  "pgsql/playbooks/tasks/05_cluster_bootstrap.yml"
+  "pgsql/playbooks/tasks/06_verify_cluster.yml"
+  "pgsql/playbooks/tasks/07_init_app_db.yml"
+  "pgsql/playbooks/tasks/configure_pg_node.yml"
+  "pgsql/playbooks/tasks/runtime_facts.yml"
 )
 
-validate_cluster_tree() {
-  local root="$1" missing=0 rel
+missing_cluster_files=()
+
+collect_missing_cluster_files() {
+  local root="$1" rel
+  missing_cluster_files=()
   for rel in "${required_cluster_files[@]}"; do
     if [[ ! -f "${root}/${rel}" ]]; then
-      echo "Missing required cluster file: ${root}/${rel}" >&2
-      missing=1
+      missing_cluster_files+=("${rel}")
     fi
   done
-  [[ "${missing}" -eq 0 ]]
 }
 
-echo "==> Installing packages"
-apt-get update -qq
-apt-get install -y haproxy ansible ca-certificates openssh-client
-
-echo "==> Validating sources"
-[[ -f "${BIN_SRC}" ]] || {
-  echo "Binary not found: ${BIN_SRC}" >&2
-  echo "Build it first:  go build -o bin/${APP_NAME} ." >&2
-  exit 1
-}
-[[ -d "${CLUSTER_SRC}" ]] || {
-  echo "Cluster dir not found: ${CLUSTER_SRC}" >&2
-  exit 1
-}
-validate_cluster_tree "${CLUSTER_SRC}" || {
-  echo "Cluster source tree is incomplete; aborting install." >&2
-  exit 1
+validate_cluster_tree() {
+  local root="$1" rel
+  collect_missing_cluster_files "${root}"
+  if [[ "${#missing_cluster_files[@]}" -eq 0 ]]; then
+    return 0
+  fi
+  for rel in "${missing_cluster_files[@]}"; do
+    echo "Missing required cluster file: ${root}/${rel}" >&2
+  done
+  return 1
 }
 
-echo "==> Creating user and directories"
-id -u "${APP_USER}" >/dev/null 2>&1 \
-  || useradd -r -m -d "${APP_STATE_DIR}" -s /usr/sbin/nologin "${APP_USER}"
-install -d -o "${APP_USER}" -g "${APP_GROUP}" -m 0750 "${APP_STATE_DIR}"
-install -d -o "${APP_USER}" -g "${APP_GROUP}" -m 0750 "${JOBS_DIR}"
-install -d -o "${APP_USER}" -g "${APP_GROUP}" -m 0700 "${KEYS_DIR}"
-install -d -o "${APP_USER}" -g "${APP_GROUP}" -m 0755 "${TENANTS_DIR}"
-install -d -o root -g root -m 0755 "${APP_ROOT}"
-install -d -o root -g "${APP_GROUP}" -m 0750 "${APP_ENV_DIR}"
+restore_missing_cluster_files_from_git() {
+  local root="$1" rel restored=0
+  if ! command -v git >/dev/null 2>&1; then
+    return 1
+  fi
+  if [[ ! -d "${PROJECT_ROOT}/.git" ]]; then
+    return 1
+  fi
+  collect_missing_cluster_files "${root}"
+  if [[ "${#missing_cluster_files[@]}" -eq 0 ]]; then
+    return 0
+  fi
+  echo "==> Restoring missing tracked cluster files from git"
+  for rel in "${missing_cluster_files[@]}"; do
+    if git -C "${PROJECT_ROOT}" ls-files --error-unmatch "cluster/${rel}" >/dev/null 2>&1; then
+      git -C "${PROJECT_ROOT}" checkout -- "cluster/${rel}"
+      restored=1
+    fi
+  done
+  (( restored == 1 ))
+}
 
-echo "==> Installing binary"
-install -m 0755 "${BIN_SRC}" "${APP_BIN}"
+ensure_binary_present() {
+  if [[ -f "${BIN_SRC}" ]]; then
+    return 0
+  fi
+  if command -v make >/dev/null 2>&1 && [[ -f "${PROJECT_ROOT}/Makefile" ]]; then
+    log_step "Building ${APP_NAME}"
+    make -C "${PROJECT_ROOT}" build
+  fi
+  [[ -f "${BIN_SRC}" ]]
+}
 
-# ---------------------------------------------------------------------------
-# Install cluster playbooks.
-# If CLUSTER_SRC already resolves to CLUSTER_INSTALL_DIR (i.e. the git repo
-# IS the install location), skip the copy — git pull already updated the files.
-# ---------------------------------------------------------------------------
-_src_real="$(realpath "${CLUSTER_SRC}")"
-_dst_real="$(realpath "${CLUSTER_INSTALL_DIR}" 2>/dev/null || echo "${CLUSTER_INSTALL_DIR}")"
+upsert_env() {
+  local key="$1" val="$2" file="$3"
+  if grep -q "^${key}=" "${file}" 2>/dev/null; then
+    sed -i "s|^${key}=.*|${key}=${val}|" "${file}"
+  else
+    echo "${key}=${val}" >>"${file}"
+  fi
+}
 
-if [[ "${_src_real}" == "${_dst_real}" ]]; then
-  echo "==> Cluster already at ${CLUSTER_INSTALL_DIR} (git pull keeps it up to date)"
-  validate_cluster_tree "${CLUSTER_INSTALL_DIR}" || {
-    echo "Cluster tree at ${CLUSTER_INSTALL_DIR} is incomplete; aborting." >&2
-    exit 1
-  }
-else
-  echo "==> Installing cluster playbooks"
+install_packages() {
+  log_step "Installing packages"
+  apt-get update -qq
+  apt-get install -y haproxy ansible ca-certificates openssh-client
+}
+
+validate_sources() {
+  log_step "Validating sources"
+  ensure_binary_present || die "Binary not found: ${BIN_SRC}
+Unable to build it automatically; check Go and make availability."
+  [[ -d "${CLUSTER_SRC}" ]] || die "Cluster dir not found: ${CLUSTER_SRC}"
+  if ! validate_cluster_tree "${CLUSTER_SRC}"; then
+    restore_missing_cluster_files_from_git "${CLUSTER_SRC}" || true
+  fi
+  validate_cluster_tree "${CLUSTER_SRC}" || die "Cluster source tree is incomplete; aborting install."
+}
+
+create_user_and_directories() {
+  log_step "Creating user and directories"
+  id -u "${APP_USER}" >/dev/null 2>&1 \
+    || useradd -r -m -d "${APP_STATE_DIR}" -s /usr/sbin/nologin "${APP_USER}"
+  install -d -o "${APP_USER}" -g "${APP_GROUP}" -m 0750 "${APP_STATE_DIR}" "${JOBS_DIR}"
+  install -d -o "${APP_USER}" -g "${APP_GROUP}" -m 0700 "${KEYS_DIR}"
+  install -d -o "${APP_USER}" -g "${APP_GROUP}" -m 0755 "${TENANTS_DIR}"
+  install -d -o root -g root -m 0755 "${APP_ROOT}"
+  install -d -o root -g "${APP_GROUP}" -m 0750 "${APP_ENV_DIR}"
+}
+
+install_binary() {
+  log_step "Installing binary"
+  install -m 0755 "${BIN_SRC}" "${APP_BIN}"
+}
+
+install_cluster_tree() {
+  local src_real dst_real
+  src_real="$(realpath "${CLUSTER_SRC}")"
+  dst_real="$(realpath "${CLUSTER_INSTALL_DIR}" 2>/dev/null || echo "${CLUSTER_INSTALL_DIR}")"
+
+  if [[ "${src_real}" == "${dst_real}" ]]; then
+    log_step "Cluster already at ${CLUSTER_INSTALL_DIR} (git pull keeps it up to date)"
+    validate_cluster_tree "${CLUSTER_INSTALL_DIR}" || die "Cluster tree at ${CLUSTER_INSTALL_DIR} is incomplete; aborting."
+    return 0
+  fi
+
+  log_step "Installing cluster playbooks"
   TMP_CLUSTER_STAGE="$(mktemp -d /tmp/.erawan-cluster-stage.XXXXXX)"
   cp -a "${CLUSTER_SRC}" "${TMP_CLUSTER_STAGE}/cluster"
-  validate_cluster_tree "${TMP_CLUSTER_STAGE}/cluster" || {
-    echo "Staged cluster tree is incomplete; aborting install." >&2
-    exit 1
-  }
+  validate_cluster_tree "${TMP_CLUSTER_STAGE}/cluster" || die "Staged cluster tree is incomplete; aborting install."
   rm -rf "${CLUSTER_INSTALL_DIR}"
   mv "${TMP_CLUSTER_STAGE}/cluster" "${CLUSTER_INSTALL_DIR}"
-fi
+}
 
-echo "==> Writing env file"
-if [[ ! -f "${APP_ENV_FILE}" ]]; then
-  cat >"${APP_ENV_FILE}" <<EOF
+write_env_file() {
+  log_step "Writing env file"
+  if [[ ! -f "${APP_ENV_FILE}" ]]; then
+    cat >"${APP_ENV_FILE}" <<EOF
 API_HOST=127.0.0.1
 API_PORT=8080
 ENV=prod
@@ -172,59 +239,51 @@ CLUSTER_ANSIBLE_DEBUG=false
 CLUSTER_ANSIBLE_VERBOSITY=0
 CLUSTER_STEP_OUTPUT_MAX_CHARS=8000
 EOF
-fi
-chown root:"${APP_GROUP}" "${APP_ENV_FILE}"
-chmod 0640 "${APP_ENV_FILE}"
-
-# Always sync path-sensitive keys so re-installs and APP_ROOT changes take effect.
-upsert_env() {
-  local key="$1" val="$2" file="$3"
-  if grep -q "^${key}=" "${file}" 2>/dev/null; then
-    sed -i "s|^${key}=.*|${key}=${val}|" "${file}"
-  else
-    echo "${key}=${val}" >>"${file}"
   fi
+  chown root:"${APP_GROUP}" "${APP_ENV_FILE}"
+  chmod 0640 "${APP_ENV_FILE}"
+
+  upsert_env "MYSQL_DEPLOY_PLAYBOOK"   "${CLUSTER_INSTALL_DIR}/mysql/playbooks/deploy.yml"   "${APP_ENV_FILE}"
+  upsert_env "MYSQL_ROLLBACK_PLAYBOOK" "${CLUSTER_INSTALL_DIR}/mysql/playbooks/rollback.yml" "${APP_ENV_FILE}"
+  upsert_env "PGSQL_DEPLOY_PLAYBOOK"   "${CLUSTER_INSTALL_DIR}/pgsql/playbooks/deploy.yml"   "${APP_ENV_FILE}"
+  upsert_env "CLUSTER_STATE_DIR"       "${JOBS_DIR}"                                          "${APP_ENV_FILE}"
+  upsert_env "TENANTS_DIR"             "${TENANTS_DIR}"                                       "${APP_ENV_FILE}"
 }
 
-upsert_env "MYSQL_DEPLOY_PLAYBOOK"   "${CLUSTER_INSTALL_DIR}/mysql/playbooks/deploy.yml"   "${APP_ENV_FILE}"
-upsert_env "MYSQL_ROLLBACK_PLAYBOOK" "${CLUSTER_INSTALL_DIR}/mysql/playbooks/rollback.yml" "${APP_ENV_FILE}"
-upsert_env "PGSQL_DEPLOY_PLAYBOOK"   "${CLUSTER_INSTALL_DIR}/pgsql/playbooks/deploy.yml"   "${APP_ENV_FILE}"
-upsert_env "CLUSTER_STATE_DIR"       "${JOBS_DIR}"                                          "${APP_ENV_FILE}"
-upsert_env "TENANTS_DIR"             "${TENANTS_DIR}"                                       "${APP_ENV_FILE}"
-
-echo "==> Configuring HAProxy global socket"
-if grep -qE '^\s*stats socket /run/haproxy/admin\.sock' /etc/haproxy/haproxy.cfg; then
-  sed -i -E 's|^\s*stats socket /run/haproxy/admin\.sock.*|    stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners|' /etc/haproxy/haproxy.cfg
-fi
-
-echo "==> Configuring HAProxy tenant loading"
-if [[ -f /etc/default/haproxy ]]; then
-  if grep -q '^CONFIG=' /etc/default/haproxy; then
-    sed -i "s|^CONFIG=.*|CONFIG=\"/etc/haproxy/haproxy.cfg -f ${TENANTS_DIR}\"|" /etc/default/haproxy
-  else
-    echo "CONFIG=\"/etc/haproxy/haproxy.cfg -f ${TENANTS_DIR}\"" >>/etc/default/haproxy
+configure_haproxy() {
+  log_step "Configuring HAProxy global socket"
+  if grep -qE '^\s*stats socket /run/haproxy/admin\.sock' "${HAPROXY_CONFIG_FILE}"; then
+    sed -i -E "s|^\s*stats socket /run/haproxy/admin\.sock.*|${HAPROXY_SOCKET_LINE}|" "${HAPROXY_CONFIG_FILE}"
   fi
-fi
 
-echo "==> Configuring HAProxy systemd override"
-install -d -o root -g root -m 0755 "${HAPROXY_OVERRIDE_DIR}"
-cat >"${HAPROXY_OVERRIDE_FILE}" <<EOF
+  log_step "Configuring HAProxy tenant loading"
+  if [[ -f "${HAPROXY_DEFAULTS_FILE}" ]]; then
+    upsert_env "CONFIG" "\"${HAPROXY_CONFIG_FILE} -f ${TENANTS_DIR}\"" "${HAPROXY_DEFAULTS_FILE}"
+  fi
+
+  log_step "Configuring HAProxy systemd override"
+  install -d -o root -g root -m 0755 "${HAPROXY_OVERRIDE_DIR}"
+  cat >"${HAPROXY_OVERRIDE_FILE}" <<EOF
 [Service]
 ExecStart=
-ExecStart=/usr/sbin/haproxy -Ws -f /etc/haproxy/haproxy.cfg -f ${TENANTS_DIR} -p /run/haproxy.pid -S /run/haproxy-master.sock
+ExecStart=/usr/sbin/haproxy -Ws -f ${HAPROXY_CONFIG_FILE} -f ${TENANTS_DIR} -p /run/haproxy.pid -S /run/haproxy-master.sock
 ExecReload=
-ExecReload=/usr/sbin/haproxy -c -q -f /etc/haproxy/haproxy.cfg -f ${TENANTS_DIR}
+ExecReload=/usr/sbin/haproxy -c -q -f ${HAPROXY_CONFIG_FILE} -f ${TENANTS_DIR}
 ExecReload=/bin/kill -USR2 \$MAINPID
 EOF
+}
 
-echo "==> Writing sudoers rule"
-cat >"${SUDOERS_FILE}" <<EOF
+write_sudoers_rule() {
+  log_step "Writing sudoers rule"
+  cat >"${SUDOERS_FILE}" <<EOF
 ${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl reload haproxy
 EOF
-chmod 0440 "${SUDOERS_FILE}"
+  chmod 0440 "${SUDOERS_FILE}"
+}
 
-echo "==> Writing systemd unit"
-cat >"${UNIT_FILE}" <<EOF
+write_systemd_unit() {
+  log_step "Writing systemd unit"
+  cat >"${UNIT_FILE}" <<EOF
 [Unit]
 Description=Erawan Cluster API
 After=network.target
@@ -247,31 +306,52 @@ ReadWritePaths=${APP_STATE_DIR}
 [Install]
 WantedBy=multi-user.target
 EOF
+}
 
-echo "==> Validating HAProxy config"
-haproxy -c -f /etc/haproxy/haproxy.cfg -f "${TENANTS_DIR}"
+start_services() {
+  log_step "Validating HAProxy config"
+  haproxy -c -f "${HAPROXY_CONFIG_FILE}" -f "${TENANTS_DIR}"
 
-echo "==> Starting services"
-systemctl daemon-reload
-systemctl enable haproxy "${APP_NAME}"
-if systemctl is-active --quiet haproxy; then
-  systemctl reload haproxy
-else
-  systemctl start haproxy
-fi
-systemctl restart "${APP_NAME}"
+  log_step "Starting services"
+  systemctl daemon-reload
+  systemctl enable haproxy "${APP_NAME}"
+  if systemctl is-active --quiet haproxy; then
+    systemctl reload haproxy
+  else
+    systemctl start haproxy
+  fi
+  systemctl restart "${APP_NAME}"
+}
 
-echo ""
-echo "==> Done"
-echo "  Binary:   ${APP_BIN}"
-echo "  Cluster:  ${CLUSTER_INSTALL_DIR}"
-echo "  Env file: ${APP_ENV_FILE}"
-echo ""
-echo "Edit ${APP_ENV_FILE} and set:"
-echo "  API_KEY                      — strong random key"
-echo "  CLUSTER_SSH_USER             — SSH user for cluster nodes"
-echo "  CLUSTER_SSH_PRIVATE_KEY_PATH — path to the SSH private key"
-echo ""
-echo "Check status:"
-echo "  systemctl status ${APP_NAME} --no-pager"
-echo "  systemctl status haproxy --no-pager"
+print_summary() {
+  echo ""
+  log_step "Done"
+  echo "  Binary:   ${APP_BIN}"
+  echo "  Cluster:  ${CLUSTER_INSTALL_DIR}"
+  echo "  Env file: ${APP_ENV_FILE}"
+  echo ""
+  echo "Edit ${APP_ENV_FILE} and set:"
+  echo "  API_KEY                      — strong random key"
+  echo "  CLUSTER_SSH_USER             — SSH user for cluster nodes"
+  echo "  CLUSTER_SSH_PRIVATE_KEY_PATH — path to the SSH private key"
+  echo ""
+  echo "Check status:"
+  echo "  systemctl status ${APP_NAME} --no-pager"
+  echo "  systemctl status haproxy --no-pager"
+}
+
+main() {
+  install_packages
+  validate_sources
+  create_user_and_directories
+  install_binary
+  install_cluster_tree
+  write_env_file
+  configure_haproxy
+  write_sudoers_rule
+  write_systemd_unit
+  start_services
+  print_summary
+}
+
+main "$@"
