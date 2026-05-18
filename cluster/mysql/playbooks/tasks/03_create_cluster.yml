@@ -110,29 +110,36 @@
       "scheme": "mysql",
     })
 
+    _create_opts = {"multiPrimary": False, "communicationStack": "MYSQL"}
+
     try:
       dba.get_cluster(cluster_name)
       print("cluster already exists")
     except Exception as e:
       msg = str(e).lower()
-      if "metadata exists" in msg and "belongs to that metadata" in msg:
+      _is_stale_metadata  = "metadata exists" in msg and "belongs to that metadata" in msg
+      _is_standalone      = "standalone instance" in msg
+      _is_no_metadata     = "no metadata schema" in msg or "doesn't exist" in msg
+      _is_cluster_missing = _is_standalone or _is_no_metadata
+
+      if _is_stale_metadata:
         if assume_prepared:
           dba.reboot_cluster_from_complete_outage(cluster_name, {"force": True})
           print("cluster rebooted from complete outage")
         else:
           dba.drop_metadata_schema({"force": True})
-          dba.create_cluster(cluster_name, {"multiPrimary": False, "communicationStack": "MYSQL"})
+          dba.create_cluster(cluster_name, _create_opts)
           print("cluster created")
-      elif "standalone instance" in msg and "gr is not active" in msg:
+      elif _is_cluster_missing:
         if assume_prepared:
           dba.reboot_cluster_from_complete_outage(cluster_name, {"force": True})
           print("cluster rebooted from complete outage")
         else:
-          dba.create_cluster(cluster_name, {"multiPrimary": False, "communicationStack": "MYSQL"})
+          dba.create_cluster(cluster_name, _create_opts)
           print("cluster created")
       else:
-        dba.create_cluster(cluster_name, {"multiPrimary": False, "communicationStack": "MYSQL"})
-        print("cluster created")
+        # Unexpected error (network, auth, etc.) — do NOT silently create cluster.
+        raise RuntimeError(f"get_cluster failed with unexpected error: {e}")
     PY
     timeout {{ mysqlsh_create_cluster_timeout_seconds | default(step_timeout_seconds | default(900)) | int }} \
       mysqlsh --no-wizard --py --file "$_cluster"

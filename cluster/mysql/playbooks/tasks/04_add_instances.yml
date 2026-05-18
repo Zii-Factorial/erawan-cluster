@@ -150,7 +150,7 @@
   retries: "{{ add_instances_retries | default(2) | int }}"
   delay: "{{ add_instances_retry_delay_seconds | default(20) | int }}"
   until: add_instances.rc == 0
-  changed_when: "'added ' in add_instances.stdout"
+  changed_when: "'clone initiated' in add_instances.stdout or 'added via clone' in add_instances.stdout"
   tags: ["add_instances"]
 
 - name: Rescan cluster metadata after instance changes
@@ -176,8 +176,8 @@
       "port": mysql_port,
     })
     cluster = dba.get_cluster(cluster_name)
-    result = cluster.rescan()
-    print(json.dumps(result, indent=2))
+    result  = cluster.rescan()
+    print(json.dumps(result, indent=2) if result is not None else "rescan complete")
     PY
     timeout {{ mysqlsh_rescan_timeout_seconds | default(180) | int }} \
       mysqlsh --no-wizard --py --file "$_tmp"
