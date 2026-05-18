@@ -63,6 +63,7 @@ To roll back a MySQL job:
 - `standby_ips`: optional list of replica nodes to add after cluster creation.
 - `cluster_admin_username`: optional override for the internally managed cluster admin account. Defaults to `clusteradmin`.
 - `bootstrap_router`: when `true`, bootstraps MySQL Router on all DB nodes.
+- `mysql_recovery_method`: optional Ansible variable override for how standbys join the cluster. Defaults to `auto`, which prefers faster incremental recovery and falls back to clone when necessary.
 - `ssh_port`: SSH port for the target nodes. Defaults to `22`.
 - `assume_prepared`: when `true`, skips preflight and instance-configuration steps.
 - `new_user`, `new_user_password`, `new_db`: optional application database bootstrap.
@@ -81,7 +82,7 @@ The generated MySQL instance config also points to MySQL's default auto-generate
 1. Preflight checks confirm MySQL, MySQL Shell, and connectivity prerequisites are present.
 2. Instance configuration prepares each node for InnoDB Cluster and creates or updates the cluster admin account.
 3. Cluster creation runs on the requested primary node.
-4. Secondary nodes are added with clone-based recovery when `standby_ips` is not empty.
+4. Secondary nodes are added when `standby_ips` is not empty. By default, MySQL Shell uses `recoveryMethod=auto`, which prefers faster incremental recovery when possible and falls back to clone when needed.
 5. Group Replication auto-start and auto-rejoin settings are enabled on all members.
 6. MySQL Router is bootstrapped on all nodes when `bootstrap_router` is enabled.
 7. Verification checks cluster health and router state.

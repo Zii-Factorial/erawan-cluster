@@ -12,9 +12,9 @@
   ansible.builtin.set_fact:
     erawan_node_ip: >-
       {{
-        ansible_host
-        if (ansible_host | default('')) in (ansible_all_ipv4_addresses | default([]))
-        else (ansible_default_ipv4.address | default(ansible_host))
+        hostvars[item].ansible_host
+        if (hostvars[item].ansible_host | default('')) in (hostvars[item].ansible_all_ipv4_addresses | default([]))
+        else (hostvars[item].ansible_default_ipv4.address | default(hostvars[item].ansible_host))
       }}
   delegate_to: "{{ item }}"
   delegate_facts: true
