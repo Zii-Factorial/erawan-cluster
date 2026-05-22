@@ -148,6 +148,13 @@
   when: not _assume_prepared
   tags: ["configure_instances", "configure_mysql", "configure_instances_mysqlsh"]
 
+- name: Remove auto.cnf to force server_uuid regeneration
+  ansible.builtin.file:
+    path: /var/lib/mysql/auto.cnf
+    state: absent
+  when: not _assume_prepared
+  tags: ["configure_instances", "configure_mysql"]
+
 - name: Restart MySQL after stale GR reset
   ansible.builtin.systemd:
     name: mysql
