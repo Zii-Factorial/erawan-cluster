@@ -67,7 +67,7 @@
           - host all all 0.0.0.0/0 md5
         users:
           {{ patroni_admin_user }}:
-            password: {{ patroni_admin_password }}
+            password: {{ patroni_admin_password | to_json }}
             options:
               - createrole
               - createdb
@@ -81,10 +81,10 @@
         authentication:
           replication:
             username: {{ replication_user }}
-            password: {{ replication_password }}
+            password: {{ replication_password | to_json }}
           superuser:
             username: {{ postgres_superuser }}
-            password: {{ postgres_superuser_password }}
+            password: {{ postgres_superuser_password | to_json }}
         parameters:
           ssl: "on"
           ssl_cert_file: '/etc/ssl/certs/ssl-cert-snakeoil.pem'

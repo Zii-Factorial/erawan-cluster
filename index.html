@@ -224,7 +224,7 @@
                 <p class="text-xs uppercase tracking-[0.26em] text-slate-400">System View</p>
                 <h2 class="mt-2 text-2xl font-bold">Control plane + cluster workers</h2>
               </div>
-              <span class="rounded-full border border-white/15 bg-white/10 px-3 py-1 font-mono text-xs text-slate-200">v1 API</span>
+              <span class="rounded-full border border-white/15 bg-white/10 px-3 py-1 font-mono text-xs text-slate-200">v1.01</span>
             </div>
 
             <div class="mt-8 grid gap-4">
@@ -287,8 +287,7 @@
             <ul class="mt-6 space-y-3 text-sm leading-7 text-slate-600 dark:text-slate-300">
               <li>Go 1.22+</li>
               <li><code class="font-mono text-xs">ansible-playbook</code> installed</li>
-              <li><code class="font-mono text-xs">sshpass</code> installed for password-based SSH auth</li>
-              <li>SSH access to all target DB nodes</li>
+              <li>SSH client with key-based access to all target DB nodes</li>
               <li>HAProxy installed if proxy features are enabled</li>
               <li><code class="font-mono text-xs">sudo</code> permission for HAProxy reload command</li>
             </ul>
@@ -472,8 +471,6 @@ POST /cluster/pgsql/jobs/{jobID}/resume</pre>
   "new_db": "appdb",
   "assume_prepared": false,
   "bootstrap_router": true,
-  "ssh_user": "root",
-  "ssh_password": "password",
   "ssh_port": 22,
   "mysql_port": 3306,
   "step_timeout_seconds": 900
@@ -486,8 +483,6 @@ POST /cluster/pgsql/jobs/{jobID}/resume</pre>
   "new_user_password": "AppUser#2026",
   "new_user_ssl_required": true,
   "new_db": "appdb",
-  "ssh_user": "root",
-  "ssh_password": "password",
   "ssh_port": 22,
   "postgres_port": 5432,
   "step_timeout_seconds": 900
@@ -499,16 +494,13 @@ POST /cluster/pgsql/jobs/{jobID}/resume</pre>
             <div class="reveal rounded-[30px] border border-slate-200 bg-white p-6 shadow-card transition-colors duration-300 dark:border-white/10 dark:bg-white/5">
               <p class="text-xs uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">Resume Payload</p>
               <pre class="mt-4 overflow-x-auto rounded-2xl bg-slate-950 p-4 font-mono text-xs leading-7 text-slate-100">{
-  "ssh_password": "password",
   "new_user_password": "AppUser#2026"
 }</pre>
             </div>
 
             <div class="reveal rounded-[30px] border border-slate-200 bg-white p-6 shadow-card transition-colors duration-300 dark:border-white/10 dark:bg-white/5">
               <p class="text-xs uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">MySQL Rollback</p>
-              <pre class="mt-4 overflow-x-auto rounded-2xl bg-slate-950 p-4 font-mono text-xs leading-7 text-slate-100">{
-  "ssh_password": "password"
-}</pre>
+              <pre class="mt-4 overflow-x-auto rounded-2xl bg-slate-950 p-4 font-mono text-xs leading-7 text-slate-100">{}</pre>
             </div>
 
             <div class="reveal rounded-[30px] border border-slate-200 bg-white p-6 shadow-card transition-colors duration-300 dark:border-white/10 dark:bg-white/5">
@@ -517,7 +509,8 @@ POST /cluster/pgsql/jobs/{jobID}/resume</pre>
                 <li>Use <code class="font-mono text-xs">standby_ips: []</code> for single-node bootstrap.</li>
                 <li>Set <code class="font-mono text-xs">bootstrap_router: false</code> to skip MySQL Router.</li>
                 <li>Set <code class="font-mono text-xs">assume_prepared: true</code> only when MySQL nodes were prepared earlier.</li>
-                <li>Omit PostgreSQL cluster passwords unless you intentionally want to override generated values.</li>
+                <li>SSH credentials are configured on the API host via env vars — they are not part of any request payload.</li>
+                <li>Omit PostgreSQL cluster passwords to use auto-generated values that are stored and reused on resume.</li>
               </ul>
             </div>
           </div>

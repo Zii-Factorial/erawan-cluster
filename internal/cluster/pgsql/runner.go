@@ -15,11 +15,10 @@ import (
 )
 
 const (
-	defaultPostgreSQLVersionHint = 16
-	defaultPostgreSQLCluster     = "main"
-	defaultPostgresSuperuser     = "postgres"
-	defaultReplicationUser       = "replicator"
-	defaultPatroniAdminUser      = "admin"
+	defaultPostgreSQLCluster = "main"
+	defaultPostgresSuperuser = "postgres"
+	defaultReplicationUser   = "replicator"
+	defaultPatroniAdminUser  = "admin"
 )
 
 type Runner struct {
@@ -112,13 +111,12 @@ func (r *Runner) run(ctx context.Context, cfg runConfig) (result StepResult) {
 		"new_user_ssl_required":       cfg.spec.NewUserSSLRequired,
 		"new_db":                      cfg.spec.NewDB,
 		"postgres_port":               cfg.spec.PostgresPort,
-		"postgresql_version_hint":     defaultPostgreSQLVersionHint,
 		"postgresql_cluster_name":     defaultPostgreSQLCluster,
 		"patroni_scope":               cfg.spec.ClusterName,
 		"patroni_namespace":           "/db/",
 		"patroni_rest_port":           8008,
 		"patroni_config_path":         "/etc/patroni/patroni.yml",
-		"patroni_pgpass_path":         "/tmp/patroni.pgpass",
+		"patroni_pgpass_path":         "/etc/patroni/patroni.pgpass",
 		"etcd_config_path":            "/etc/etcd/etcd.conf",
 		"etcd_cluster_token":          cfg.spec.ClusterName + "-etcd-cluster-token",
 		"etcd_client_port":            2379,
