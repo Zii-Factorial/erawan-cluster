@@ -43,7 +43,7 @@
       [mysqld]
       bind-address = 0.0.0.0
       report_host = {{ erawan_node_ip }}
-      mysqlx_bind_address = 0.0.0.0
+      mysqlx = OFF
       loose-group_replication_start_on_boot = OFF
       loose-group_replication_autorejoin_tries = {{ mysql_gr_autorejoin_tries | default(3) | int }}
       loose-group_replication_member_expel_timeout = {{ mysql_gr_member_expel_timeout | default(0) | int }}
