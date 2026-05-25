@@ -95,6 +95,10 @@ func (r *Runner) run(ctx context.Context, cfg runConfig) (result StepResult) {
 		return
 	}
 
+	stepTimeout := cfg.spec.StepTimeoutSeconds
+	if stepTimeout <= 0 {
+		stepTimeout = 900
+	}
 	extraVars := map[string]any{
 		"deployment_job_id":           cfg.jobID,
 		"cluster_name":                cfg.spec.ClusterName,
@@ -121,7 +125,7 @@ func (r *Runner) run(ctx context.Context, cfg runConfig) (result StepResult) {
 		"etcd_cluster_token":          cfg.spec.ClusterName + "-etcd-cluster-token",
 		"etcd_client_port":            2379,
 		"etcd_peer_port":              2380,
-		"step_timeout_seconds":        cfg.spec.StepTimeoutSeconds,
+		"step_timeout_seconds":        stepTimeout,
 	}
 
 	sanitized, err := json.Marshal(extraVars)

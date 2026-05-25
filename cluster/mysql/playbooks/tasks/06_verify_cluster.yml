@@ -19,7 +19,7 @@
     admin_user      = {{ cluster_admin_username | to_json }}
     admin_pass      = {{ cluster_admin_password | to_json }}
 
-    shell.connect(f"mysql://{admin_user}@{primary_host}:{mysql_port}", admin_pass)
+    shell.connect({"scheme": "mysql", "user": admin_user, "host": primary_host, "port": mysql_port, "password": admin_pass})
 
     status    = dba.get_cluster(cluster_name).status()
     rs        = status.get("defaultReplicaSet", {})

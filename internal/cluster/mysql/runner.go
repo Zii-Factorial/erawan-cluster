@@ -104,6 +104,10 @@ func (r *Runner) run(ctx context.Context, cfg runConfig, playbook string) (resul
 		return
 	}
 
+	stepTimeout := cfg.spec.StepTimeoutSeconds
+	if stepTimeout <= 0 {
+		stepTimeout = 900
+	}
 	extraVars := map[string]any{
 		"cluster_name":           cfg.spec.ClusterName,
 		"cluster_admin_username": cfg.spec.ClusterAdminUsername,
@@ -117,7 +121,7 @@ func (r *Runner) run(ctx context.Context, cfg runConfig, playbook string) (resul
 		"mysql_port":             cfg.spec.MySQLPort,
 		"bootstrap_router":       cfg.spec.BootstrapRouter,
 		"router_service_name":    "mysqlrouter-" + cfg.spec.ClusterName,
-		"step_timeout_seconds":   cfg.spec.StepTimeoutSeconds,
+		"step_timeout_seconds":   stepTimeout,
 	}
 
 	sanitized, err := json.Marshal(extraVars)

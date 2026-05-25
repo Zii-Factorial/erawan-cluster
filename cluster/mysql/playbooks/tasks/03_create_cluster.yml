@@ -97,7 +97,7 @@
 
     for _attempt in range(20):
       try:
-        shell.connect(f"mysql://{admin_user}@{primary_host}:{mysql_port}", admin_pass)
+        shell.connect({"scheme": "mysql", "user": admin_user, "host": primary_host, "port": mysql_port, "password": admin_pass})
         break
       except Exception as _e:
         _msg = str(_e).lower()

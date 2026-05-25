@@ -24,7 +24,7 @@
     recovery_method     = {{ mysql_recovery_method | default('auto') | to_json }}
     standby_hosts       = {{ standby_ips | to_json }}
     expected_nodes      = 1 + len(standby_hosts)
-    shell.connect(f"mysql://{cluster_admin_user}@{primary_host}:{mysql_port}", cluster_admin_pass)
+    shell.connect({"scheme": "mysql", "user": cluster_admin_user, "host": primary_host, "port": mysql_port, "password": cluster_admin_pass})
     cluster   = dba.get_cluster(cluster_name)
     node_wait = {{ mysqlsh_add_instances_wait_seconds | default(600) | int }}
 
@@ -91,7 +91,7 @@
     cluster_admin_pass = {{ cluster_admin_password | to_json }}
     cluster_name       = {{ cluster_name | to_json }}
 
-    shell.connect(f"mysql://{cluster_admin_user}@{primary_host}:{mysql_port}", cluster_admin_pass)
+    shell.connect({"scheme": "mysql", "user": cluster_admin_user, "host": primary_host, "port": mysql_port, "password": cluster_admin_pass})
     cluster = dba.get_cluster(cluster_name)
     result  = cluster.rescan()
     print(json.dumps(result, indent=2) if result is not None else "rescan complete")
