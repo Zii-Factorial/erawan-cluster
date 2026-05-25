@@ -362,10 +362,15 @@ func buildConfigContent(port int, nodeIPs []string, dbPort int) string {
 	b.WriteString("    option clitcpka\n")
 	b.WriteString("    option srvtcpka\n")
 	b.WriteString("\n")
-	b.WriteString("    # MySQL-level health check: verifies MySQL Router can reach a live backend,\n")
-	b.WriteString("    # not just that TCP is open. Catches the window where the Router accepts\n")
-	b.WriteString("    # TCP connections but has no primary to route writes to.\n")
-	b.WriteString("    option mysql-check\n")
+	if isPostgresPort(dbPort) {
+		b.WriteString("    # PostgreSQL-level health check: verifies the backend is a live Postgres node.\n")
+		b.WriteString("    option pgsql-check\n")
+	} else {
+		b.WriteString("    # MySQL-level health check: verifies MySQL Router can reach a live backend,\n")
+		b.WriteString("    # not just that TCP is open. Catches the window where the Router accepts\n")
+		b.WriteString("    # TCP connections but has no primary to route writes to.\n")
+		b.WriteString("    option mysql-check\n")
+	}
 	b.WriteString("\n")
 	b.WriteString("    # Proper timeouts\n")
 	b.WriteString("    timeout connect  500ms\n")
@@ -399,6 +404,10 @@ func buildConfigContent(port int, nodeIPs []string, dbPort int) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+func isPostgresPort(port int) bool {
+	return port == 5432
 }
 
 func dbPortRole(port int) string {
