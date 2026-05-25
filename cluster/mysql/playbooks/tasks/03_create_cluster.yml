@@ -111,13 +111,31 @@
     admin_pass      = {{ cluster_admin_password | to_json }}
     assume_prepared = {{ (assume_prepared | default(false) | bool) | ternary('True', 'False') }}
 
-    shell.connect({
+    import time as _time
+
+    _conn = {
       "user": admin_user,
       "password": admin_pass,
       "host": primary_host,
       "port": mysql_port,
       "scheme": "mysql",
-    })
+    }
+    for _attempt in range(20):
+      try:
+        shell.connect(_conn)
+        break
+      except Exception as _e:
+        _msg = str(_e).lower()
+        _transient = (
+          "2013" in _msg or
+          "lost connection" in _msg or
+          "system error: 110" in _msg or
+          "initial communication packet" in _msg
+        )
+        if _attempt < 19 and _transient:
+          _time.sleep(3)
+          continue
+        raise
 
     _create_opts = {"multiPrimary": False, "communicationStack": "MYSQL"}
 

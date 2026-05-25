@@ -26,7 +26,7 @@
 
 - name: Wait for MySQL to be ready on primary before router bootstrap
   ansible.builtin.wait_for:
-    host: "127.0.0.1"
+    host: "{{ hostvars['primary'].erawan_node_ip }}"
     port: "{{ mysql_port }}"
     state: started
     delay: 5
@@ -302,7 +302,7 @@
 
 - name: Verify router RW port reachable on node
   ansible.builtin.wait_for:
-    host: "127.0.0.1"
+    host: "{{ erawan_node_ip }}"
     port: 6446
     state: started
     timeout: 30
@@ -311,7 +311,7 @@
 
 - name: Verify router RO port reachable on node
   ansible.builtin.wait_for:
-    host: "127.0.0.1"
+    host: "{{ erawan_node_ip }}"
     port: 6447
     state: started
     timeout: 30
