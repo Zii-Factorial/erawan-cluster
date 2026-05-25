@@ -1,6 +1,6 @@
 - name: Wait for MySQL before enabling auto-rejoin settings
   ansible.builtin.wait_for:
-    host: "{{ hostvars[item].erawan_node_ip }}"
+    host: "{{ hostvars[item].ansible_host }}"
     port: "{{ mysql_port }}"
     state: started
     delay: 5
