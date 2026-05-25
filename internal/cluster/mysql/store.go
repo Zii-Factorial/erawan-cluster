@@ -97,12 +97,36 @@ func (s *Store) List(limit int) ([]Job, error) {
 		return nil, fmt.Errorf("read state directory: %w", err)
 	}
 
-	jobs := make([]Job, 0, len(entries))
+	type candidate struct {
+		path    string
+		modTime time.Time
+	}
+	candidates := make([]candidate, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || strings.HasSuffix(entry.Name(), ".secret.json") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(s.dir, entry.Name()))
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		candidates = append(candidates, candidate{
+			path:    filepath.Join(s.dir, entry.Name()),
+			modTime: info.ModTime(),
+		})
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].modTime.After(candidates[j].modTime)
+	})
+
+	if limit > 0 && len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+
+	jobs := make([]Job, 0, len(candidates))
+	for _, c := range candidates {
+		data, err := os.ReadFile(c.path)
 		if err != nil {
 			continue
 		}
@@ -111,14 +135,6 @@ func (s *Store) List(limit int) ([]Job, error) {
 			continue
 		}
 		jobs = append(jobs, job)
-	}
-
-	sort.Slice(jobs, func(i, j int) bool {
-		return jobs[i].UpdatedAt.After(jobs[j].UpdatedAt)
-	})
-
-	if limit > 0 && len(jobs) > limit {
-		jobs = jobs[:limit]
 	}
 	return jobs, nil
 }

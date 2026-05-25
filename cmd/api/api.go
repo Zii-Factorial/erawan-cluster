@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -67,7 +69,7 @@ func (app *application) mount() *chi.Mux {
 	return r
 }
 
-func (app *application) run(mux *chi.Mux) error {
+func (app *application) run(ctx context.Context, mux *chi.Mux) error {
 	srv := &http.Server{
 		Addr:         app.config.addr,
 		Handler:      mux,
@@ -75,7 +77,18 @@ func (app *application) run(mux *chi.Mux) error {
 		WriteTimeout: 30 * time.Minute,
 		IdleTimeout:  time.Minute,
 	}
-	return srv.ListenAndServe()
+
+	go func() {
+		<-ctx.Done()
+		shutCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutCtx)
+	}()
+
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 func bodyLimit(limit int64) func(http.Handler) http.Handler {

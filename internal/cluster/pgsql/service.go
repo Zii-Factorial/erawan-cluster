@@ -9,6 +9,7 @@ import (
 )
 
 type Service struct {
+	ctx           context.Context
 	store         *Store
 	runner        *Runner
 	steps         []step
@@ -26,6 +27,7 @@ type step struct {
 
 func NewService(store *Store, runner *Runner) *Service {
 	svc := &Service{
+		ctx:    context.Background(),
 		store:  store,
 		runner: runner,
 		steps: []step{
@@ -43,6 +45,10 @@ func NewService(store *Store, runner *Runner) *Service {
 		svc.runDeployStep = runner.RunDeployStep
 	}
 	return svc
+}
+
+func (s *Service) SetContext(ctx context.Context) {
+	s.ctx = ctx
 }
 
 func (s *Service) SetSSHConfig(user, privateKeyPath string) error {
@@ -109,7 +115,7 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 		return nil, err
 	}
 	s.start(func() {
-		_ = s.executeFrom(context.Background(), bgJob, 0, secrets)
+		_ = s.executeFrom(s.ctx, bgJob, 0, secrets)
 	})
 	return job, nil
 }
@@ -187,7 +193,7 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 		return nil, err
 	}
 	s.start(func() {
-		_ = s.executeFrom(context.Background(), bgJob, startIndex, secret)
+		_ = s.executeFrom(s.ctx, bgJob, startIndex, secret)
 	})
 	return job, nil
 }

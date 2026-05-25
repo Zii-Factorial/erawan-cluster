@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"log"
+	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	mysqlcluster "erawan-cluster/internal/cluster/mysql"
@@ -13,6 +17,9 @@ import (
 )
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	addr := env.GetString("API_ADDR", "")
 	if strings.TrimSpace(addr) == "" {
 		host := env.GetString("API_HOST", "0.0.0.0")
@@ -57,6 +64,7 @@ func main() {
 	runner := mysqlcluster.NewRunner(ansibleBin, deployPlaybook, rollbackPlaybook)
 	runner.SetDebug(mysqlAnsibleVerbosity, mysqlAnsibleDebug, mysqlStepOutputMaxChars)
 	mysqlSvc := mysqlcluster.NewService(store, runner)
+	mysqlSvc.SetContext(ctx)
 	if strings.TrimSpace(clusterSSHUser) != "" || strings.TrimSpace(clusterSSHPrivateKeyPath) != "" {
 		if err := mysqlSvc.SetSSHConfig(clusterSSHUser, clusterSSHPrivateKeyPath); err != nil {
 			log.Fatalf("init mysql ssh config: %v", err)
@@ -76,6 +84,7 @@ func main() {
 	pgsqlRunner := pgsqlcluster.NewRunner(ansibleBin, pgsqlDeployPlaybook)
 	pgsqlRunner.SetDebug(pgsqlAnsibleVerbosity, pgsqlAnsibleDebug, pgsqlStepOutputMaxChars)
 	pgsqlSvc := pgsqlcluster.NewService(pgsqlStore, pgsqlRunner)
+	pgsqlSvc.SetContext(ctx)
 	if strings.TrimSpace(clusterSSHUser) != "" || strings.TrimSpace(clusterSSHPrivateKeyPath) != "" {
 		if err := pgsqlSvc.SetSSHConfig(clusterSSHUser, clusterSSHPrivateKeyPath); err != nil {
 			log.Fatalf("init pgsql ssh config: %v", err)
@@ -103,7 +112,9 @@ func main() {
 		log.Printf("pgsql ansible debug enabled: verbosity=%d, step_output_max_chars=%d", pgsqlAnsibleVerbosity, pgsqlStepOutputMaxChars)
 	}
 	log.Printf("erawan cluster api v%s started at %s", appVersion, addr)
-	log.Fatal(app.run(mux))
+	if err := app.run(ctx, mux); err != nil {
+		log.Fatalf("server: %v", err)
+	}
 }
 
 func parseCommand(raw string) []string {
