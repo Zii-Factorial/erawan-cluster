@@ -22,6 +22,15 @@
   run_once: true
   tags: ["create_cluster"]
 
+- name: Wait for MySQL to accept connections on primary IP before cluster creation
+  ansible.builtin.wait_for:
+    host: "{{ erawan_node_ip }}"
+    port: "{{ mysql_port }}"
+    state: started
+    delay: 2
+    timeout: "{{ mysql_start_timeout_seconds | default(300) | int }}"
+  tags: ["create_cluster"]
+
 - name: Ensure cluster exists
   ansible.builtin.shell: |
     set -euo pipefail

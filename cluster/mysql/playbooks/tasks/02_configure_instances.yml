@@ -71,7 +71,7 @@
 
 - name: Wait for MySQL to come back after restart
   ansible.builtin.wait_for:
-    host: "127.0.0.1"
+    host: "{{ erawan_node_ip }}"
     port: "{{ mysql_port }}"
     state: started
     delay: 5
@@ -165,7 +165,7 @@
 
 - name: Wait for MySQL after stale GR reset restart
   ansible.builtin.wait_for:
-    host: "127.0.0.1"
+    host: "{{ erawan_node_ip }}"
     port: "{{ mysql_port }}"
     state: started
     delay: 5
