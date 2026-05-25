@@ -32,7 +32,7 @@ func TestBuildMySQLConfigUsesFailoverFriendlyTCPSettings(t *testing.T) {
 		"# TCP keepalive",
 		"option clitcpka",
 		"option srvtcpka",
-		"option mysql-check user haproxy post-41",
+		"option tcp-check",
 		"timeout connect  500ms",
 		"timeout check    200ms",
 		"timeout queue    5s",
@@ -53,7 +53,7 @@ func TestBuildMySQLConfigUsesFailoverFriendlyTCPSettings(t *testing.T) {
 			t.Fatalf("expected MySQL config to contain %q\nfull config:\n%s", want, cfg)
 		}
 	}
-	for _, bad := range []string{"option httpchk", "option pgsql-check", "check port"} {
+	for _, bad := range []string{"option httpchk", "option pgsql-check", "option mysql-check", "check port"} {
 		if strings.Contains(cfg, bad) {
 			t.Fatalf("MySQL config must not contain %q\nfull config:\n%s", bad, cfg)
 		}
