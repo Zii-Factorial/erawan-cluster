@@ -1,3 +1,9 @@
+- name: Derive node IP (fallback when configure_instances step was skipped)
+  ansible.builtin.set_fact:
+    erawan_node_ip: "{{ ansible_host }}"
+  when: erawan_node_ip is not defined
+  tags: ["verify_cluster", "status_check"]
+
 - name: Verify cluster status
   ansible.builtin.shell: |
     set -euo pipefail
