@@ -61,6 +61,8 @@ API_HOST=127.0.0.1
 API_PORT=8080
 ENV=prod
 API_KEY=CHANGE_TO_STRONG_RANDOM_KEY
+# ENCRYPTION_KEY: 64-char hex (AES-256-GCM payload encryption). Generate: openssl rand -hex 32
+# ENCRYPTION_KEY=
 
 TENANTS_DIR=${TENANTS_DIR}
 HAPROXY_RELOAD_CMD=sudo /bin/systemctl reload haproxy
@@ -71,6 +73,7 @@ CLUSTER_STATE_DIR=${JOBS_DIR}
 ANSIBLE_PLAYBOOK_BIN=/usr/bin/ansible-playbook
 MYSQL_DEPLOY_PLAYBOOK=${APP_ROOT}/cluster/mysql/playbooks/deploy.yml
 MYSQL_ROLLBACK_PLAYBOOK=${APP_ROOT}/cluster/mysql/playbooks/rollback.yml
+PGSQL_DEPLOY_PLAYBOOK=${APP_ROOT}/cluster/pgsql/playbooks/deploy.yml
 CLUSTER_SSH_USER=
 CLUSTER_SSH_PRIVATE_KEY_PATH=
 
@@ -154,7 +157,7 @@ fi
 systemctl restart "${APP_NAME}"
 
 echo "==> Done"
-echo "Edit ${APP_ENV_FILE} and set API_KEY, CLUSTER_SSH_USER, and CLUSTER_SSH_PRIVATE_KEY_PATH before running cluster jobs."
+echo "Edit ${APP_ENV_FILE} and set API_KEY, ENCRYPTION_KEY, CLUSTER_SSH_USER, and CLUSTER_SSH_PRIVATE_KEY_PATH before running cluster jobs."
 echo "Check status:"
 echo "  systemctl status ${APP_NAME} --no-pager"
 echo "  systemctl status haproxy --no-pager"

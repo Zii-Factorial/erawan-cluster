@@ -221,6 +221,8 @@ API_HOST=127.0.0.1
 API_PORT=8080
 ENV=prod
 API_KEY=CHANGE_TO_STRONG_RANDOM_KEY
+# ENCRYPTION_KEY: 64-char hex (AES-256-GCM payload encryption). Generate: openssl rand -hex 32
+# ENCRYPTION_KEY=
 
 TENANTS_DIR=${TENANTS_DIR}
 HAPROXY_RELOAD_CMD=sudo /bin/systemctl reload haproxy
@@ -332,6 +334,7 @@ print_summary() {
   echo ""
   echo "Edit ${APP_ENV_FILE} and set:"
   echo "  API_KEY                      — strong random key"
+  echo "  ENCRYPTION_KEY               — 64-char hex for AES-256-GCM payload encryption (openssl rand -hex 32)"
   echo "  CLUSTER_SSH_USER             — SSH user for cluster nodes"
   echo "  CLUSTER_SSH_PRIVATE_KEY_PATH — path to the SSH private key"
   echo ""
