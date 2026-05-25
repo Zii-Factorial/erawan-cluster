@@ -2,15 +2,23 @@
   "info": {
     "_postman_id": "0f487bb5-3f07-49a9-9b29-e468f795d8d5",
     "name": "Erawan Cluster API (Go)",
-    "description": "Postman collection for HAProxy, MySQL cluster, and PostgreSQL cluster endpoints. PostgreSQL Patroni/etcd deployment supports either single-node primary-only mode or primary-plus-standby mode.",
+    "description": "Postman collection for HAProxy, MySQL cluster, and PostgreSQL cluster endpoints.\n\n**Required variables — fill these in Collection > Variables before sending any request:**\n- `API_KEY` — sent as `X-API-Key` header on every request (collection auth)\n- `ENCRYPTION_KEY` — 64-char hex string (AES-256-GCM). When set the pre-request script encrypts every request body automatically. Generate with: `openssl rand -hex 32`\n\nLeave `ENCRYPTION_KEY` empty to send plain JSON (development only).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "key", "value": "X-API-Key", "type": "string" },
+      { "key": "value", "value": "{{API_KEY}}", "type": "string" },
+      { "key": "in", "value": "header", "type": "string" }
+    ]
+  },
   "variable": [
-    { "key": "API_HOST", "value": "127.0.0.1" },
-    { "key": "API_PORT", "value": "8080" },
-    { "key": "API_KEY", "value": "" },
-    { "key": "JOB_ID", "value": "" },
-    { "key": "SSH_PASSWORD", "value": "password" },
+    { "key": "API_HOST", "value": "127.0.0.1", "description": "API server host" },
+    { "key": "API_PORT", "value": "8080", "description": "API server port" },
+    { "key": "API_KEY", "value": "", "description": "[REQUIRED] API key — sent as X-API-Key header on every request" },
+    { "key": "ENCRYPTION_KEY", "value": "", "description": "[REQUIRED] 64-char hex string (32 bytes, AES-256-GCM). Generate: openssl rand -hex 32. Leave empty for plain JSON (dev only)." },
+    { "key": "JOB_ID", "value": "", "description": "Job ID — copy from a Deploy or List Jobs response" },
     { "key": "PRIMARY_IP", "value": "192.168.122.154" },
     { "key": "SECONDARY_IP", "value": "192.168.122.111" },
     { "key": "CLUSTER_NAME", "value": "prodCluster" },
@@ -23,6 +31,51 @@
     { "key": "PGSQL_STANDBY_IP_2", "value": "10.0.0.3" },
     { "key": "PATRONI_ADMIN_PASSWORD", "value": "adminpassword", "disabled": true }
   ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Payload Encryption — AES-256-GCM",
+          "// Runs automatically for every request that has a raw JSON body.",
+          "// Set ENCRYPTION_KEY (64 hex chars) to enable; leave empty for plain JSON.",
+          "",
+          "const encryptionKey = pm.collectionVariables.get('ENCRYPTION_KEY');",
+          "if (!encryptionKey || encryptionKey.trim() === '') {",
+          "    console.warn('[erawan] ENCRYPTION_KEY is not set — sending plain JSON (dev mode)');",
+          "    return;",
+          "}",
+          "",
+          "const method = pm.request.method.toUpperCase();",
+          "const hasBody = pm.request.body && pm.request.body.raw && pm.request.body.raw.trim() !== '';",
+          "if (!hasBody || method === 'GET' || method === 'HEAD') {",
+          "    return;",
+          "}",
+          "",
+          "const crypto = require('crypto');",
+          "const key = Buffer.from(encryptionKey.trim(), 'hex');",
+          "if (key.length !== 32) {",
+          "    console.error('[erawan] ENCRYPTION_KEY must be 64 hex chars (32 bytes) — request NOT encrypted');",
+          "    return;",
+          "}",
+          "",
+          "const plaintext = Buffer.from(pm.request.body.raw, 'utf8');",
+          "const nonce = crypto.randomBytes(12);",
+          "const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);",
+          "const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);",
+          "const tag = cipher.getAuthTag();",
+          "",
+          "// Format: nonce(12) + ciphertext + tag(16) — matches Go's aead.Seal",
+          "const payload = Buffer.concat([nonce, encrypted, tag]);",
+          "const data = payload.toString('base64').replace(/\\+/g, '-').replace(/\\//g, '_');",
+          "",
+          "pm.request.body.update(JSON.stringify({ data: data }));",
+          "console.log('[erawan] payload encrypted (' + plaintext.length + ' → ' + payload.length + ' bytes)');"
+        ]
+      }
+    }
+  ],
   "item": [
     {
       "name": "Health & Docs",
@@ -31,9 +84,7 @@
           "name": "Health",
           "request": {
             "method": "GET",
-            "header": [
-              { "key": "X-API-Key", "value": "{{API_KEY}}", "disabled": true }
-            ],
+            "header": [],
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/health",
               "protocol": "http",
@@ -47,9 +98,7 @@
           "name": "Docs",
           "request": {
             "method": "GET",
-            "header": [
-              { "key": "X-API-Key", "value": "{{API_KEY}}", "disabled": true }
-            ],
+            "header": [],
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/docs",
               "protocol": "http",
@@ -69,13 +118,14 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-API-Key", "value": "{{API_KEY}}", "disabled": true }
+              { "key": "Content-Type", "value": "application/json" }
             ],
             "body": {
               "mode": "raw",
+              "options": { "raw": { "language": "json" } },
               "raw": "{\n  \"port\": 25010,\n  \"node_ips\": [\"10.10.107.182\", \"10.10.107.183\"],\n  \"db_port\": 6446\n}"
             },
+            "description": "Creates an HAProxy config for the given port. Body is encrypted automatically when ENCRYPTION_KEY is set.",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/config",
               "protocol": "http",
@@ -90,11 +140,11 @@
           "request": {
             "method": "DELETE",
             "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-API-Key", "value": "{{API_KEY}}", "disabled": true }
+              { "key": "Content-Type", "value": "application/json" }
             ],
             "body": {
               "mode": "raw",
+              "options": { "raw": { "language": "json" } },
               "raw": "{\n  \"port\": 25010\n}"
             },
             "url": {
@@ -110,9 +160,7 @@
           "name": "List Configs",
           "request": {
             "method": "GET",
-            "header": [
-              { "key": "X-API-Key", "value": "{{API_KEY}}", "disabled": true }
-            ],
+            "header": [],
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/configs",
               "protocol": "http",
@@ -126,9 +174,7 @@
           "name": "Reload",
           "request": {
             "method": "POST",
-            "header": [
-              { "key": "X-API-Key", "value": "{{API_KEY}}", "disabled": true }
-            ],
+            "header": [],
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/reload",
               "protocol": "http",
@@ -148,11 +194,11 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-API-Key", "value": "{{API_KEY}}", "disabled": true }
+              { "key": "Content-Type", "value": "application/json" }
             ],
             "body": {
               "mode": "raw",
+              "options": { "raw": { "language": "json" } },
               "raw": "{\n  \"cluster_name\": \"{{CLUSTER_NAME}}\",\n  \"primary_ip\": \"{{PRIMARY_IP}}\",\n  \"standby_ips\": [\"{{SECONDARY_IP}}\"],\n  \"new_user\": \"{{NEW_USER}}\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\",\n  \"new_user_ssl_required\": {{NEW_USER_SSL_REQUIRED}},\n  \"new_db\": \"{{NEW_DB}}\",\n  \"assume_prepared\": false,\n  \"bootstrap_router\": true,\n  \"ssh_port\": 22,\n  \"mysql_port\": 3306,\n  \"step_timeout_seconds\": 900\n}"
             },
             "url": {
@@ -168,9 +214,7 @@
           "name": "List Jobs",
           "request": {
             "method": "GET",
-            "header": [
-              { "key": "X-API-Key", "value": "{{API_KEY}}", "disabled": true }
-            ],
+            "header": [],
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/jobs?limit=20",
               "protocol": "http",
@@ -187,9 +231,7 @@
           "name": "Get Job",
           "request": {
             "method": "GET",
-            "header": [
-              { "key": "X-API-Key", "value": "{{API_KEY}}", "disabled": true }
-            ],
+            "header": [],
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/jobs/{{JOB_ID}}",
               "protocol": "http",
@@ -204,11 +246,11 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-API-Key", "value": "{{API_KEY}}", "disabled": true }
+              { "key": "Content-Type", "value": "application/json" }
             ],
             "body": {
               "mode": "raw",
+              "options": { "raw": { "language": "json" } },
               "raw": "{\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\"\n}"
             },
             "url": {
@@ -225,11 +267,11 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-API-Key", "value": "{{API_KEY}}", "disabled": true }
+              { "key": "Content-Type", "value": "application/json" }
             ],
             "body": {
               "mode": "raw",
+              "options": { "raw": { "language": "json" } },
               "raw": "{}"
             },
             "url": {
@@ -252,11 +294,11 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-API-Key", "value": "{{API_KEY}}", "disabled": true }
+              { "key": "Content-Type", "value": "application/json" }
             ],
             "body": {
               "mode": "raw",
+              "options": { "raw": { "language": "json" } },
               "raw": "{\n  \"cluster_name\": \"{{CLUSTER_NAME}}\",\n  \"primary_ip\": \"{{PGSQL_PRIMARY_IP}}\",\n  \"standby_ips\": [],\n  \"new_user\": \"{{NEW_USER}}\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\",\n  \"new_user_ssl_required\": true,\n  \"new_db\": \"{{NEW_DB}}\",\n  \"ssh_port\": 22,\n  \"postgres_port\": 5432,\n  \"step_timeout_seconds\": 900\n}"
             },
             "description": "Use `standby_ips: []` for primary-only mode, or provide one or more standby IPs for HA mode.",
@@ -273,9 +315,7 @@
           "name": "List Jobs",
           "request": {
             "method": "GET",
-            "header": [
-              { "key": "X-API-Key", "value": "{{API_KEY}}", "disabled": true }
-            ],
+            "header": [],
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/jobs?limit=20",
               "protocol": "http",
@@ -292,9 +332,7 @@
           "name": "Get Job",
           "request": {
             "method": "GET",
-            "header": [
-              { "key": "X-API-Key", "value": "{{API_KEY}}", "disabled": true }
-            ],
+            "header": [],
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/jobs/{{JOB_ID}}",
               "protocol": "http",
@@ -309,11 +347,11 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "X-API-Key", "value": "{{API_KEY}}", "disabled": true }
+              { "key": "Content-Type", "value": "application/json" }
             ],
             "body": {
               "mode": "raw",
+              "options": { "raw": { "language": "json" } },
               "raw": "{\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\"\n}"
             },
             "url": {

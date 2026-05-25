@@ -14,6 +14,7 @@ import (
 	pgsqlcluster "erawan-cluster/internal/cluster/pgsql"
 	"erawan-cluster/internal/env"
 	"erawan-cluster/internal/haproxy"
+	"erawan-cluster/internal/security"
 )
 
 func main() {
@@ -91,6 +92,16 @@ func main() {
 		}
 	}
 
+	var cipher *security.Cipher
+	if encKey := env.GetString("ENCRYPTION_KEY", ""); encKey != "" {
+		var err error
+		cipher, err = security.NewCipher(encKey)
+		if err != nil {
+			log.Fatalf("init encryption cipher: %v", err)
+		}
+		log.Printf("payload encryption enabled (AES-256-GCM)")
+	}
+
 	app := &application{
 		config: config{
 			addr:    addr,
@@ -101,6 +112,7 @@ func main() {
 		haproxy:      haproxySvc,
 		mysqlCluster: mysqlSvc,
 		pgsqlCluster: pgsqlSvc,
+		cipher:       cipher,
 		baseDir:      baseDir,
 	}
 

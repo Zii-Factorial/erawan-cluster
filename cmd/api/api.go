@@ -21,6 +21,7 @@ type application struct {
 	haproxy      *haproxy.Service
 	mysqlCluster *mysqlcluster.Service
 	pgsqlCluster *pgsqlcluster.Service
+	cipher       *security.Cipher
 	baseDir      string
 }
 
@@ -39,6 +40,7 @@ func (app *application) mount() *chi.Mux {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Minute))
 	r.Use(security.APIKeyMiddleware(app.config.apiKey))
+	r.Use(security.DecryptMiddleware(app.cipher))
 	r.Use(bodyLimit(1 << 20))
 
 	r.Get("/health", app.healthCheckHandler)
