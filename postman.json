@@ -114,7 +114,7 @@
       "name": "HAProxy",
       "item": [
         {
-          "name": "Create Config",
+          "name": "Create MySQL Config",
           "request": {
             "method": "POST",
             "header": [
@@ -125,13 +125,35 @@
               "options": { "raw": { "language": "json" } },
               "raw": "{\n  \"port\": 25010,\n  \"node_ips\": [\"10.10.107.182\", \"10.10.107.183\"],\n  \"db_port\": 6446\n}"
             },
-            "description": "Creates an HAProxy config for the given port. Body is encrypted automatically when ENCRYPTION_KEY is set.",
+            "description": "Creates an HAProxy frontend for a MySQL Router cluster. Uses option mysql-check user haproxy post-41 (required for MySQL 8.0+). db_port is typically 6446 (R/W) or 6447 (R/O).",
             "url": {
-              "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/config",
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/config/mysql",
               "protocol": "http",
               "host": ["{{API_HOST}}"],
               "port": "{{API_PORT}}",
-              "path": ["haproxy", "config"]
+              "path": ["haproxy", "config", "mysql"]
+            }
+          }
+        },
+        {
+          "name": "Create PostgreSQL Config",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": { "raw": { "language": "json" } },
+              "raw": "{\n  \"port\": 25432,\n  \"node_ips\": [\"10.0.0.1\", \"10.0.0.2\"],\n  \"db_port\": 5432,\n  \"patroni_port\": 8008\n}"
+            },
+            "description": "Creates an HAProxy frontend for a PostgreSQL/Patroni cluster. Uses httpchk GET /leader on the Patroni REST port so only the current leader receives traffic. patroni_port defaults to 8008 when omitted.",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/config/pgsql",
+              "protocol": "http",
+              "host": ["{{API_HOST}}"],
+              "port": "{{API_PORT}}",
+              "path": ["haproxy", "config", "pgsql"]
             }
           }
         },

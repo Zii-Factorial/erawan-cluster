@@ -22,8 +22,8 @@ func TestNormalizeNodeIPsRejectsInvalidHostname(t *testing.T) {
 	}
 }
 
-func TestBuildConfigContentMySQLUsesFailoverFriendlyTCPSettings(t *testing.T) {
-	cfg := buildConfigContent(25010, []string{"10.10.255.102", "10.10.146.139"}, 6446, 0)
+func TestBuildMySQLConfigUsesFailoverFriendlyTCPSettings(t *testing.T) {
+	cfg := buildMySQLConfig(25010, []string{"10.10.255.102", "10.10.146.139"}, 6446)
 
 	required := []string{
 		"listen node_25010",
@@ -32,7 +32,7 @@ func TestBuildConfigContentMySQLUsesFailoverFriendlyTCPSettings(t *testing.T) {
 		"# TCP keepalive",
 		"option clitcpka",
 		"option srvtcpka",
-		"option mysql-check",
+		"option mysql-check user haproxy post-41",
 		"timeout connect  500ms",
 		"timeout check    200ms",
 		"timeout queue    5s",
@@ -48,16 +48,20 @@ func TestBuildConfigContentMySQLUsesFailoverFriendlyTCPSettings(t *testing.T) {
 		"server db1 10.10.255.102:6446 check",
 		"server db2 10.10.146.139:6446 check backup",
 	}
-
 	for _, want := range required {
 		if !strings.Contains(cfg, want) {
-			t.Fatalf("expected config to contain %q\nfull config:\n%s", want, cfg)
+			t.Fatalf("expected MySQL config to contain %q\nfull config:\n%s", want, cfg)
+		}
+	}
+	for _, bad := range []string{"option httpchk", "option pgsql-check", "check port"} {
+		if strings.Contains(cfg, bad) {
+			t.Fatalf("MySQL config must not contain %q\nfull config:\n%s", bad, cfg)
 		}
 	}
 }
 
-func TestBuildConfigContentPGSQLWithPatroniUsesHTTPChk(t *testing.T) {
-	cfg := buildConfigContent(25432, []string{"10.0.0.1", "10.0.0.2"}, 5432, 8008)
+func TestBuildPGSQLConfigUsesPatroniHTTPChk(t *testing.T) {
+	cfg := buildPGSQLConfig(25432, []string{"10.0.0.1", "10.0.0.2"}, 5432, 8008)
 
 	required := []string{
 		"listen node_25432",
@@ -72,29 +76,22 @@ func TestBuildConfigContentPGSQLWithPatroniUsesHTTPChk(t *testing.T) {
 		"server db1 10.0.0.1:5432 check",
 		"server db2 10.0.0.2:5432 check backup",
 	}
-	absent := []string{"option pgsql-check", "option mysql-check"}
-
 	for _, want := range required {
 		if !strings.Contains(cfg, want) {
-			t.Fatalf("expected config to contain %q\nfull config:\n%s", want, cfg)
+			t.Fatalf("expected PostgreSQL config to contain %q\nfull config:\n%s", want, cfg)
 		}
 	}
-	for _, bad := range absent {
+	for _, bad := range []string{"option pgsql-check", "option mysql-check"} {
 		if strings.Contains(cfg, bad) {
-			t.Fatalf("expected config NOT to contain %q\nfull config:\n%s", bad, cfg)
+			t.Fatalf("PostgreSQL config must not contain %q\nfull config:\n%s", bad, cfg)
 		}
 	}
 }
 
-func TestBuildConfigContentPGSQLDefaultPatroniPort(t *testing.T) {
-	// patroniPort=0 passed to buildConfigContent directly still falls back to pgsql-check;
-	// the defaulting to 8008 happens in CreateConfig before this function is called.
-	cfg := buildConfigContent(25432, []string{"10.0.0.1"}, 5432, 0)
+func TestBuildPGSQLConfigCustomPatroniPort(t *testing.T) {
+	cfg := buildPGSQLConfig(25432, []string{"10.0.0.1"}, 5432, 8009)
 
-	if !strings.Contains(cfg, "option pgsql-check") {
-		t.Fatalf("expected option pgsql-check when patroniPort=0\nfull config:\n%s", cfg)
-	}
-	if strings.Contains(cfg, "option httpchk") {
-		t.Fatalf("expected no option httpchk when patroniPort=0\nfull config:\n%s", cfg)
+	if !strings.Contains(cfg, "check port 8009") {
+		t.Fatalf("expected custom patroni port in config\nfull config:\n%s", cfg)
 	}
 }

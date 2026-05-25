@@ -3,7 +3,6 @@
   hosts: all
   gather_facts: false
   become: true
-  serial: 1
   tasks:
     - name: Include preflight tasks
       ansible.builtin.import_tasks: tasks/01_preflight.yml
@@ -12,7 +11,6 @@
   hosts: all
   gather_facts: false
   become: true
-  serial: 1
   tasks:
     - name: Include base configuration tasks
       ansible.builtin.import_tasks: tasks/02_base_config.yml
@@ -29,7 +27,6 @@
   hosts: pgsql_standby
   gather_facts: false
   become: true
-  serial: 1
   tasks:
     - name: Include standby configuration tasks
       ansible.builtin.import_tasks: tasks/04_standby.yml

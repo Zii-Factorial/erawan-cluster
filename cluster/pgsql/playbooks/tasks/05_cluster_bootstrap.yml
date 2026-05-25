@@ -93,7 +93,6 @@
   delay: 3
   changed_when: false
   when: inventory_hostname in groups['pgsql_standby']
-  throttle: 1
   tags: ["cluster_bootstrap"]
 
 - name: Wait for PostgreSQL to listen on standbys
@@ -103,5 +102,4 @@
     state: started
     timeout: 180
   when: inventory_hostname in groups['pgsql_standby']
-  throttle: 1
   tags: ["cluster_bootstrap"]

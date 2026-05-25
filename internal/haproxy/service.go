@@ -43,11 +43,19 @@ func NewService(tenantsDir string, reloadCmd []string, reloadTimeout time.Durati
 
 const defaultPatroniPort = 8008
 
-type CreateConfigInput struct {
+// CreateMySQLConfigInput is the input for creating an HAProxy config for a MySQL Router cluster.
+type CreateMySQLConfigInput struct {
+	Port    int      `json:"port"`
+	NodeIPs []string `json:"node_ips"`
+	DBPort  int      `json:"db_port"`
+}
+
+// CreatePGSQLConfigInput is the input for creating an HAProxy config for a PostgreSQL/Patroni cluster.
+type CreatePGSQLConfigInput struct {
 	Port        int      `json:"port"`
 	NodeIPs     []string `json:"node_ips"`
 	DBPort      int      `json:"db_port"`
-	PatroniPort int      `json:"patroni_port"` // defaults to 8008 for PostgreSQL when omitted
+	PatroniPort int      `json:"patroni_port"` // Patroni REST API port; defaults to 8008 when omitted
 }
 
 type DeleteConfigInput struct {
@@ -117,7 +125,7 @@ func isValidBackendHost(host string) bool {
 	return true
 }
 
-func (s *Service) CreateConfig(ctx context.Context, in CreateConfigInput) error {
+func (s *Service) CreateMySQLConfig(ctx context.Context, in CreateMySQLConfigInput) error {
 	if err := ValidatePort(in.Port, "port"); err != nil {
 		return err
 	}
@@ -128,14 +136,29 @@ func (s *Service) CreateConfig(ctx context.Context, in CreateConfigInput) error 
 	if err != nil {
 		return err
 	}
+	return s.applyConfig(ctx, in.Port, buildMySQLConfig(in.Port, nodes, in.DBPort))
+}
 
+func (s *Service) CreatePGSQLConfig(ctx context.Context, in CreatePGSQLConfigInput) error {
+	if err := ValidatePort(in.Port, "port"); err != nil {
+		return err
+	}
+	if err := ValidatePort(in.DBPort, "db_port"); err != nil {
+		return err
+	}
+	nodes, err := NormalizeNodeIPs(in.NodeIPs)
+	if err != nil {
+		return err
+	}
 	patroniPort := in.PatroniPort
-	if patroniPort == 0 && isPostgresPort(in.DBPort) {
+	if patroniPort == 0 {
 		patroniPort = defaultPatroniPort
 	}
+	return s.applyConfig(ctx, in.Port, buildPGSQLConfig(in.Port, nodes, in.DBPort, patroniPort))
+}
 
-	filename := s.filename(in.Port)
-	content := buildConfigContent(in.Port, nodes, in.DBPort, patroniPort)
+func (s *Service) applyConfig(ctx context.Context, port int, content string) error {
+	filename := s.filename(port)
 	backup := ""
 
 	if _, err := os.Stat(filename); err == nil {
@@ -157,7 +180,7 @@ func (s *Service) CreateConfig(ctx context.Context, in CreateConfigInput) error 
 		}
 		return fmt.Errorf("haproxy reload failed, rolled back: %w", err)
 	}
-	if err := s.verifyRuntimeAfterCreate(in.Port); err != nil {
+	if err := s.verifyRuntimeAfterCreate(port); err != nil {
 		if backup != "" {
 			_ = os.Rename(backup, filename)
 		} else {
@@ -357,7 +380,7 @@ func waitForPortState(port int, shouldListen bool, timeout time.Duration) error 
 	}
 }
 
-func buildConfigContent(port int, nodeIPs []string, dbPort int, patroniPort int) string {
+func buildMySQLConfig(port int, nodeIPs []string, dbPort int) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("listen node_%d\n", port))
 	b.WriteString(fmt.Sprintf("    bind *:%d\n", port))
@@ -370,21 +393,9 @@ func buildConfigContent(port int, nodeIPs []string, dbPort int, patroniPort int)
 	b.WriteString("    option clitcpka\n")
 	b.WriteString("    option srvtcpka\n")
 	b.WriteString("\n")
-	usePatroni := isPostgresPort(dbPort) && patroniPort > 0
-	if usePatroni {
-		b.WriteString("    # Patroni REST API health check: only route to the leader (primary).\n")
-		b.WriteString("    # GET /leader → 200 means this node is the current Patroni primary.\n")
-		b.WriteString("    option httpchk GET /leader\n")
-		b.WriteString("    http-check expect status 200\n")
-	} else if isPostgresPort(dbPort) {
-		b.WriteString("    # PostgreSQL-level health check: verifies the backend is a live Postgres node.\n")
-		b.WriteString("    option pgsql-check\n")
-	} else {
-		b.WriteString("    # MySQL-level health check: verifies MySQL Router can reach a live backend,\n")
-		b.WriteString("    # not just that TCP is open. Catches the window where the Router accepts\n")
-		b.WriteString("    # TCP connections but has no primary to route writes to.\n")
-		b.WriteString("    option mysql-check\n")
-	}
+	b.WriteString("    # MySQL-level health check (post-4.1 protocol, required for MySQL 8.0+).\n")
+	b.WriteString("    # HAProxy marks the backend UP on any auth response — the user need not exist.\n")
+	b.WriteString("    option mysql-check user haproxy post-41\n")
 	b.WriteString("\n")
 	b.WriteString("    # Proper timeouts\n")
 	b.WriteString("    timeout connect  500ms\n")
@@ -406,13 +417,9 @@ func buildConfigContent(port int, nodeIPs []string, dbPort int, patroniPort int)
 	b.WriteString("    # fastinter   = check every 100ms when just failed (detect recovery fast)\n")
 	b.WriteString("    # downinter   = check every 200ms when DOWN\n")
 	b.WriteString("    # on-marked-down shutdown-sessions = kill connections immediately when server goes down\n")
-	defaultServer := "    default-server inter 500ms fastinter 100ms downinter 200ms fall 2 rise 2 on-marked-down shutdown-sessions on-marked-up shutdown-backup-sessions"
-	if usePatroni {
-		defaultServer += fmt.Sprintf(" check port %d", patroniPort)
-	}
-	b.WriteString(defaultServer + "\n")
+	b.WriteString("    default-server inter 500ms fastinter 100ms downinter 200ms fall 2 rise 2 on-marked-down shutdown-sessions on-marked-up shutdown-backup-sessions\n")
 	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("    # Backend port %d (%s)\n", dbPort, backendPortDesc(dbPort)))
+	b.WriteString(fmt.Sprintf("    # Backend port %d (%s)\n", dbPort, mysqlPortDesc(dbPort)))
 	b.WriteString("    # Use first server as primary, others as backup\n")
 	for i, ip := range nodeIPs {
 		b.WriteString(fmt.Sprintf("    server db%d %s:%d check", i+1, ip, dbPort))
@@ -424,14 +431,60 @@ func buildConfigContent(port int, nodeIPs []string, dbPort int, patroniPort int)
 	return b.String()
 }
 
-func isPostgresPort(port int) bool {
-	return port == 5432
+func buildPGSQLConfig(port int, nodeIPs []string, dbPort int, patroniPort int) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("listen node_%d\n", port))
+	b.WriteString(fmt.Sprintf("    bind *:%d\n", port))
+	b.WriteString("    mode tcp\n")
+	b.WriteString("\n")
+	b.WriteString("    # Always use first available healthy server = deterministic primary routing\n")
+	b.WriteString("    balance first\n")
+	b.WriteString("\n")
+	b.WriteString("    # TCP keepalive — keeps idle connections alive through NAT/firewalls\n")
+	b.WriteString("    option clitcpka\n")
+	b.WriteString("    option srvtcpka\n")
+	b.WriteString("\n")
+	b.WriteString("    # Patroni REST API health check: only route to the leader (primary).\n")
+	b.WriteString("    # GET /leader → 200 means this node is the current Patroni primary.\n")
+	b.WriteString("    option httpchk GET /leader\n")
+	b.WriteString("    http-check expect status 200\n")
+	b.WriteString("\n")
+	b.WriteString("    # Proper timeouts\n")
+	b.WriteString("    timeout connect  500ms\n")
+	b.WriteString("    timeout check    200ms\n")
+	b.WriteString("    timeout queue    5s\n")
+	b.WriteString("    timeout client   10m\n")
+	b.WriteString("    timeout server   10m\n")
+	b.WriteString("    timeout client-fin  2s\n")
+	b.WriteString("    timeout server-fin  2s\n")
+	b.WriteString("\n")
+	b.WriteString("    # Redispatch to backup on the first retry — don't waste retries on a dead router\n")
+	b.WriteString("    option redispatch 1\n")
+	b.WriteString("    retries 2\n")
+	b.WriteString("\n")
+	b.WriteString("    # Health check tuning\n")
+	b.WriteString("    # fall 2      = mark DOWN after 2 consecutive failures — detects dead primary in ~1s\n")
+	b.WriteString("    # rise 2      = mark UP after 2 consecutive successes (avoid premature recovery)\n")
+	b.WriteString("    # inter       = check every 500ms when healthy\n")
+	b.WriteString("    # fastinter   = check every 100ms when just failed (detect recovery fast)\n")
+	b.WriteString("    # downinter   = check every 200ms when DOWN\n")
+	b.WriteString("    # on-marked-down shutdown-sessions = kill connections immediately when server goes down\n")
+	b.WriteString(fmt.Sprintf("    default-server inter 500ms fastinter 100ms downinter 200ms fall 2 rise 2 on-marked-down shutdown-sessions on-marked-up shutdown-backup-sessions check port %d\n", patroniPort))
+	b.WriteString("\n")
+	b.WriteString(fmt.Sprintf("    # Backend port %d (PostgreSQL)\n", dbPort))
+	b.WriteString("    # Use first server as primary, others as backup\n")
+	for i, ip := range nodeIPs {
+		b.WriteString(fmt.Sprintf("    server db%d %s:%d check", i+1, ip, dbPort))
+		if i > 0 {
+			b.WriteString(" backup")
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
-func backendPortDesc(port int) string {
+func mysqlPortDesc(port int) string {
 	switch port {
-	case 5432:
-		return "PostgreSQL"
 	case 6446:
 		return "MySQL Router R/W"
 	case 6447:

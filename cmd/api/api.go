@@ -47,7 +47,8 @@ func (app *application) mount() *chi.Mux {
 	r.Get("/docs", app.docsHandler)
 
 	r.Route("/haproxy", func(r chi.Router) {
-		r.Post("/config", app.createHAProxyConfigHandler)
+		r.Post("/config/mysql", app.createMySQLHAProxyConfigHandler)
+		r.Post("/config/pgsql", app.createPGSQLHAProxyConfigHandler)
 		r.Delete("/config", app.deleteHAProxyConfigHandler)
 		r.Get("/configs", app.listHAProxyConfigsHandler)
 		r.Post("/reload", app.reloadHAProxyHandler)

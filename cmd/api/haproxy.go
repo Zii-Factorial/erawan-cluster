@@ -24,7 +24,14 @@ func (s *stringList) UnmarshalJSON(data []byte) error {
 	return fmt.Errorf("node_ips must be a string or array of strings")
 }
 
-type createHAProxyRequest struct {
+type createMySQLHAProxyRequest struct {
+	Port    int        `json:"port"`
+	NodeIPs stringList `json:"node_ips"`
+	NodeIP  string     `json:"node_ip"`
+	DBPort  int        `json:"db_port"`
+}
+
+type createPGSQLHAProxyRequest struct {
 	Port        int        `json:"port"`
 	NodeIPs     stringList `json:"node_ips"`
 	NodeIP      string     `json:"node_ip"`
@@ -36,36 +43,66 @@ type deleteHAProxyRequest struct {
 	Port int `json:"port"`
 }
 
-func (app *application) createHAProxyConfigHandler(w http.ResponseWriter, r *http.Request) {
-	var req createHAProxyRequest
+func (app *application) createMySQLHAProxyConfigHandler(w http.ResponseWriter, r *http.Request) {
+	var req createMySQLHAProxyRequest
 	if err := decodeJSON(r, &req); err != nil {
 		errJSON(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
 
-	nodes := make([]string, 0)
-	if len(req.NodeIPs) > 0 {
-		nodes = append(nodes, req.NodeIPs...)
-	} else if req.NodeIP != "" {
-		nodes = append(nodes, req.NodeIP)
-	}
+	nodes := resolveNodeIPs(req.NodeIPs, req.NodeIP)
 
-	err := app.haproxy.CreateConfig(r.Context(), haproxy.CreateConfigInput{
-		Port:        req.Port,
-		NodeIPs:     nodes,
-		DBPort:      req.DBPort,
-		PatroniPort: req.PatroniPort,
-	})
-	if err != nil {
+	if err := app.haproxy.CreateMySQLConfig(r.Context(), haproxy.CreateMySQLConfigInput{
+		Port:    req.Port,
+		NodeIPs: nodes,
+		DBPort:  req.DBPort,
+	}); err != nil {
 		errJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	ok(w, "HAProxy config created and reloaded", map[string]any{
+	ok(w, "HAProxy MySQL config created and reloaded", map[string]any{
 		"port":     req.Port,
 		"node_ips": nodes,
 		"db_port":  req.DBPort,
 	})
+}
+
+func (app *application) createPGSQLHAProxyConfigHandler(w http.ResponseWriter, r *http.Request) {
+	var req createPGSQLHAProxyRequest
+	if err := decodeJSON(r, &req); err != nil {
+		errJSON(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	nodes := resolveNodeIPs(req.NodeIPs, req.NodeIP)
+
+	if err := app.haproxy.CreatePGSQLConfig(r.Context(), haproxy.CreatePGSQLConfigInput{
+		Port:        req.Port,
+		NodeIPs:     nodes,
+		DBPort:      req.DBPort,
+		PatroniPort: req.PatroniPort,
+	}); err != nil {
+		errJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	ok(w, "HAProxy PostgreSQL config created and reloaded", map[string]any{
+		"port":         req.Port,
+		"node_ips":     nodes,
+		"db_port":      req.DBPort,
+		"patroni_port": req.PatroniPort,
+	})
+}
+
+func resolveNodeIPs(list stringList, single string) []string {
+	if len(list) > 0 {
+		return []string(list)
+	}
+	if single != "" {
+		return []string{single}
+	}
+	return []string{}
 }
 
 func (app *application) deleteHAProxyConfigHandler(w http.ResponseWriter, r *http.Request) {

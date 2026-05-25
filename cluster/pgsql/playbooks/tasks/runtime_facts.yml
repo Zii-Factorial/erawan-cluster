@@ -7,10 +7,12 @@
   register: pgsql_version
   changed_when: false
   failed_when: pgsql_version.rc != 0 or (pgsql_version.stdout | trim) == ""
+  when: erawan_pg_major_version is not defined
 
 - name: Store detected PostgreSQL major version
   ansible.builtin.set_fact:
     erawan_pg_major_version: "{{ pgsql_version.stdout | trim }}"
+  when: erawan_pg_major_version is not defined
 
 - name: Ensure Patroni binary is installed
   ansible.builtin.shell: command -v patroni
@@ -19,10 +21,12 @@
   register: patroni_bin
   changed_when: false
   failed_when: patroni_bin.rc != 0 or (patroni_bin.stdout | trim) == ""
+  when: erawan_patroni_bin_path is not defined
 
 - name: Store detected Patroni binary path
   ansible.builtin.set_fact:
     erawan_patroni_bin_path: "{{ patroni_bin.stdout | trim }}"
+  when: erawan_patroni_bin_path is not defined
 
 - name: Ensure etcd binary is installed
   ansible.builtin.shell: command -v etcd
@@ -31,21 +35,25 @@
   register: etcd_bin
   changed_when: false
   failed_when: etcd_bin.rc != 0 or (etcd_bin.stdout | trim) == ""
+  when: erawan_etcd_bin_path is not defined
 
 - name: Store detected etcd binary path
   ansible.builtin.set_fact:
     erawan_etcd_bin_path: "{{ etcd_bin.stdout | trim }}"
+  when: erawan_etcd_bin_path is not defined
 
 - name: Ensure PostgreSQL server binary exists
   ansible.builtin.stat:
     path: "/usr/lib/postgresql/{{ erawan_pg_major_version }}/bin/postgres"
   register: pgsql_server_bin
   failed_when: not pgsql_server_bin.stat.exists
+  when: erawan_pg_bindir is not defined
 
 - name: Derive per-node PostgreSQL cluster facts
   ansible.builtin.set_fact:
     erawan_pg_node_id: "{{ (groups['all'] | list).index(inventory_hostname) + 1 }}"
     erawan_pg_node_name: "{{ 'node' ~ ((groups['all'] | list).index(inventory_hostname) + 1) }}"
+  when: erawan_pg_node_name is not defined
 
 - name: Derive PostgreSQL service and marker paths
   ansible.builtin.set_fact:
@@ -54,3 +62,4 @@
     erawan_pg_bindir: "{{ '/usr/lib/postgresql/' ~ erawan_pg_major_version ~ '/bin' }}"
     erawan_pg_reset_marker: "{{ '/var/lib/postgresql/.erawan-pgsql-reset-' ~ deployment_job_id ~ '-' ~ erawan_pg_node_name }}"
     erawan_etcd_reset_marker: "{{ '/var/lib/etcd/.erawan-etcd-reset-' ~ deployment_job_id ~ '-' ~ erawan_pg_node_name }}"
+  when: erawan_pg_service_name is not defined
