@@ -6,7 +6,6 @@
   hosts: all
   gather_facts: false
   become: true
-  serial: 1
   tasks:
     - name: Include preflight tasks
       ansible.builtin.import_tasks: tasks/01_preflight.yml
@@ -18,7 +17,6 @@
   hosts: all
   gather_facts: false
   become: true
-  serial: 1
   tasks:
     - name: Include configure-instance tasks
       ansible.builtin.import_tasks: tasks/02_configure_instances.yml

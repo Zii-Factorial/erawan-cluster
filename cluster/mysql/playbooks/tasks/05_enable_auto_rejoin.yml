@@ -1,77 +1,21 @@
-- name: Wait for MySQL before enabling auto-rejoin settings
-  ansible.builtin.wait_for:
-    host: "{{ hostvars[item].ansible_host }}"
-    port: "{{ mysql_port }}"
-    state: started
-    delay: 5
-    timeout: "{{ mysql_start_timeout_seconds | default(300) | int }}"
-  delegate_to: "{{ item }}"
-  loop: "{{ groups['all'] }}"
-  tags: ["enable_auto_rejoin"]
-
 - name: Enable Group Replication auto-start and rejoin
   ansible.builtin.shell: |
     set -euo pipefail
-    _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
-    trap 'rm -f "$_tmp"' EXIT
-    cat >"$_tmp" <<'PY'
-    import os
-    import time
-
-    shell.options["useWizards"] = False
-    autorejoin_tries = {{ mysql_gr_autorejoin_tries | default(3) | int }}
-    unreachable_majority_timeout = {{ mysql_gr_unreachable_majority_timeout | default(30) | int }}
-    exit_state_action = {{ mysql_gr_exit_state_action | default('READ_ONLY') | to_json }}
-    retry_deadline = time.time() + {{ mysql_gr_option_retry_seconds | default(90) | int }}
-
-    def connect_local_root():
-      last_error = None
-      for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
-        if not os.path.exists(sock):
-          continue
-        try:
-          shell.connect({"user": "root", "scheme": "mysql", "host": "localhost", "socket": sock})
-          return shell.get_session()
-        except Exception as exc:
-          last_error = exc
-      if last_error is not None:
-        raise last_error
-      raise RuntimeError("unable to find a usable MySQL local socket for root")
-
-    session = connect_local_root()
-
-    def run_sql_retry(stmt):
-      last_error = None
-      while time.time() < retry_deadline:
-        try:
-          session.run_sql(stmt)
-          return
-        except Exception as exc:
-          msg = str(exc).lower()
-          last_error = exc
-          if "start or stop group_replication is ongoing" in msg:
-            time.sleep(3)
-            continue
-          raise
-      if last_error is not None:
-        raise last_error
-
-    for stmt in [
-      "SET GLOBAL group_replication_start_on_boot = ON",
-      "SET PERSIST group_replication_start_on_boot = ON",
-      f"SET GLOBAL group_replication_autorejoin_tries = {autorejoin_tries}",
-      f"SET PERSIST group_replication_autorejoin_tries = {autorejoin_tries}",
-      f"SET GLOBAL group_replication_unreachable_majority_timeout = {unreachable_majority_timeout}",
-      f"SET PERSIST group_replication_unreachable_majority_timeout = {unreachable_majority_timeout}",
-      f"SET GLOBAL group_replication_exit_state_action = '{exit_state_action}'",
-      f"SET PERSIST group_replication_exit_state_action = '{exit_state_action}'",
-    ]:
-      run_sql_retry(stmt)
-
-    print("group replication auto-rejoin settings enabled")
-    PY
-    timeout {{ mysqlsh_enable_auto_rejoin_timeout_seconds | default(180) | int }} \
-      mysqlsh --no-wizard --py --file "$_tmp"
+    sock=""
+    for s in /var/run/mysqld/mysqld.sock /run/mysqld/mysqld.sock /var/lib/mysql/mysql.sock; do
+      if [ -S "$s" ]; then sock="$s"; break; fi
+    done
+    [ -n "$sock" ] || { echo "no MySQL socket found" >&2; exit 1; }
+    mysql -uroot --socket="$sock" <<'SQL'
+    SET GLOBAL  group_replication_start_on_boot                = ON;
+    SET PERSIST group_replication_start_on_boot                = ON;
+    SET GLOBAL  group_replication_autorejoin_tries             = {{ mysql_gr_autorejoin_tries | default(3) | int }};
+    SET PERSIST group_replication_autorejoin_tries             = {{ mysql_gr_autorejoin_tries | default(3) | int }};
+    SET GLOBAL  group_replication_unreachable_majority_timeout = {{ mysql_gr_unreachable_majority_timeout | default(30) | int }};
+    SET PERSIST group_replication_unreachable_majority_timeout = {{ mysql_gr_unreachable_majority_timeout | default(30) | int }};
+    SET GLOBAL  group_replication_exit_state_action            = '{{ mysql_gr_exit_state_action | default('READ_ONLY') }}';
+    SET PERSIST group_replication_exit_state_action            = '{{ mysql_gr_exit_state_action | default('READ_ONLY') }}';
+    SQL
   args:
     executable: /bin/bash
   delegate_to: "{{ item }}"

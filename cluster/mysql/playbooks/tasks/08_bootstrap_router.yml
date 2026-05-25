@@ -1,41 +1,3 @@
-- name: Gather network facts for MySQL router bootstrap
-  ansible.builtin.setup:
-    gather_subset:
-      - network
-  delegate_to: "{{ item }}"
-  delegate_facts: true
-  loop: "{{ groups['all'] }}"
-  run_once: true
-  when: bootstrap_router | bool
-  tags: ["bootstrap_router"]
-
-- name: Derive node IP facts for MySQL router bootstrap
-  ansible.builtin.set_fact:
-    erawan_node_ip: >-
-      {{
-        hostvars[item].ansible_host
-        if (hostvars[item].ansible_host | default('')) in (hostvars[item].ansible_all_ipv4_addresses | default([]))
-        else (hostvars[item].ansible_default_ipv4.address | default(hostvars[item].ansible_host))
-      }}
-  delegate_to: "{{ item }}"
-  delegate_facts: true
-  loop: "{{ groups['all'] }}"
-  run_once: true
-  when: bootstrap_router | bool
-  tags: ["bootstrap_router"]
-
-- name: Wait for MySQL to be ready on primary before router bootstrap
-  ansible.builtin.wait_for:
-    host: "{{ hostvars['primary'].erawan_node_ip }}"
-    port: "{{ mysql_port }}"
-    state: started
-    delay: 5
-    timeout: "{{ mysql_start_timeout_seconds | default(300) | int }}"
-  run_once: true
-  delegate_to: primary
-  when: bootstrap_router | bool
-  tags: ["bootstrap_router"]
-
 - name: Normalize clusteradmin grants for router bootstrap
   ansible.builtin.shell: |
     set -euo pipefail
@@ -223,24 +185,12 @@
   when: bootstrap_router | bool
   tags: ["bootstrap_router"]
 
-- name: Verify router RW port is configured
-  ansible.builtin.command:
-    argv:
-      - grep
-      - -Eq
-      - "^[[:space:]]*bind_port[[:space:]]*=[[:space:]]*6446[[:space:]]*$"
-      - "/etc/mysqlrouter/{{ cluster_name }}/mysqlrouter.conf"
-  changed_when: false
-  when: bootstrap_router | bool
-  tags: ["bootstrap_router"]
-
-- name: Verify router RO port is configured
-  ansible.builtin.command:
-    argv:
-      - grep
-      - -Eq
-      - "^[[:space:]]*bind_port[[:space:]]*=[[:space:]]*6447[[:space:]]*$"
-      - "/etc/mysqlrouter/{{ cluster_name }}/mysqlrouter.conf"
+- name: Verify router RW and RO ports are configured
+  ansible.builtin.shell: |
+    grep -Eq "^[[:space:]]*bind_port[[:space:]]*=[[:space:]]*6446[[:space:]]*$" "/etc/mysqlrouter/{{ cluster_name }}/mysqlrouter.conf" &&
+    grep -Eq "^[[:space:]]*bind_port[[:space:]]*=[[:space:]]*6447[[:space:]]*$" "/etc/mysqlrouter/{{ cluster_name }}/mysqlrouter.conf"
+  args:
+    executable: /bin/bash
   changed_when: false
   when: bootstrap_router | bool
   tags: ["bootstrap_router"]
