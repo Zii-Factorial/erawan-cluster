@@ -25,10 +25,11 @@ func (s *stringList) UnmarshalJSON(data []byte) error {
 }
 
 type createHAProxyRequest struct {
-	Port    int        `json:"port"`
-	NodeIPs stringList `json:"node_ips"`
-	NodeIP  string     `json:"node_ip"`
-	DBPort  int        `json:"db_port"`
+	Port        int        `json:"port"`
+	NodeIPs     stringList `json:"node_ips"`
+	NodeIP      string     `json:"node_ip"`
+	DBPort      int        `json:"db_port"`
+	PatroniPort int        `json:"patroni_port"`
 }
 
 type deleteHAProxyRequest struct {
@@ -50,9 +51,10 @@ func (app *application) createHAProxyConfigHandler(w http.ResponseWriter, r *htt
 	}
 
 	err := app.haproxy.CreateConfig(r.Context(), haproxy.CreateConfigInput{
-		Port:    req.Port,
-		NodeIPs: nodes,
-		DBPort:  req.DBPort,
+		Port:        req.Port,
+		NodeIPs:     nodes,
+		DBPort:      req.DBPort,
+		PatroniPort: req.PatroniPort,
 	})
 	if err != nil {
 		errJSON(w, http.StatusBadRequest, err.Error())

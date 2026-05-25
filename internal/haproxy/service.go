@@ -41,10 +41,13 @@ func NewService(tenantsDir string, reloadCmd []string, reloadTimeout time.Durati
 	return &Service{tenantsDir: tenantsDir, reloadCmd: reloadCmd, reloadTimeout: reloadTimeout}, nil
 }
 
+const defaultPatroniPort = 8008
+
 type CreateConfigInput struct {
-	Port    int      `json:"port"`
-	NodeIPs []string `json:"node_ips"`
-	DBPort  int      `json:"db_port"`
+	Port        int      `json:"port"`
+	NodeIPs     []string `json:"node_ips"`
+	DBPort      int      `json:"db_port"`
+	PatroniPort int      `json:"patroni_port"` // defaults to 8008 for PostgreSQL when omitted
 }
 
 type DeleteConfigInput struct {
@@ -126,8 +129,13 @@ func (s *Service) CreateConfig(ctx context.Context, in CreateConfigInput) error 
 		return err
 	}
 
+	patroniPort := in.PatroniPort
+	if patroniPort == 0 && isPostgresPort(in.DBPort) {
+		patroniPort = defaultPatroniPort
+	}
+
 	filename := s.filename(in.Port)
-	content := buildConfigContent(in.Port, nodes, in.DBPort)
+	content := buildConfigContent(in.Port, nodes, in.DBPort, patroniPort)
 	backup := ""
 
 	if _, err := os.Stat(filename); err == nil {
@@ -349,7 +357,7 @@ func waitForPortState(port int, shouldListen bool, timeout time.Duration) error 
 	}
 }
 
-func buildConfigContent(port int, nodeIPs []string, dbPort int) string {
+func buildConfigContent(port int, nodeIPs []string, dbPort int, patroniPort int) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("listen node_%d\n", port))
 	b.WriteString(fmt.Sprintf("    bind *:%d\n", port))
@@ -362,7 +370,13 @@ func buildConfigContent(port int, nodeIPs []string, dbPort int) string {
 	b.WriteString("    option clitcpka\n")
 	b.WriteString("    option srvtcpka\n")
 	b.WriteString("\n")
-	if isPostgresPort(dbPort) {
+	usePatroni := isPostgresPort(dbPort) && patroniPort > 0
+	if usePatroni {
+		b.WriteString("    # Patroni REST API health check: only route to the leader (primary).\n")
+		b.WriteString("    # GET /leader → 200 means this node is the current Patroni primary.\n")
+		b.WriteString("    option httpchk GET /leader\n")
+		b.WriteString("    http-check expect status 200\n")
+	} else if isPostgresPort(dbPort) {
 		b.WriteString("    # PostgreSQL-level health check: verifies the backend is a live Postgres node.\n")
 		b.WriteString("    option pgsql-check\n")
 	} else {
@@ -392,9 +406,13 @@ func buildConfigContent(port int, nodeIPs []string, dbPort int) string {
 	b.WriteString("    # fastinter   = check every 100ms when just failed (detect recovery fast)\n")
 	b.WriteString("    # downinter   = check every 200ms when DOWN\n")
 	b.WriteString("    # on-marked-down shutdown-sessions = kill connections immediately when server goes down\n")
-	b.WriteString("    default-server inter 500ms fastinter 100ms downinter 200ms fall 2 rise 2 on-marked-down shutdown-sessions on-marked-up shutdown-backup-sessions\n")
+	defaultServer := "    default-server inter 500ms fastinter 100ms downinter 200ms fall 2 rise 2 on-marked-down shutdown-sessions on-marked-up shutdown-backup-sessions"
+	if usePatroni {
+		defaultServer += fmt.Sprintf(" check port %d", patroniPort)
+	}
+	b.WriteString(defaultServer + "\n")
 	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("    # MySQL Router %s port — port %d = %s\n", dbPortRole(dbPort), dbPort, dbPortMode(dbPort)))
+	b.WriteString(fmt.Sprintf("    # Backend port %d (%s)\n", dbPort, backendPortDesc(dbPort)))
 	b.WriteString("    # Use first server as primary, others as backup\n")
 	for i, ip := range nodeIPs {
 		b.WriteString(fmt.Sprintf("    server db%d %s:%d check", i+1, ip, dbPort))
@@ -410,23 +428,14 @@ func isPostgresPort(port int) bool {
 	return port == 5432
 }
 
-func dbPortRole(port int) string {
+func backendPortDesc(port int) string {
 	switch port {
+	case 5432:
+		return "PostgreSQL"
 	case 6446:
-		return "write"
+		return "MySQL Router R/W"
 	case 6447:
-		return "read"
-	default:
-		return "backend"
-	}
-}
-
-func dbPortMode(port int) string {
-	switch port {
-	case 6446:
-		return "R/W, always primary"
-	case 6447:
-		return "R/O, read replicas"
+		return "MySQL Router R/O"
 	default:
 		return "custom"
 	}
