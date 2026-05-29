@@ -1,3 +1,9 @@
+- name: Wait for SSH to become available
+  ansible.builtin.wait_for_connection:
+    timeout: 120
+    sleep: 5
+  tags: ["preflight"]
+
 - name: Ensure mysqlsh is installed
   ansible.builtin.command:
     argv: [mysqlsh, --version]
