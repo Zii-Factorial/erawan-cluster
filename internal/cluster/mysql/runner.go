@@ -205,7 +205,7 @@ func buildInventoryYAML(spec StoredSpec) string {
 		b.WriteString("      ansible_become_user: root\n")
 		b.WriteString("      ansible_become_flags: " + strconv.Quote("-n") + "\n")
 		b.WriteString("      ansible_ssh_private_key_file: " + strconv.Quote(spec.SSHPrivateKeyPath) + "\n")
-		b.WriteString("      ansible_ssh_common_args: " + strconv.Quote("-o IdentitiesOnly=yes") + "\n")
+		b.WriteString("      ansible_ssh_common_args: " + strconv.Quote("-o IdentitiesOnly=yes -o StrictHostKeyChecking=no") + "\n")
 	}
 
 	writeHost("primary", spec.PrimaryIP)
