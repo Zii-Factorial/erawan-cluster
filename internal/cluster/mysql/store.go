@@ -139,6 +139,41 @@ func (s *Store) List(limit int) ([]Job, error) {
 	return jobs, nil
 }
 
+func (s *Store) MarkStaleRunningJobsFailed() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || strings.HasSuffix(entry.Name(), ".secret.json") {
+			continue
+		}
+		path := filepath.Join(s.dir, entry.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var job Job
+		if err := json.Unmarshal(data, &job); err != nil {
+			continue
+		}
+		if job.Status != JobStatusRunning {
+			continue
+		}
+		job.Status = JobStatusFailed
+		job.Error = "service restarted while job was in progress"
+		job.UpdatedAt = time.Now().UTC()
+		payload, err := json.MarshalIndent(&job, "", "  ")
+		if err != nil {
+			continue
+		}
+		_ = os.WriteFile(path, payload, 0o600)
+	}
+}
+
 func (s *Store) path(jobID string) string {
 	return filepath.Join(s.dir, jobID+".json")
 }

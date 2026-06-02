@@ -43,10 +43,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("init mysql cluster store: %v", err)
 	}
+	store.MarkStaleRunningJobsFailed()
 	pgsqlStore, err := pgsqlcluster.NewStore(env.GetString("PGSQL_CLUSTER_STATE_DIR", filepath.Join(stateDir, "pgsql")))
 	if err != nil {
 		log.Fatalf("init pgsql cluster store: %v", err)
 	}
+	pgsqlStore.MarkStaleRunningJobsFailed()
 
 	ansibleBin := env.GetString("ANSIBLE_PLAYBOOK_BIN", "ansible-playbook")
 	clusterSSHUser := env.GetString("CLUSTER_SSH_USER", "")
