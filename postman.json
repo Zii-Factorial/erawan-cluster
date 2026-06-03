@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "0f487bb5-3f07-49a9-9b29-e468f795d8d5",
     "name": "Erawan Cluster API (Go)",
-    "description": "Postman collection for HAProxy, MySQL cluster, and PostgreSQL cluster endpoints.\n\n**Required variables — fill these in Collection > Variables before sending any request:**\n- `API_KEY` — sent as `X-API-Key` header on every request (collection auth)\n- `ENCRYPTION_KEY` — 64-char hex string (AES-256-GCM). When set the pre-request script encrypts every request body automatically. Generate with: `openssl rand -hex 32`\n\nLeave `ENCRYPTION_KEY` empty to send plain JSON (development only).",
+    "description": "Postman collection for HAProxy, MySQL cluster, and PostgreSQL cluster endpoints.\n\n**Required variables — fill these in Collection > Variables before sending any request:**\n- `API_KEY` — sent as `X-API-Key` header on every request (collection auth)\n- `ENCRYPTION_KEY` — 64-char hex string (AES-256-GCM). When set the pre-request script encrypts every request body and the test script decrypts every JSON response automatically. Generate with: `openssl rand -hex 32`\n\nLeave `ENCRYPTION_KEY` empty to send/receive plain JSON (development only).\n\n**Decrypted responses** are logged to the Postman console and stored in the `LAST_RESPONSE` collection variable for inspection.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -18,7 +18,8 @@
     { "key": "API_PORT", "value": "8080", "description": "API server port" },
     { "key": "API_KEY", "value": "", "description": "[REQUIRED] API key — sent as X-API-Key header on every request" },
     { "key": "ENCRYPTION_KEY", "value": "", "description": "[REQUIRED] 64-char hex string (32 bytes, AES-256-GCM). Generate: openssl rand -hex 32. Leave empty for plain JSON (dev only)." },
-    { "key": "JOB_ID", "value": "", "description": "Job ID — copy from a Deploy or List Jobs response" },
+    { "key": "JOB_ID", "value": "", "description": "Job ID — auto-filled from Deploy response, or copy manually from List Jobs" },
+    { "key": "LAST_RESPONSE", "value": "", "description": "Last decrypted JSON response — inspect after any request when ENCRYPTION_KEY is set" },
     { "key": "PRIMARY_IP", "value": "192.168.122.154" },
     { "key": "SECONDARY_IP", "value": "192.168.122.111" },
     { "key": "CLUSTER_NAME", "value": "prodCluster" },
@@ -37,7 +38,7 @@
       "script": {
         "type": "text/javascript",
         "exec": [
-          "// Payload Encryption — AES-256-GCM",
+          "// Request Encryption — AES-256-GCM",
           "// Runs automatically for every request that has a raw JSON body.",
           "// Set ENCRYPTION_KEY (64 hex chars) to enable; leave empty for plain JSON.",
           "",
@@ -71,7 +72,70 @@
           "const data = payload.toString('base64').replace(/\\+/g, '-').replace(/\\//g, '_');",
           "",
           "pm.request.body.update(JSON.stringify({ data: data }));",
-          "console.log('[erawan] payload encrypted (' + plaintext.length + ' → ' + payload.length + ' bytes)');"
+          "console.log('[erawan] request encrypted (' + plaintext.length + ' → ' + payload.length + ' bytes)');"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Response Decryption — AES-256-GCM",
+          "// Runs automatically after every response.",
+          "// When ENCRYPTION_KEY is set the server returns {\"data\":\"<encrypted>\"};",
+          "// this script decrypts it, logs to console, and stores in LAST_RESPONSE.",
+          "",
+          "const encryptionKey = pm.collectionVariables.get('ENCRYPTION_KEY');",
+          "if (!encryptionKey || encryptionKey.trim() === '') {",
+          "    return;",
+          "}",
+          "",
+          "const ct = pm.response.headers.get('Content-Type') || '';",
+          "if (!ct.includes('application/json')) {",
+          "    // Binary response (e.g. zip download) — nothing to decrypt",
+          "    return;",
+          "}",
+          "",
+          "let body;",
+          "try { body = pm.response.json(); } catch(e) { return; }",
+          "if (!body || typeof body.data !== 'string') {",
+          "    return;",
+          "}",
+          "",
+          "try {",
+          "    const crypto = require('crypto');",
+          "    const key = Buffer.from(encryptionKey.trim(), 'hex');",
+          "    if (key.length !== 32) {",
+          "        console.error('[erawan] ENCRYPTION_KEY must be 64 hex chars — response NOT decrypted');",
+          "        return;",
+          "    }",
+          "",
+          "    // base64url → base64 → bytes",
+          "    const b64 = body.data.replace(/-/g, '+').replace(/_/g, '/');",
+          "    const payload = Buffer.from(b64, 'base64');",
+          "",
+          "    // Format: nonce(12) + ciphertext + tag(16) — matches Go's aead.Seal",
+          "    const nonce = payload.slice(0, 12);",
+          "    const tag   = payload.slice(payload.length - 16);",
+          "    const ciphertext = payload.slice(12, payload.length - 16);",
+          "",
+          "    const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);",
+          "    decipher.setAuthTag(tag);",
+          "    const plain = Buffer.concat([decipher.update(ciphertext), decipher.final()]);",
+          "    const decrypted = JSON.parse(plain.toString('utf8'));",
+          "",
+          "    pm.collectionVariables.set('LAST_RESPONSE', JSON.stringify(decrypted, null, 2));",
+          "    console.log('[erawan] response decrypted:', JSON.stringify(decrypted, null, 2));",
+          "",
+          "    // Auto-extract JOB_ID from deploy responses",
+          "    if (decrypted && decrypted.data && decrypted.data.id) {",
+          "        pm.collectionVariables.set('JOB_ID', decrypted.data.id);",
+          "        console.log('[erawan] JOB_ID set to:', decrypted.data.id);",
+          "    }",
+          "} catch(e) {",
+          "    console.warn('[erawan] response decryption failed:', e.message);",
+          "}"
         ]
       }
     }
@@ -125,7 +189,7 @@
               "options": { "raw": { "language": "json" } },
               "raw": "{\n  \"port\": 25010,\n  \"node_ips\": [\"10.10.107.182\", \"10.10.107.183\"],\n  \"db_port\": 6446\n}"
             },
-            "description": "Creates an HAProxy frontend for a MySQL Router cluster. Uses option mysql-check user haproxy post-41 (required for MySQL 8.0+). db_port is typically 6446 (R/W) or 6447 (R/O).",
+            "description": "Creates an HAProxy frontend for a MySQL Router cluster. db_port is typically 6446 (R/W) or 6447 (R/O).",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/config/mysql",
               "protocol": "http",
@@ -193,6 +257,21 @@
           }
         },
         {
+          "name": "Download Tenants Config (ZIP)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "Downloads all tenant HAProxy .cfg files packaged as a single zip archive.\n\nThe response is binary (application/zip) — use 'Save Response' in Postman to save the file. This endpoint is exempt from response encryption even when ENCRYPTION_KEY is set.",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/configs/download",
+              "protocol": "http",
+              "host": ["{{API_HOST}}"],
+              "port": "{{API_PORT}}",
+              "path": ["haproxy", "configs", "download"]
+            }
+          }
+        },
+        {
           "name": "Reload",
           "request": {
             "method": "POST",
@@ -213,6 +292,26 @@
       "item": [
         {
           "name": "Deploy",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Auto-extract JOB_ID from plain-JSON deploy response (no encryption)",
+                  "const encryptionKey = pm.collectionVariables.get('ENCRYPTION_KEY');",
+                  "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
+                  "try {",
+                  "    const body = pm.response.json();",
+                  "    if (body && body.data && body.data.id) {",
+                  "        pm.collectionVariables.set('JOB_ID', body.data.id);",
+                  "        console.log('[erawan] JOB_ID set to:', body.data.id);",
+                  "    }",
+                  "} catch(e) {}"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "header": [
@@ -223,6 +322,7 @@
               "options": { "raw": { "language": "json" } },
               "raw": "{\n  \"cluster_name\": \"{{CLUSTER_NAME}}\",\n  \"primary_ip\": \"{{PRIMARY_IP}}\",\n  \"standby_ips\": [\"{{SECONDARY_IP}}\"],\n  \"new_user\": \"{{NEW_USER}}\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\",\n  \"new_user_ssl_required\": {{NEW_USER_SSL_REQUIRED}},\n  \"new_db\": \"{{NEW_DB}}\",\n  \"assume_prepared\": false,\n  \"bootstrap_router\": true,\n  \"ssh_port\": 22,\n  \"mysql_port\": 3306,\n  \"step_timeout_seconds\": 900\n}"
             },
+            "description": "Starts a MySQL InnoDB Cluster deployment. Returns a job immediately (202 Accepted). Poll 'Get Job' to track progress.\n\nJOB_ID is auto-extracted from the response and stored as a collection variable.",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/deploy",
               "protocol": "http",
@@ -273,8 +373,9 @@
             "body": {
               "mode": "raw",
               "options": { "raw": { "language": "json" } },
-              "raw": "{\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\"\n}"
+              "raw": "{\n  \"cluster_admin_password\": \"\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\"\n}"
             },
+            "description": "Resumes a failed MySQL cluster job from the last completed step.\n\n- `cluster_admin_password` — leave empty to reuse the password stored from the original deploy\n- `new_user_password` — required when the job has a `new_user`",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/jobs/{{JOB_ID}}/resume",
               "protocol": "http",
@@ -294,8 +395,9 @@
             "body": {
               "mode": "raw",
               "options": { "raw": { "language": "json" } },
-              "raw": "{}"
+              "raw": "{\n  \"cluster_admin_password\": \"\"\n}"
             },
+            "description": "Runs the rollback playbook to undo a failed MySQL cluster deployment.\n\n- `cluster_admin_password` — leave empty to reuse the password stored from the original deploy",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/jobs/{{JOB_ID}}/rollback",
               "protocol": "http",
@@ -313,6 +415,26 @@
       "item": [
         {
           "name": "Deploy",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Auto-extract JOB_ID from plain-JSON deploy response (no encryption)",
+                  "const encryptionKey = pm.collectionVariables.get('ENCRYPTION_KEY');",
+                  "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
+                  "try {",
+                  "    const body = pm.response.json();",
+                  "    if (body && body.data && body.data.id) {",
+                  "        pm.collectionVariables.set('JOB_ID', body.data.id);",
+                  "        console.log('[erawan] JOB_ID set to:', body.data.id);",
+                  "    }",
+                  "} catch(e) {}"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "header": [
@@ -323,7 +445,7 @@
               "options": { "raw": { "language": "json" } },
               "raw": "{\n  \"cluster_name\": \"{{CLUSTER_NAME}}\",\n  \"primary_ip\": \"{{PGSQL_PRIMARY_IP}}\",\n  \"standby_ips\": [],\n  \"new_user\": \"{{NEW_USER}}\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\",\n  \"new_user_ssl_required\": true,\n  \"new_db\": \"{{NEW_DB}}\",\n  \"ssh_port\": 22,\n  \"postgres_port\": 5432,\n  \"step_timeout_seconds\": 900\n}"
             },
-            "description": "Use `standby_ips: []` for primary-only mode, or provide one or more standby IPs for HA mode.",
+            "description": "Starts a PostgreSQL/Patroni cluster deployment. Returns a job immediately (202 Accepted). Poll 'Get Job' to track progress.\n\nUse `standby_ips: []` for primary-only mode, or provide one or more standby IPs for HA mode.\n\nJOB_ID is auto-extracted from the response and stored as a collection variable.",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/deploy",
               "protocol": "http",
@@ -374,8 +496,9 @@
             "body": {
               "mode": "raw",
               "options": { "raw": { "language": "json" } },
-              "raw": "{\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\"\n}"
+              "raw": "{\n  \"cluster_admin_password\": \"\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\"\n}"
             },
+            "description": "Resumes a failed PostgreSQL cluster job from the last completed step.\n\n- `cluster_admin_password` — leave empty to reuse the password stored from the original deploy\n- `new_user_password` — required when the job has a `new_user`",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/jobs/{{JOB_ID}}/resume",
               "protocol": "http",

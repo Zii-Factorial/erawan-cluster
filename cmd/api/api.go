@@ -40,8 +40,9 @@ func (app *application) mount() *chi.Mux {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Minute))
 	r.Use(security.APIKeyMiddleware(app.config.apiKey))
+	r.Use(security.EncryptMiddleware(app.cipher))
+	r.Use(bodyLimit(2 << 20)) // 2 MB covers ~1.5 MB plaintext after AES-GCM base64 overhead
 	r.Use(security.DecryptMiddleware(app.cipher))
-	r.Use(bodyLimit(1 << 20))
 
 	r.Get("/health", app.healthCheckHandler)
 	r.Get("/docs", app.docsHandler)
@@ -51,6 +52,7 @@ func (app *application) mount() *chi.Mux {
 		r.Post("/config/pgsql", app.createPGSQLHAProxyConfigHandler)
 		r.Delete("/config", app.deleteHAProxyConfigHandler)
 		r.Get("/configs", app.listHAProxyConfigsHandler)
+		r.Get("/configs/download", app.downloadTenantsZipHandler)
 		r.Post("/reload", app.reloadHAProxyHandler)
 	})
 

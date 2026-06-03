@@ -161,8 +161,10 @@ func (r *Runner) run(ctx context.Context, cfg runConfig) (result StepResult) {
 	cmd := exec.CommandContext(stepCtx, r.ansibleBin, args...)
 	cmd.Env = append(os.Environ(), "ANSIBLE_HOST_KEY_CHECKING=False")
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
+	var stdout cappedBuffer
+	var stderr cappedBuffer
+	stdout.limit = r.maxOutputChars
+	stderr.limit = r.maxOutputChars
 	if r.streamLogs {
 		cmd.Stdout = io.MultiWriter(&stdout, os.Stdout)
 		cmd.Stderr = io.MultiWriter(&stderr, os.Stderr)
@@ -172,8 +174,8 @@ func (r *Runner) run(ctx context.Context, cfg runConfig) (result StepResult) {
 	}
 
 	err = cmd.Run()
-	result.Stdout = trimOutput(stdout.String(), r.maxOutputChars)
-	result.Stderr = trimOutput(stderr.String(), r.maxOutputChars)
+	result.Stdout = stdout.String()
+	result.Stderr = stderr.String()
 
 	if err == nil {
 		result.Status = JobStatusCompleted
@@ -229,13 +231,34 @@ func buildInventoryYAML(spec StoredSpec) string {
 	return b.String()
 }
 
-func trimOutput(in string, max int) string {
-	in = strings.TrimSpace(in)
-	if max <= 0 {
-		return in
+// cappedBuffer is a write-capped bytes.Buffer. Writes beyond limit are dropped
+// and a truncation marker is appended to String(). limit=0 means unlimited.
+type cappedBuffer struct {
+	buf     bytes.Buffer
+	limit   int
+	dropped bool
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	if b.limit > 0 {
+		avail := b.limit - b.buf.Len()
+		if avail <= 0 {
+			b.dropped = true
+			return len(p), nil
+		}
+		if len(p) > avail {
+			_, _ = b.buf.Write(p[:avail])
+			b.dropped = true
+			return len(p), nil
+		}
 	}
-	if len(in) <= max {
-		return in
+	return b.buf.Write(p)
+}
+
+func (b *cappedBuffer) String() string {
+	s := strings.TrimSpace(b.buf.String())
+	if b.dropped {
+		s += "\n...truncated..."
 	}
-	return in[:max] + "\n...truncated..."
+	return s
 }

@@ -1,6 +1,7 @@
 package haproxy
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"fmt"
@@ -229,6 +230,36 @@ func (s *Service) DeleteConfig(ctx context.Context, in DeleteConfigInput) (bool,
 	_ = os.Remove(backup)
 
 	return true, nil
+}
+
+func (s *Service) ZipTenantsDir() ([]byte, error) {
+	entries, err := os.ReadDir(s.tenantsDir)
+	if err != nil {
+		return nil, fmt.Errorf("read tenants directory: %w", err)
+	}
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".cfg") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(s.tenantsDir, entry.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", entry.Name(), err)
+		}
+		f, err := zw.Create(entry.Name())
+		if err != nil {
+			return nil, fmt.Errorf("zip entry %s: %w", entry.Name(), err)
+		}
+		if _, err := f.Write(data); err != nil {
+			return nil, fmt.Errorf("write %s: %w", entry.Name(), err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		return nil, fmt.Errorf("finalize zip: %w", err)
+	}
+	return buf.Bytes(), nil
 }
 
 func (s *Service) ListConfigs() ([]string, error) {

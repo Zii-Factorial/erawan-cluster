@@ -3,12 +3,19 @@ package security
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 )
 
 type encryptedEnvelope struct {
 	Data string `json:"data"`
+}
+
+func jsonError(w http.ResponseWriter, code int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_, _ = fmt.Fprintf(w, `{"status":"error","message":%q}`, msg)
 }
 
 // DecryptMiddleware transparently decrypts AES-256-GCM request bodies.
@@ -31,17 +38,17 @@ func DecryptMiddleware(c *Cipher) func(http.Handler) http.Handler {
 
 			var env encryptedEnvelope
 			if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
-				http.Error(w, `{"status":"error","message":"invalid encrypted payload"}`, http.StatusBadRequest)
+				jsonError(w, http.StatusBadRequest, "invalid encrypted payload")
 				return
 			}
 			if env.Data == "" {
-				http.Error(w, `{"status":"error","message":"encrypted payload missing 'data' field"}`, http.StatusBadRequest)
+				jsonError(w, http.StatusBadRequest, "encrypted payload missing 'data' field")
 				return
 			}
 
 			plaintext, err := c.Decrypt(env.Data)
 			if err != nil {
-				http.Error(w, `{"status":"error","message":"failed to decrypt payload"}`, http.StatusBadRequest)
+				jsonError(w, http.StatusBadRequest, "failed to decrypt payload")
 				return
 			}
 

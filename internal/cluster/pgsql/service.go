@@ -262,8 +262,10 @@ func (s *Service) executeFrom(ctx context.Context, job *Job, startIndex int, sec
 			if job.Error == "" {
 				job.Error = fmt.Sprintf("step %s failed", st.Name)
 			}
-			_ = s.store.Save(job)
-			return fmt.Errorf(job.Error)
+			if err := s.store.Save(job); err != nil {
+				return err
+			}
+			return fmt.Errorf("%s", job.Error)
 		}
 
 		job.LastCompletedStep = i

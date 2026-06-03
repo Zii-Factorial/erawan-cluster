@@ -134,6 +134,18 @@ func (app *application) listHAProxyConfigsHandler(w http.ResponseWriter, r *http
 	ok(w, "success", files)
 }
 
+func (app *application) downloadTenantsZipHandler(w http.ResponseWriter, r *http.Request) {
+	data, err := app.haproxy.ZipTenantsDir()
+	if err != nil {
+		errJSON(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="tenants.zip"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
 func (app *application) reloadHAProxyHandler(w http.ResponseWriter, r *http.Request) {
 	if err := app.haproxy.Reload(r.Context()); err != nil {
 		errJSON(w, http.StatusInternalServerError, err.Error())

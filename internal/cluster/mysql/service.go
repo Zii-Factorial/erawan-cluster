@@ -105,7 +105,7 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 
 	secrets := SecretInput{
 		RootPassword:         req.RootPassword,
-		ClusterAdminPassword: stringsOrGenerated(req.ClusterAdminPassword),
+		ClusterAdminPassword: stringOrGenerated(req.ClusterAdminPassword),
 		NewUserPassword:      req.NewUserPassword,
 	}
 	if err := s.store.SaveSecret(job.ID, StoredSecret{ClusterAdminPassword: secrets.ClusterAdminPassword}); err != nil {
@@ -162,7 +162,7 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 		if err == nil && storedSecret.ClusterAdminPassword != "" {
 			secret.ClusterAdminPassword = storedSecret.ClusterAdminPassword
 		} else {
-			secret.ClusterAdminPassword = stringsOrGenerated("")
+			secret.ClusterAdminPassword = stringOrGenerated("")
 			if saveErr := s.store.SaveSecret(job.ID, StoredSecret{ClusterAdminPassword: secret.ClusterAdminPassword}); saveErr != nil {
 				return nil, saveErr
 			}
@@ -300,7 +300,7 @@ func (s *Service) executeFrom(ctx context.Context, job *Job, startIndex int, sec
 			}
 			s.updateJobProgress(job)
 			_ = s.store.Save(job)
-			return fmt.Errorf(job.Error)
+			return fmt.Errorf("%s", job.Error)
 		}
 
 		job.LastCompletedStep = i
@@ -408,7 +408,7 @@ func newJobID() string {
 	return hex.EncodeToString(raw)
 }
 
-func stringsOrGenerated(value string) string {
+func stringOrGenerated(value string) string {
 	if value != "" {
 		return value
 	}
