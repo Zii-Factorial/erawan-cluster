@@ -40,6 +40,7 @@ func (app *application) getMySQLClusterJobHandler(w http.ResponseWriter, r *http
 		return
 	}
 	secret, _ := app.mysqlCluster.GetSecret(jobID)
+	job.Request.SSHPrivateKeyPath = ""
 	ok(w, "success", struct {
 		*mysqlcluster.Job
 		Secret *mysqlcluster.StoredSecret `json:"secret,omitempty"`

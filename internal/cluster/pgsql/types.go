@@ -68,7 +68,7 @@ type StoredSpec struct {
 	NewUserSSLRequired bool     `json:"new_user_ssl_required"`
 	NewDB              string   `json:"new_db"`
 	SSHUser            string   `json:"ssh_user"`
-	SSHPrivateKeyPath  string   `json:"-"`
+	SSHPrivateKeyPath  string   `json:"ssh_private_key_path,omitempty"`
 	SSHPort            int      `json:"ssh_port"`
 	PostgresPort       int      `json:"postgres_port"`
 	StepTimeoutSeconds int      `json:"step_timeout_seconds"`

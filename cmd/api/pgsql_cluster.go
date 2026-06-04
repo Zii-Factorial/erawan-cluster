@@ -41,6 +41,7 @@ func (app *application) getPGSQLClusterJobHandler(w http.ResponseWriter, r *http
 		return
 	}
 	secret, _ := app.pgsqlCluster.GetSecret(jobID)
+	job.Request.SSHPrivateKeyPath = ""
 	ok(w, "success", struct {
 		*pgsqlcluster.Job
 		Secret *pgsqlcluster.StoredSecret `json:"secret,omitempty"`

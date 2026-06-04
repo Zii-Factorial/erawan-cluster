@@ -87,7 +87,7 @@ type StoredSpec struct {
 	AssumePrepared     bool     `json:"assume_prepared"`
 	BootstrapRouter    bool     `json:"bootstrap_router"`
 	SSHUser            string   `json:"ssh_user"`
-	SSHPrivateKeyPath  string   `json:"-"`
+	SSHPrivateKeyPath  string   `json:"ssh_private_key_path,omitempty"`
 	SSHPort            int      `json:"ssh_port"`
 	MySQLPort          int      `json:"mysql_port"`
 	StepTimeoutSeconds int      `json:"step_timeout_seconds"`
