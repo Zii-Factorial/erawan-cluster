@@ -40,7 +40,10 @@ func (app *application) getMySQLClusterJobHandler(w http.ResponseWriter, r *http
 		return
 	}
 	secret, _ := app.mysqlCluster.GetSecret(jobID)
-	ok(w, "success", envelope{"job": job, "secret": secret})
+	ok(w, "success", struct {
+		*mysqlcluster.Job
+		Secret *mysqlcluster.StoredSecret `json:"secret,omitempty"`
+	}{job, secret})
 }
 
 func (app *application) listMySQLClusterJobsHandler(w http.ResponseWriter, r *http.Request) {
