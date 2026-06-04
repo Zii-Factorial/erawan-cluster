@@ -40,7 +40,8 @@ func (app *application) getPGSQLClusterJobHandler(w http.ResponseWriter, r *http
 		errJSON(w, http.StatusNotFound, err.Error())
 		return
 	}
-	ok(w, "success", job)
+	secret, _ := app.pgsqlCluster.GetSecret(jobID)
+	ok(w, "success", envelope{"job": job, "secret": secret})
 }
 
 func (app *application) listPGSQLClusterJobsHandler(w http.ResponseWriter, r *http.Request) {

@@ -229,6 +229,14 @@ func (s *Service) Get(jobID string) (*Job, error) {
 	return job, nil
 }
 
+func (s *Service) GetSecret(jobID string) (*StoredSecret, error) {
+	secret, err := s.store.LoadSecret(jobID)
+	if err != nil {
+		return nil, err
+	}
+	return &secret, nil
+}
+
 func (s *Service) List(limit int) ([]Job, error) {
 	jobs, err := s.store.List(limit)
 	if err != nil {

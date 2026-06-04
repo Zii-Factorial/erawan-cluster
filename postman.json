@@ -316,7 +316,7 @@
             "body": {
               "mode": "raw",
               "options": { "raw": { "language": "json" } },
-              "raw": "{\n  \"cluster_name\": \"{{CLUSTER_NAME}}\",\n  \"primary_ip\": \"{{PRIMARY_IP}}\",\n  \"standby_ips\": [\"{{SECONDARY_IP}}\"],\n  \"new_user\": \"{{NEW_USER}}\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\",\n  \"new_user_ssl_required\": {{NEW_USER_SSL_REQUIRED}},\n  \"new_db\": \"{{NEW_DB}}\",\n  \"assume_prepared\": false,\n  \"bootstrap_router\": true,\n  \"ssh_port\": 22,\n  \"mysql_port\": 3306,\n  \"step_timeout_seconds\": 900\n}"
+              "raw": "{\n  \"cluster_name\": \"{{CLUSTER_NAME}}\",\n  \"admin_username\": \"clusteradmin\",\n  \"admin_password\": \"\",\n  \"primary_ip\": \"{{PRIMARY_IP}}\",\n  \"standby_ips\": [\"{{SECONDARY_IP}}\"],\n  \"new_user\": \"{{NEW_USER}}\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\",\n  \"new_user_ssl_required\": {{NEW_USER_SSL_REQUIRED}},\n  \"new_db\": \"{{NEW_DB}}\",\n  \"assume_prepared\": false,\n  \"bootstrap_router\": true,\n  \"ssh_port\": 22,\n  \"mysql_port\": 3306,\n  \"step_timeout_seconds\": 900\n}"
             },
             "description": "Starts a MySQL InnoDB Cluster deployment. Returns a job immediately (202 Accepted). Poll 'Get Job' to track progress.\n\nJOB_ID is auto-extracted from the response and stored as a collection variable.",
             "url": {
@@ -369,9 +369,9 @@
             "body": {
               "mode": "raw",
               "options": { "raw": { "language": "json" } },
-              "raw": "{\n  \"cluster_admin_password\": \"\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\"\n}"
+              "raw": "{\n  \"admin_password\": \"\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\"\n}"
             },
-            "description": "Resumes a failed MySQL cluster job from the last completed step.\n\n- `cluster_admin_password` — leave empty to reuse the password stored from the original deploy\n- `new_user_password` — required when the job has a `new_user`",
+            "description": "Resumes a failed MySQL cluster job from the last completed step.\n\n- `admin_password` — leave empty to reuse the password stored from the original deploy\n- `new_user_password` — required when the job has a `new_user`",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/jobs/{{JOB_ID}}/resume",
               "protocol": "http",
@@ -391,9 +391,9 @@
             "body": {
               "mode": "raw",
               "options": { "raw": { "language": "json" } },
-              "raw": "{\n  \"cluster_admin_password\": \"\"\n}"
+              "raw": "{\n  \"admin_password\": \"\"\n}"
             },
-            "description": "Runs the rollback playbook to undo a failed MySQL cluster deployment.\n\n- `cluster_admin_password` — leave empty to reuse the password stored from the original deploy",
+            "description": "Runs the rollback playbook to undo a failed MySQL cluster deployment.\n\n- `admin_password` — leave empty to reuse the password stored from the original deploy",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/jobs/{{JOB_ID}}/rollback",
               "protocol": "http",
@@ -439,7 +439,7 @@
             "body": {
               "mode": "raw",
               "options": { "raw": { "language": "json" } },
-              "raw": "{\n  \"cluster_name\": \"{{CLUSTER_NAME}}\",\n  \"primary_ip\": \"{{PGSQL_PRIMARY_IP}}\",\n  \"standby_ips\": [],\n  \"new_user\": \"{{NEW_USER}}\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\",\n  \"new_user_ssl_required\": true,\n  \"new_db\": \"{{NEW_DB}}\",\n  \"ssh_port\": 22,\n  \"postgres_port\": 5432,\n  \"step_timeout_seconds\": 900\n}"
+              "raw": "{\n  \"cluster_name\": \"{{CLUSTER_NAME}}\",\n  \"admin_username\": \"admin\",\n  \"admin_password\": \"\",\n  \"primary_ip\": \"{{PGSQL_PRIMARY_IP}}\",\n  \"standby_ips\": [],\n  \"new_user\": \"{{NEW_USER}}\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\",\n  \"new_user_ssl_required\": true,\n  \"new_db\": \"{{NEW_DB}}\",\n  \"ssh_port\": 22,\n  \"postgres_port\": 5432,\n  \"step_timeout_seconds\": 900\n}"
             },
             "description": "Starts a PostgreSQL/Patroni cluster deployment. Returns a job immediately (202 Accepted). Poll 'Get Job' to track progress.\n\nUse `standby_ips: []` for primary-only mode, or provide one or more standby IPs for HA mode.\n\nJOB_ID is auto-extracted from the response and stored as a collection variable.",
             "url": {
@@ -492,9 +492,9 @@
             "body": {
               "mode": "raw",
               "options": { "raw": { "language": "json" } },
-              "raw": "{\n  \"cluster_admin_password\": \"\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\"\n}"
+              "raw": "{\n  \"admin_password\": \"\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\"\n}"
             },
-            "description": "Resumes a failed PostgreSQL cluster job from the last completed step.\n\n- `cluster_admin_password` — leave empty to reuse the password stored from the original deploy\n- `new_user_password` — required when the job has a `new_user`",
+            "description": "Resumes a failed PostgreSQL cluster job from the last completed step.\n\n- `admin_password` — leave empty to reuse the password stored from the original deploy\n- `new_user_password` — required when the job has a `new_user`",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/jobs/{{JOB_ID}}/resume",
               "protocol": "http",
