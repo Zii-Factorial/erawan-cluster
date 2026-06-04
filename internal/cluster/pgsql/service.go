@@ -80,6 +80,7 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 			ClusterName:        req.ClusterName,
 			PrimaryIP:          req.PrimaryIP,
 			StandbyIPs:         req.StandbyIPs,
+			AdminUsername:      req.AdminUsername,
 			NewUser:            req.NewUser,
 			NewUserSSLRequired: req.NewUserSSLRequiredEnabled(),
 			NewDB:              req.NewDB,

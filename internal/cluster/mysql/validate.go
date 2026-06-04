@@ -16,7 +16,7 @@ var (
 )
 
 func ValidateDeployRequest(req *DeployRequest) error {
-	req.ClusterAdminUsername = strings.TrimSpace(req.ClusterAdminUsername)
+	req.AdminUsername = strings.TrimSpace(req.AdminUsername)
 	req.ClusterName = strings.TrimSpace(req.ClusterName)
 	req.PrimaryIP = strings.TrimSpace(req.PrimaryIP)
 	req.NewUser = strings.TrimSpace(req.NewUser)
@@ -24,14 +24,14 @@ func ValidateDeployRequest(req *DeployRequest) error {
 	if req.ClusterName == "" {
 		req.ClusterName = "prodCluster"
 	}
-	if req.ClusterAdminUsername == "" {
-		req.ClusterAdminUsername = "clusteradmin"
+	if req.AdminUsername == "" {
+		req.AdminUsername = "clusteradmin"
 	}
 	if len(req.StandbyIPs) == 0 && len(req.SecondaryIPs) > 0 {
 		req.StandbyIPs = req.SecondaryIPs
 	}
 
-	if !userPattern.MatchString(req.ClusterAdminUsername) {
+	if !userPattern.MatchString(req.AdminUsername) {
 		return fmt.Errorf("cluster_admin_username must match %s", userPattern.String())
 	}
 	if !namePattern.MatchString(req.ClusterName) {
@@ -98,7 +98,7 @@ func ValidateDeployRequest(req *DeployRequest) error {
 func ValidateResumeSecrets(req ResumeRequest) (SecretInput, error) {
 	secret := SecretInput{
 		RootPassword:         strings.TrimSpace(req.RootPassword),
-		ClusterAdminPassword: strings.TrimSpace(req.ClusterAdminPassword),
+		AdminPassword: strings.TrimSpace(req.AdminPassword),
 		NewUserPassword:      strings.TrimSpace(req.NewUserPassword),
 	}
 	return secret, nil
@@ -107,7 +107,7 @@ func ValidateResumeSecrets(req ResumeRequest) (SecretInput, error) {
 func ValidateRollbackSecrets(req RollbackRequest) (SecretInput, error) {
 	secret := SecretInput{
 		RootPassword:         strings.TrimSpace(req.RootPassword),
-		ClusterAdminPassword: strings.TrimSpace(req.ClusterAdminPassword),
+		AdminPassword: strings.TrimSpace(req.AdminPassword),
 	}
 	return secret, nil
 }

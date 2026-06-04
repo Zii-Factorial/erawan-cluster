@@ -18,6 +18,7 @@ type DeployRequest struct {
 	StandbyIPs         []string `json:"standby_ips"`
 	PostgresPassword   string   `json:"postgres_password"`
 	ReplicatorPassword string   `json:"replicator_password"`
+	AdminUsername      string   `json:"admin_username"`
 	AdminPassword      string   `json:"admin_password"`
 	NewUser            string   `json:"new_user"`
 	NewUserPassword    string   `json:"new_user_password"`
@@ -62,6 +63,7 @@ type StoredSpec struct {
 	ClusterName        string   `json:"cluster_name"`
 	PrimaryIP          string   `json:"primary_ip"`
 	StandbyIPs         []string `json:"standby_ips"`
+	AdminUsername      string   `json:"admin_username"`
 	NewUser            string   `json:"new_user"`
 	NewUserSSLRequired bool     `json:"new_user_ssl_required"`
 	NewDB              string   `json:"new_db"`

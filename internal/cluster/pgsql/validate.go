@@ -23,6 +23,9 @@ func ValidateDeployRequest(req *DeployRequest) error {
 	if req.ClusterName == "" {
 		req.ClusterName = "postgres-cluster"
 	}
+	if req.AdminUsername == "" {
+		req.AdminUsername = "admin"
+	}
 	if !namePattern.MatchString(req.ClusterName) {
 		return fmt.Errorf("cluster_name must match %s", namePattern.String())
 	}

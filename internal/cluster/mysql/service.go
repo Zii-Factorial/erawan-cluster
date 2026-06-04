@@ -80,7 +80,7 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 		UpdatedAt:         time.Now().UTC(),
 		LastCompletedStep: -1,
 		Request: StoredSpec{
-			ClusterAdminUsername: req.ClusterAdminUsername,
+			AdminUsername: req.AdminUsername,
 			ClusterName:          req.ClusterName,
 			PrimaryIP:            req.PrimaryIP,
 			StandbyIPs:           req.StandbyIPs,
@@ -105,10 +105,10 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 
 	secrets := SecretInput{
 		RootPassword:         req.RootPassword,
-		ClusterAdminPassword: stringOrGenerated(req.ClusterAdminPassword),
+		AdminPassword: stringOrGenerated(req.AdminPassword),
 		NewUserPassword:      req.NewUserPassword,
 	}
-	if err := s.store.SaveSecret(job.ID, StoredSecret{ClusterAdminPassword: secrets.ClusterAdminPassword}); err != nil {
+	if err := s.store.SaveSecret(job.ID, StoredSecret{AdminPassword: secrets.AdminPassword}); err != nil {
 		return nil, err
 	}
 
@@ -157,13 +157,13 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 	if job.Request.NewUser != "" && secret.NewUserPassword == "" {
 		return nil, fmt.Errorf("new_user_password is required to resume job %s", jobID)
 	}
-	if secret.ClusterAdminPassword == "" {
+	if secret.AdminPassword == "" {
 		storedSecret, err := s.store.LoadSecret(job.ID)
-		if err == nil && storedSecret.ClusterAdminPassword != "" {
-			secret.ClusterAdminPassword = storedSecret.ClusterAdminPassword
+		if err == nil && storedSecret.AdminPassword != "" {
+			secret.AdminPassword = storedSecret.AdminPassword
 		} else {
-			secret.ClusterAdminPassword = stringOrGenerated("")
-			if saveErr := s.store.SaveSecret(job.ID, StoredSecret{ClusterAdminPassword: secret.ClusterAdminPassword}); saveErr != nil {
+			secret.AdminPassword = stringOrGenerated("")
+			if saveErr := s.store.SaveSecret(job.ID, StoredSecret{AdminPassword: secret.AdminPassword}); saveErr != nil {
 				return nil, saveErr
 			}
 		}
@@ -198,8 +198,8 @@ func (s *Service) Rollback(ctx context.Context, jobID string, req RollbackReques
 	if err := s.hydrateStoredSSHConfig(job); err != nil {
 		return nil, err
 	}
-	if storedSecret, err := s.store.LoadSecret(job.ID); err == nil && storedSecret.ClusterAdminPassword != "" {
-		secret.ClusterAdminPassword = storedSecret.ClusterAdminPassword
+	if storedSecret, err := s.store.LoadSecret(job.ID); err == nil && storedSecret.AdminPassword != "" {
+		secret.AdminPassword = storedSecret.AdminPassword
 	}
 
 	timeout := time.Duration(job.Request.StepTimeoutSeconds) * time.Second

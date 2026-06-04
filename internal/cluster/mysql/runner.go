@@ -110,8 +110,8 @@ func (r *Runner) run(ctx context.Context, cfg runConfig, playbook string) (resul
 	}
 	extraVars := map[string]any{
 		"cluster_name":           cfg.spec.ClusterName,
-		"cluster_admin_username": cfg.spec.ClusterAdminUsername,
-		"cluster_admin_password": cfg.secret.ClusterAdminPassword,
+		"cluster_admin_username": cfg.spec.AdminUsername,
+		"cluster_admin_password": cfg.secret.AdminPassword,
 		"primary_ip":             cfg.spec.PrimaryIP,
 		"standby_ips":            cfg.spec.StandbyIPs,
 		"new_user":               cfg.spec.NewUser,

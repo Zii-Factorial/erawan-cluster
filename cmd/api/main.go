@@ -39,7 +39,7 @@ func main() {
 	}
 
 	stateDir := env.GetString("CLUSTER_STATE_DIR", "/var/lib/erawan-cluster/cluster/jobs")
-	store, err := mysqlcluster.NewStore(stateDir)
+	store, err := mysqlcluster.NewStore(env.GetString("MYSQL_CLUSTER_STATE_DIR", filepath.Join(stateDir, "mysql")))
 	if err != nil {
 		log.Fatalf("init mysql cluster store: %v", err)
 	}
