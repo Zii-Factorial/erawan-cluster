@@ -118,8 +118,9 @@ func (r *Runner) run(ctx context.Context, cfg runConfig, playbook string) (resul
 		"new_user_password":      cfg.secret.NewUserPassword,
 		"new_user_ssl_required":  cfg.spec.NewUserSSLRequired,
 		"new_db":                 cfg.spec.NewDB,
-		"mysql_port":             cfg.spec.MySQLPort,
-		"bootstrap_router":       cfg.spec.BootstrapRouter,
+		"mysql_port":                  cfg.spec.MySQLPort,
+		"erawan_mysql_major_version": cfg.spec.MySQLVersion,
+		"bootstrap_router":            cfg.spec.BootstrapRouter,
 		"router_service_name":    "mysqlrouter-" + cfg.spec.ClusterName,
 		"step_timeout_seconds":   stepTimeout,
 	}

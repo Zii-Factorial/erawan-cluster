@@ -85,6 +85,15 @@ func ValidateDeployRequest(req *DeployRequest) error {
 	if req.MySQLPort < 1 || req.MySQLPort > 65535 {
 		return fmt.Errorf("mysql_port must be between 1 and 65535")
 	}
+	if req.MySQLVersion == 0 {
+		req.MySQLVersion = 8
+	}
+	switch req.MySQLVersion {
+	case 7, 8, 9: // supported: 7=5.7, 8=8.x, 9=9.x
+	default:
+		return fmt.Errorf("mysql_version %d is not supported; valid: 7, 8, 9", req.MySQLVersion)
+	}
+
 	if req.StepTimeoutSeconds == 0 {
 		req.StepTimeoutSeconds = 900
 	}

@@ -58,6 +58,7 @@ func (app *application) mount() *chi.Mux {
 
 	r.Route("/cluster/mysql", func(r chi.Router) {
 		r.Post("/deploy", app.deployMySQLClusterHandler)
+		r.Post("/metrics", app.mysqlMetricsHandler)
 		r.Get("/jobs", app.listMySQLClusterJobsHandler)
 		r.Get("/jobs/{jobID}", app.getMySQLClusterJobHandler)
 		r.Post("/jobs/{jobID}/resume", app.resumeMySQLClusterJobHandler)

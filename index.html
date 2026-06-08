@@ -417,6 +417,7 @@ POST   /haproxy/reload</pre>
           <div class="reveal rounded-[30px] border border-slate-200 bg-white p-6 shadow-card transition-colors duration-300 dark:border-white/10 dark:bg-white/5">
             <h3 class="text-xl font-bold text-ink dark:text-white">MySQL Cluster</h3>
             <pre class="mt-5 overflow-x-auto rounded-2xl bg-slate-950 p-4 font-mono text-xs leading-7 text-slate-100">POST /cluster/mysql/deploy
+POST /cluster/mysql/metrics
 GET  /cluster/mysql/jobs
 GET  /cluster/mysql/jobs/{jobID}
 POST /cluster/mysql/jobs/{jobID}/resume
@@ -494,6 +495,7 @@ POST /cluster/pgsql/jobs/{jobID}/resume</pre>
   "bootstrap_router": true,
   "ssh_port": 22,
   "mysql_port": 3306,
+  "mysql_version": 8,
   "step_timeout_seconds": 900
 }</pre>
               <pre id="pgsql-payload" class="payload-panel hidden overflow-x-auto p-6 font-mono text-sm leading-7 text-slate-100">{

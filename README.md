@@ -70,6 +70,7 @@
 | `GET` | `/haproxy/configs/download` | Download all tenant configs as zip |
 | `POST` | `/haproxy/reload` | Reload HAProxy |
 | `POST` | `/cluster/mysql/deploy` | Deploy MySQL InnoDB Cluster |
+| `POST` | `/cluster/mysql/metrics` | Collect live cluster metrics (7 categories) |
 | `GET` | `/cluster/mysql/jobs` | List MySQL deploy jobs |
 | `GET` | `/cluster/mysql/jobs/{jobID}` | Get MySQL job details |
 | `POST` | `/cluster/mysql/jobs/{jobID}/resume` | Resume a failed MySQL job |
