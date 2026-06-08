@@ -57,14 +57,14 @@
         pg_hba:
       {% if (new_user | default('') | string | length) > 0 and (new_db | default('') | string | length) > 0 %}
       {% if new_user_ssl_required | default(true) | bool %}
-          - hostssl {{ new_db }} {{ new_user }} 0.0.0.0/0 md5
+          - hostssl {{ new_db }} {{ new_user }} 0.0.0.0/0 scram-sha-256
           - hostnossl {{ new_db }} {{ new_user }} 0.0.0.0/0 reject
       {% else %}
-          - host {{ new_db }} {{ new_user }} 0.0.0.0/0 md5
+          - host {{ new_db }} {{ new_user }} 0.0.0.0/0 scram-sha-256
       {% endif %}
       {% endif %}
-          - host replication {{ replication_user }} 0.0.0.0/0 md5
-          - host all all 0.0.0.0/0 md5
+          - host replication {{ replication_user }} 0.0.0.0/0 scram-sha-256
+          - host all all 0.0.0.0/0 scram-sha-256
         users:
           {{ patroni_admin_user }}:
             password: {{ patroni_admin_password | to_json }}

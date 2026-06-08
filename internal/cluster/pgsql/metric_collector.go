@@ -671,7 +671,7 @@ func collectPerformance(ctx context.Context, db *sql.DB) (*PerformanceMetric, er
 		    sum(temp_bytes)                                    AS temp_bytes,
 		    min(stats_reset)                                   AS stats_reset
 		FROM pg_stat_database
-		WHERE datistemplate = false`
+		WHERE datname NOT IN ('template0', 'template1')`
 
 	const qBGW = `
 		SELECT
@@ -820,12 +820,12 @@ func collectQuery(ctx context.Context, db *sql.DB, limit int, from, to *time.Tim
 		WHERE wait_event_type='Lock' AND pid<>pg_backend_pid()`).Scan(&m.LockWaitCount)
 
 	_ = db.QueryRowContext(ctx, `
-		SELECT coalesce(sum(deadlocks),0) FROM pg_stat_database WHERE datistemplate=false`).Scan(&m.DeadlockCount)
+		SELECT coalesce(sum(deadlocks),0) FROM pg_stat_database WHERE datname NOT IN ('template0', 'template1')`).Scan(&m.DeadlockCount)
 
 	// --- Row throughput ---
 	_ = db.QueryRowContext(ctx, `
 		SELECT coalesce(sum(tup_returned),0), coalesce(sum(tup_fetched),0)
-		FROM pg_stat_database WHERE datistemplate=false`).
+		FROM pg_stat_database WHERE datname NOT IN ('template0', 'template1')`).
 		Scan(&m.RowsReturned, &m.RowsFetched)
 
 	// --- Scan efficiency ---
