@@ -26,6 +26,7 @@ type DeployRequest struct {
 	NewDB              string   `json:"new_db"`
 	SSHPort            int      `json:"ssh_port"`
 	PostgresPort       int      `json:"postgres_port"`
+	PostgresVersion    int      `json:"postgres_version"`    // major version; default 16
 	StepTimeoutSeconds int      `json:"step_timeout_seconds"`
 }
 
@@ -71,6 +72,7 @@ type StoredSpec struct {
 	SSHPrivateKeyPath  string   `json:"ssh_private_key_path,omitempty"`
 	SSHPort            int      `json:"ssh_port"`
 	PostgresPort       int      `json:"postgres_port"`
+	PostgresVersion    int      `json:"postgres_version"`
 	StepTimeoutSeconds int      `json:"step_timeout_seconds"`
 }
 

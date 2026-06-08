@@ -115,6 +115,7 @@ func (r *Runner) run(ctx context.Context, cfg runConfig) (result StepResult) {
 		"new_user_ssl_required":       cfg.spec.NewUserSSLRequired,
 		"new_db":                      cfg.spec.NewDB,
 		"postgres_port":               cfg.spec.PostgresPort,
+		"erawan_pg_major_version":     cfg.spec.PostgresVersion,
 		"postgresql_cluster_name":     defaultPostgreSQLCluster,
 		"patroni_scope":               cfg.spec.ClusterName,
 		"patroni_namespace":           "/db/",

@@ -90,6 +90,7 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 			SSHPrivateKeyPath:  s.sshKeyPath,
 			SSHPort:            req.SSHPort,
 			PostgresPort:       req.PostgresPort,
+			PostgresVersion:    req.PostgresVersion,
 			StepTimeoutSeconds: req.StepTimeoutSeconds,
 		},
 		Steps: make([]StepResult, 0, len(s.steps)),

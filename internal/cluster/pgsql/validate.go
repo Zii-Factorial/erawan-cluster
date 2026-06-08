@@ -78,6 +78,15 @@ func ValidateDeployRequest(req *DeployRequest) error {
 	if req.PostgresPort < 1 || req.PostgresPort > 65535 {
 		return fmt.Errorf("postgres_port must be between 1 and 65535")
 	}
+	if req.PostgresVersion == 0 {
+		req.PostgresVersion = 16
+	}
+	switch req.PostgresVersion {
+	case 14, 15, 16, 17, 18:
+		// supported
+	default:
+		return fmt.Errorf("postgres_version %d is not supported; valid: 14, 15, 16, 17, 18", req.PostgresVersion)
+	}
 	if req.StepTimeoutSeconds == 0 {
 		req.StepTimeoutSeconds = 900
 	}

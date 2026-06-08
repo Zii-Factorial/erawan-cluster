@@ -42,6 +42,8 @@
           loop_wait: 10
           retry_timeout: 10
           maximum_lag_on_failover: 1048576
+          synchronous_mode: true
+          synchronous_mode_strict: false
           postgresql:
             use_pg_rewind: true
             use_slots: true
@@ -51,10 +53,23 @@
               max_wal_senders: 10
               max_replication_slots: 10
               wal_log_hints: "on"
+              password_encryption: scram-sha-256
+              random_page_cost: 1.1
+              effective_io_concurrency: 200
+              bgwriter_lru_maxpages: 200
+              bgwriter_lru_multiplier: 4.0
+              bgwriter_delay: '100ms'
+              shared_preload_libraries: 'pg_stat_statements'
+              'pg_stat_statements.max': 10000
+              'pg_stat_statements.track': all
+              track_io_timing: "on"
         initdb:
           - encoding: UTF8
           - data-checksums
         pg_hba:
+          - local all postgres peer
+          - local all all peer
+          - local replication all peer
       {% if (new_user | default('') | string | length) > 0 and (new_db | default('') | string | length) > 0 %}
       {% if new_user_ssl_required | default(true) | bool %}
           - hostssl {{ new_db }} {{ new_user }} 0.0.0.0/0 scram-sha-256
@@ -65,6 +80,7 @@
       {% endif %}
           - host replication {{ replication_user }} 0.0.0.0/0 scram-sha-256
           - host all all 0.0.0.0/0 scram-sha-256
+          - host all all ::/0 scram-sha-256
         users:
           {{ patroni_admin_user }}:
             password: {{ patroni_admin_password | to_json }}

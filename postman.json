@@ -441,7 +441,7 @@
             "body": {
               "mode": "raw",
               "options": { "raw": { "language": "json" } },
-              "raw": "{\n  \"cluster_name\": \"{{CLUSTER_NAME}}\",\n  \"admin_username\": \"admin\",\n  \"admin_password\": \"\",\n  \"primary_ip\": \"{{PGSQL_PRIMARY_IP}}\",\n  \"standby_ips\": [],\n  \"new_user\": \"{{NEW_USER}}\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\",\n  \"new_user_ssl_required\": true,\n  \"new_db\": \"{{NEW_DB}}\",\n  \"ssh_port\": 22,\n  \"postgres_port\": 5432,\n  \"step_timeout_seconds\": 900\n}"
+              "raw": "{\n  \"cluster_name\": \"{{CLUSTER_NAME}}\",\n  \"admin_username\": \"admin\",\n  \"admin_password\": \"\",\n  \"primary_ip\": \"{{PGSQL_PRIMARY_IP}}\",\n  \"standby_ips\": [],\n  \"new_user\": \"{{NEW_USER}}\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\",\n  \"new_user_ssl_required\": true,\n  \"new_db\": \"{{NEW_DB}}\",\n  \"ssh_port\": 22,\n  \"postgres_port\": 5432,\n  \"postgres_version\": 16,\n  \"step_timeout_seconds\": 900\n}"
             },
             "description": "Starts a PostgreSQL/Patroni cluster deployment. Returns a job immediately (202 Accepted). Poll 'Get Job' to track progress.\n\nUse `standby_ips: []` for primary-only mode, or provide one or more standby IPs for HA mode.\n\nJOB_ID is auto-extracted from the response and stored as a collection variable.",
             "url": {
