@@ -111,7 +111,7 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 		AdminPassword: stringOrGenerated(req.AdminPassword),
 		NewUserPassword:      req.NewUserPassword,
 	}
-	if err := s.store.SaveSecret(job.ID, StoredSecret{AdminPassword: secrets.AdminPassword}); err != nil {
+	if err := s.store.SaveSecret(job.ID, StoredSecret{AdminUser: req.AdminUsername, AdminPassword: secrets.AdminPassword}); err != nil {
 		return nil, err
 	}
 

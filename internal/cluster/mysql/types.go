@@ -102,6 +102,7 @@ type SecretInput struct {
 }
 
 type StoredSecret struct {
+	AdminUser     string `json:"admin_user"`
 	AdminPassword string `json:"admin_password"`
 }
 

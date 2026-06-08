@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "0f487bb5-3f07-49a9-9b29-e468f795d8d5",
     "name": "Erawan Cluster API (Go)",
-    "description": "Postman collection for HAProxy, MySQL cluster, and PostgreSQL cluster endpoints.\n\n**Required variables \u2014 fill these in Collection > Variables before sending any request:**\n- `API_KEY` \u2014 sent as `X-API-Key` header on every request (collection auth)\n- `ENCRYPTION_KEY` \u2014 64-char hex string (AES-256-GCM). When set the pre-request script encrypts every request body and the test script decrypts every JSON response automatically. Generate with: `openssl rand -hex 32`\n\nLeave `ENCRYPTION_KEY` empty to send/receive plain JSON (development only).\n\n**Decrypted responses** are logged to the Postman console and stored in the `LAST_RESPONSE` collection variable for inspection.",
+    "description": "Postman collection for HAProxy, MySQL cluster, and PostgreSQL cluster endpoints.\n\n**Required variables — fill these in Collection > Variables before sending any request:**\n- `API_KEY` — sent as `X-API-Key` header on every request (collection auth)\n- `ENCRYPTION_KEY` — 64-char hex string (AES-256-GCM). When set the pre-request script encrypts every request body and the test script decrypts every JSON response automatically. Generate with: `openssl rand -hex 32`\n\nLeave `ENCRYPTION_KEY` empty to send/receive plain JSON (development only).\n\n**Decrypted responses** are logged to the Postman console and stored in the `LAST_RESPONSE` collection variable for inspection.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -39,7 +39,7 @@
     {
       "key": "API_KEY",
       "value": "",
-      "description": "[REQUIRED] API key \u2014 sent as X-API-Key header on every request"
+      "description": "[REQUIRED] API key — sent as X-API-Key header on every request"
     },
     {
       "key": "ENCRYPTION_KEY",
@@ -49,12 +49,12 @@
     {
       "key": "JOB_ID",
       "value": "",
-      "description": "Job ID \u2014 auto-filled from Deploy response, or copy manually from List Jobs"
+      "description": "Job ID — auto-filled from Deploy response, or copy manually from List Jobs"
     },
     {
       "key": "LAST_RESPONSE",
       "value": "",
-      "description": "Last decrypted JSON response \u2014 inspect after any request when ENCRYPTION_KEY is set"
+      "description": "Last decrypted JSON response — inspect after any request when ENCRYPTION_KEY is set"
     },
     {
       "key": "PRIMARY_IP",
@@ -99,7 +99,7 @@
     {
       "key": "PGSQL_PROXY_HOST",
       "value": "127.0.0.1",
-      "description": "HAProxy host for PostgreSQL \u2014 metrics connect here instead of directly to the primary"
+      "description": "HAProxy host for PostgreSQL — metrics connect here instead of directly to the primary"
     },
     {
       "key": "PGSQL_PROXY_PORT",
@@ -109,12 +109,12 @@
     {
       "key": "PGSQL_DB_USER",
       "value": "postgres",
-      "description": "PostgreSQL superuser \u2014 auto-filled from Deploy response"
+      "description": "PostgreSQL superuser — auto-filled from Deploy response"
     },
     {
       "key": "PGSQL_DB_PASSWORD",
       "value": "",
-      "description": "PostgreSQL superuser password \u2014 auto-filled from Deploy response secret"
+      "description": "PostgreSQL superuser password — auto-filled from Deploy response secret"
     },
     {
       "key": "PATRONI_ADMIN_PASSWORD",
@@ -148,13 +148,13 @@
       "script": {
         "type": "text/javascript",
         "exec": [
-          "// Request Encryption \u2014 AES-256-GCM",
+          "// Request Encryption — AES-256-GCM",
           "// Runs automatically for every request that has a raw JSON body.",
           "// Set ENCRYPTION_KEY (64 hex chars) to enable; leave empty for plain JSON.",
           "",
           "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
           "if (!encryptionKey || encryptionKey.trim() === '') {",
-          "    console.warn('[erawan] ENCRYPTION_KEY is not set \u2014 sending plain JSON (dev mode)');",
+          "    console.warn('[erawan] ENCRYPTION_KEY is not set — sending plain JSON (dev mode)');",
           "    return;",
           "}",
           "",
@@ -166,7 +166,7 @@
           "",
           "const keyHex = encryptionKey.trim();",
           "if (keyHex.length !== 64) {",
-          "    console.error('[erawan] ENCRYPTION_KEY must be 64 hex chars (32 bytes) \u2014 request NOT encrypted');",
+          "    console.error('[erawan] ENCRYPTION_KEY must be 64 hex chars (32 bytes) — request NOT encrypted');",
           "    return;",
           "}",
           "",
@@ -183,7 +183,7 @@
           "    payload.forEach(b => bin += String.fromCharCode(b));",
           "    const data = btoa(bin).replace(/\\+/g, '-').replace(/\\//g, '_');",
           "    pm.request.body.update(JSON.stringify({ data }));",
-          "    console.log('[erawan] request encrypted (' + plaintext.length + ' \u2192 ' + payload.length + ' bytes)');",
+          "    console.log('[erawan] request encrypted (' + plaintext.length + ' → ' + payload.length + ' bytes)');",
           "})()"
         ]
       }
@@ -193,7 +193,7 @@
       "script": {
         "type": "text/javascript",
         "exec": [
-          "// Response Decryption \u2014 AES-256-GCM",
+          "// Response Decryption — AES-256-GCM",
           "// Runs automatically after every response.",
           "// When ENCRYPTION_KEY is set the server returns {\"data\":\"<encrypted>\"};",
           "// this script decrypts it, logs to console, and stores in LAST_RESPONSE.",
@@ -205,7 +205,7 @@
           "",
           "const ct = pm.response.headers.get('Content-Type') || '';",
           "if (!ct.includes('application/json')) {",
-          "    // Binary response (e.g. zip download) \u2014 nothing to decrypt",
+          "    // Binary response (e.g. zip download) — nothing to decrypt",
           "    return;",
           "}",
           "",
@@ -219,7 +219,7 @@
           "    try {",
           "        const keyHex = encryptionKey.trim();",
           "        if (keyHex.length !== 64) {",
-          "            console.error('[erawan] ENCRYPTION_KEY must be 64 hex chars \u2014 response NOT decrypted');",
+          "            console.error('[erawan] ENCRYPTION_KEY must be 64 hex chars — response NOT decrypted');",
           "            return;",
           "        }",
           "        const keyBytes = new Uint8Array(keyHex.match(/.{2}/g).map(b => parseInt(b, 16)));",
@@ -418,7 +418,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "description": "Downloads all tenant HAProxy .cfg files packaged as a single zip archive.\n\nThe response is binary (application/zip) \u2014 use 'Save Response' in Postman to save the file. This endpoint is exempt from response encryption even when ENCRYPTION_KEY is set.",
+            "description": "Downloads all tenant HAProxy .cfg files packaged as a single zip archive.\n\nThe response is binary (application/zip) — use 'Save Response' in Postman to save the file. This endpoint is exempt from response encryption even when ENCRYPTION_KEY is set.",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/configs/download",
               "protocol": "http",
@@ -466,14 +466,27 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "// Auto-extract JOB_ID from plain-JSON deploy response (no encryption)",
+                  "// Auto-extract JOB_ID and credentials from deploy response (no encryption)",
                   "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
                   "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
                   "try {",
                   "    const body = pm.response.json();",
-                  "    if (body && body.data && body.data.id) {",
-                  "        pm.collectionVariables.set('JOB_ID', body.data.id);",
-                  "        console.log('[erawan] JOB_ID set to:', body.data.id);",
+                  "    if (body && body.data) {",
+                  "        if (body.data.id) {",
+                  "            pm.collectionVariables.set('JOB_ID', body.data.id);",
+                  "            console.log('[erawan] JOB_ID set to:', body.data.id);",
+                  "        }",
+                  "        if (body.data.secret) {",
+                  "            const s = body.data.secret;",
+                  "            if (s.admin_user) {",
+                  "                pm.collectionVariables.set('MYSQL_DB_USER', s.admin_user);",
+                  "                console.log('[erawan] MYSQL_DB_USER set to:', s.admin_user);",
+                  "            }",
+                  "            if (s.admin_password) {",
+                  "                pm.collectionVariables.set('MYSQL_DB_PASSWORD', s.admin_password);",
+                  "                console.log('[erawan] MYSQL_DB_PASSWORD captured');",
+                  "            }",
+                  "        }",
                   "    }",
                   "} catch(e) {}"
                 ]
@@ -543,7 +556,7 @@
                 "metrics"
               ]
             },
-            "description": "Collects live metrics from a running MySQL InnoDB Cluster.\n\n**Required:** `host`, `user`\n\n**Connection routing:**\n- `host` + `port` \u2014 HAProxy or MySQL Router address; all queries go through here\n\n**Optional:** `port` (default 3306), `password`, `database` (default `information_schema`), `ssl_mode` (`disable`|`require`, default `disable`), `connect_timeout` (seconds, default 10), `limit` (top-N for slow queries/digest lists, default 20), `from`/`to` (ISO 8601, filter slow queries)\n\n**`categories`** \u2014 empty array returns all 7; pick any subset:\n- `cluster` \u2014 Group Replication membership, primary election, node states\n- `uptime` \u2014 MySQL server process uptime\n- `connections` \u2014 active/sleeping threads, utilisation, per-database breakdown\n- `replication` \u2014 GR member certification stats and applier worker lag\n- `performance` \u2014 InnoDB buffer-pool hit ratio, QPS/TPS, temp-table and sort pressure\n- `query` \u2014 Digest stats from performance_schema, slow queries, full-scan digests\n- `maintenance` \u2014 InnoDB purge lag, table fragmentation, metadata locks"
+            "description": "Collects live metrics from a running MySQL InnoDB Cluster.\n\n**Required:** `host`, `user`\n\n**Connection routing:**\n- `host` + `port` — HAProxy or MySQL Router address; all queries go through here\n\n**Optional:** `port` (default 3306), `password`, `database` (default `information_schema`), `ssl_mode` (`disable`|`require`, default `disable`), `connect_timeout` (seconds, default 10), `limit` (top-N for slow queries/digest lists, default 20), `from`/`to` (ISO 8601, filter slow queries)\n\n**`categories`** — empty array returns all 7; pick any subset:\n- `cluster` — Group Replication membership, primary election, node states\n- `uptime` — MySQL server process uptime\n- `connections` — active/sleeping threads, utilisation, per-database breakdown\n- `replication` — GR member certification stats and applier worker lag\n- `performance` — InnoDB buffer-pool hit ratio, QPS/TPS, temp-table and sort pressure\n- `query` — Digest stats from performance_schema, slow queries, full-scan digests\n- `maintenance` — InnoDB purge lag, table fragmentation, metadata locks"
           },
           "response": []
         },
@@ -613,7 +626,7 @@
               },
               "raw": "{\n  \"admin_password\": \"\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\"\n}"
             },
-            "description": "Resumes a failed MySQL cluster job from the last completed step.\n\n- `admin_password` \u2014 leave empty to reuse the password stored from the original deploy\n- `new_user_password` \u2014 required when the job has a `new_user`",
+            "description": "Resumes a failed MySQL cluster job from the last completed step.\n\n- `admin_password` — leave empty to reuse the password stored from the original deploy\n- `new_user_password` — required when the job has a `new_user`",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/jobs/{{JOB_ID}}/resume",
               "protocol": "http",
@@ -650,7 +663,7 @@
               },
               "raw": "{\n  \"admin_password\": \"\"\n}"
             },
-            "description": "Runs the rollback playbook to undo a failed MySQL cluster deployment.\n\n- `admin_password` \u2014 leave empty to reuse the password stored from the original deploy",
+            "description": "Runs the rollback playbook to undo a failed MySQL cluster deployment.\n\n- `admin_password` — leave empty to reuse the password stored from the original deploy",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/jobs/{{JOB_ID}}/rollback",
               "protocol": "http",
@@ -757,7 +770,7 @@
               },
               "raw": "{\n  \"host\": \"{{PGSQL_PROXY_HOST}}\",\n  \"port\": {{PGSQL_PROXY_PORT}},\n  \"node_ips\": [\"{{PGSQL_PRIMARY_IP}}\", \"{{PGSQL_STANDBY_IP_1}}\", \"{{PGSQL_STANDBY_IP_2}}\"],\n  \"user\": \"{{PGSQL_DB_USER}}\",\n  \"password\": \"{{PGSQL_DB_PASSWORD}}\",\n  \"database\": \"postgres\",\n  \"ssl_mode\": \"require\",\n  \"connect_timeout\": 10,\n  \"patroni_port\": 8008,\n  \"categories\": [],\n  \"limit\": 20\n}"
             },
-            "description": "Collects live metrics from a running PostgreSQL/Patroni cluster.\n\n**Required:** `host`, `user`\n\n**Connection routing:**\n- `host` + `port` \u2014 HAProxy address; all PostgreSQL queries go through here\n- `node_ips` \u2014 list of all cluster member IPs; the collector calls `GET /leader` on each and auto-discovers the current primary for Patroni REST (`cluster`, `failover` categories). Required only when collecting those categories.\n\n**Optional:** `port` (default 5432), `password`, `database` (default `postgres`), `ssl_mode` (`disable`|`require`, default `disable`), `connect_timeout` (seconds, default 10), `patroni_port` (default 8008), `limit` (top-N for slow queries/latency, default 20), `from`/`to` (ISO 8601, filter failover events and slow queries)\n\n**`categories`** \u2014 empty array returns all; pick any subset:\n- `cluster` \u2014 Patroni HA state, DCS health, node roles, TTL/loop_wait\n- `uptime` \u2014 PostgreSQL process uptime\n- `failover` \u2014 Patroni timeline/failover history (supports `from`/`to` filter)\n- `connections` \u2014 active, idle, idle-in-transaction, lock-waiters, wait-event breakdown\n- `replication` \u2014 streaming lag (LSN pipeline), standby count, WAL config, slot lag\n- `performance` \u2014 TPS, cache hit ratio, temp files, checkpoint pressure, bgwriter stats\n- `query` \u2014 avg/p95/p99 latency, slow queries, lock/deadlock counts, scan efficiency\n- `maintenance` \u2014 autovacuum workers, XID wraparound age, logical slot lag, pg_locks",
+            "description": "Collects live metrics from a running PostgreSQL/Patroni cluster.\n\n**Required:** `host`, `user`\n\n**Connection routing:**\n- `host` + `port` — HAProxy address; all PostgreSQL queries go through here\n- `node_ips` — list of all cluster member IPs; the collector calls `GET /leader` on each and auto-discovers the current primary for Patroni REST (`cluster`, `failover` categories). Required only when collecting those categories.\n\n**Optional:** `port` (default 5432), `password`, `database` (default `postgres`), `ssl_mode` (`disable`|`require`, default `disable`), `connect_timeout` (seconds, default 10), `patroni_port` (default 8008), `limit` (top-N for slow queries/latency, default 20), `from`/`to` (ISO 8601, filter failover events and slow queries)\n\n**`categories`** — empty array returns all; pick any subset:\n- `cluster` — Patroni HA state, DCS health, node roles, TTL/loop_wait\n- `uptime` — PostgreSQL process uptime\n- `failover` — Patroni timeline/failover history (supports `from`/`to` filter)\n- `connections` — active, idle, idle-in-transaction, lock-waiters, wait-event breakdown\n- `replication` — streaming lag (LSN pipeline), standby count, WAL config, slot lag\n- `performance` — TPS, cache hit ratio, temp files, checkpoint pressure, bgwriter stats\n- `query` — avg/p95/p99 latency, slow queries, lock/deadlock counts, scan efficiency\n- `maintenance` — autovacuum workers, XID wraparound age, logical slot lag, pg_locks",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/metrics",
               "protocol": "http",
@@ -839,7 +852,7 @@
               },
               "raw": "{\n  \"admin_password\": \"\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\"\n}"
             },
-            "description": "Resumes a failed PostgreSQL cluster job from the last completed step.\n\n- `admin_password` \u2014 leave empty to reuse the password stored from the original deploy\n- `new_user_password` \u2014 required when the job has a `new_user`",
+            "description": "Resumes a failed PostgreSQL cluster job from the last completed step.\n\n- `admin_password` — leave empty to reuse the password stored from the original deploy\n- `new_user_password` — required when the job has a `new_user`",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/jobs/{{JOB_ID}}/resume",
               "protocol": "http",
