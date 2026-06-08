@@ -75,10 +75,11 @@ type MetricRequest struct {
 	SSLMode        string `json:"ssl_mode"`        // "disable" | "require"; default "disable"
 	ConnectTimeout int    `json:"connect_timeout"` // seconds; default 10
 
-	// NodeHost is the direct IP/hostname of the primary PostgreSQL node.
-	// Used for Patroni REST (cluster, failover categories).
-	// When omitted, Host is used — set this whenever Host points to a proxy.
-	NodeHost string `json:"node_host"`
+	// NodeIPs is the list of all cluster member IPs/hostnames.
+	// Used to auto-discover the Patroni leader for REST calls (cluster, failover categories).
+	// The collector calls GET /leader on each IP and uses the first that responds 200.
+	// When omitted, cluster and failover categories are skipped.
+	NodeIPs []string `json:"node_ips"`
 
 	// Patroni REST
 	PatroniPort int `json:"patroni_port"` // default 8008

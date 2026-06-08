@@ -173,13 +173,34 @@ func resolvePort(port, def int) int {
 	return port
 }
 
-// nodeHost returns the direct node address for Patroni REST calls.
-// Falls back to req.Host when NodeHost is not set (no proxy in use).
-func nodeHost(req MetricRequest) string {
-	if h := strings.TrimSpace(req.NodeHost); h != "" {
-		return h
+// discoverLeader probes each node in req.NodeIPs and returns the IP of the
+// node that responds 200 to GET /leader (i.e. the current Patroni primary).
+// Returns an error if no node responds as leader.
+func (c *Collector) discoverLeader(ctx context.Context, req MetricRequest) (string, error) {
+	patroniPort := resolvePort(req.PatroniPort, 8008)
+	if len(req.NodeIPs) == 0 {
+		return "", fmt.Errorf("node_ips is required for cluster/failover metrics — provide the IPs of all cluster members")
 	}
-	return req.Host
+	for _, ip := range req.NodeIPs {
+		ip = strings.TrimSpace(ip)
+		if ip == "" {
+			continue
+		}
+		url := fmt.Sprintf("http://%s:%d/leader", ip, patroniPort)
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			continue
+		}
+		resp, err := c.httpClient.Do(httpReq)
+		if err != nil {
+			continue
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			return ip, nil
+		}
+	}
+	return "", fmt.Errorf("no Patroni leader found among node_ips %v (port %d) — cluster may be unhealthy", req.NodeIPs, patroniPort)
 }
 
 // requiresNoDB returns true for categories that use Patroni REST only (no DB connection needed).
@@ -302,14 +323,15 @@ func (c *Collector) patroniGETArray(ctx context.Context, rawURL string) ([]any, 
 // =============================================================================
 
 func (c *Collector) collectCluster(ctx context.Context, req MetricRequest) (*ClusterMetric, error) {
+	leaderIP, err := c.discoverLeader(ctx, req)
+	if err != nil {
+		return nil, err
+	}
 	patroniPort := resolvePort(req.PatroniPort, 8008)
-	base := fmt.Sprintf("http://%s:%d", nodeHost(req), patroniPort)
+	base := fmt.Sprintf("http://%s:%d", leaderIP, patroniPort)
 
 	nodeState, err := c.patroniGET(ctx, base+"/")
 	if err != nil {
-		if strings.TrimSpace(req.NodeHost) == "" {
-			return nil, fmt.Errorf("patroni node state: %w (hint: set node_host to the direct node IP — host points to %s which may be a proxy)", err, req.Host)
-		}
 		return nil, fmt.Errorf("patroni node state: %w", err)
 	}
 	clusterState, err := c.patroniGET(ctx, base+"/cluster")
@@ -388,14 +410,15 @@ func collectUptime(ctx context.Context, db *sql.DB) (*UptimeMetric, error) {
 // =============================================================================
 
 func (c *Collector) collectFailover(ctx context.Context, req MetricRequest) (*FailoverMetric, error) {
+	leaderIP, err := c.discoverLeader(ctx, req)
+	if err != nil {
+		return nil, err
+	}
 	patroniPort := resolvePort(req.PatroniPort, 8008)
-	base := fmt.Sprintf("http://%s:%d", nodeHost(req), patroniPort)
+	base := fmt.Sprintf("http://%s:%d", leaderIP, patroniPort)
 
 	nodeState, err := c.patroniGET(ctx, base+"/")
 	if err != nil {
-		if strings.TrimSpace(req.NodeHost) == "" {
-			return nil, fmt.Errorf("patroni node state: %w (hint: set node_host to the direct node IP — host points to %s which may be a proxy)", err, req.Host)
-		}
 		return nil, fmt.Errorf("patroni node state: %w", err)
 	}
 	rawHistory, err := c.patroniGETArray(ctx, base+"/history")
