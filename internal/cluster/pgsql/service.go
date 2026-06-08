@@ -12,6 +12,7 @@ type Service struct {
 	ctx           context.Context
 	store         *Store
 	runner        *Runner
+	collector     *Collector
 	steps         []step
 	sshUser       string
 	sshKeyPath    string
@@ -27,9 +28,10 @@ type step struct {
 
 func NewService(store *Store, runner *Runner) *Service {
 	svc := &Service{
-		ctx:    context.Background(),
-		store:  store,
-		runner: runner,
+		ctx:       context.Background(),
+		store:     store,
+		runner:    runner,
+		collector: NewCollector(),
 		steps: []step{
 			{Name: "preflight", Tag: "preflight"},
 			{Name: "base_config", Tag: "base_config"},
@@ -58,6 +60,7 @@ func (s *Service) SetSSHConfig(user, privateKeyPath string) error {
 	}
 	s.sshUser = normalizedUser
 	s.sshKeyPath = normalizedKeyPath
+	s.collector.SetSSHConfig(normalizedUser, normalizedKeyPath)
 	return nil
 }
 
@@ -305,6 +308,10 @@ func (s *Service) runDeploy(ctx context.Context, cfg runConfig) StepResult {
 		}
 	}
 	return s.runDeployStep(ctx, cfg)
+}
+
+func (s *Service) CollectMetrics(ctx context.Context, req MetricRequest) MetricResponse {
+	return s.collector.Collect(ctx, req)
 }
 
 func shouldSkipStep(st step, spec StoredSpec) (string, bool) {
