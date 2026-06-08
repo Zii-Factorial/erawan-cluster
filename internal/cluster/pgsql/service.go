@@ -60,7 +60,6 @@ func (s *Service) SetSSHConfig(user, privateKeyPath string) error {
 	}
 	s.sshUser = normalizedUser
 	s.sshKeyPath = normalizedKeyPath
-	s.collector.SetSSHConfig(normalizedUser, normalizedKeyPath)
 	return nil
 }
 
