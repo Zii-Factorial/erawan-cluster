@@ -43,11 +43,42 @@
 - Automatic leader election and replica bootstrap
 - `pg_rewind`-based recovery support for diverged replicas
 - Job-based rollout with verification via Patroni REST API
+- Multi-version support: PostgreSQL 14, 15, 16 (default), 17, 18
+- DCS-managed synchronous replication (`synchronous_mode: true`)
+- `scram-sha-256` password encryption enforced cluster-wide
+- `pg_stat_statements` enabled by default for query telemetry
+- Cluster credentials returned in deploy response and stored per-job
+- Live metrics collection via `POST /cluster/pgsql/metrics` (8 categories)
 
 ### HAProxy (Optional)
 - Tenant-based HAProxy config generation and hot reload
 - Multi-tenant frontend/backend config per port
 - No HAProxy restart required — live reload only
+
+---
+
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Health check |
+| `GET` | `/docs` | API documentation page |
+| `POST` | `/haproxy/config/mysql` | Create MySQL HAProxy frontend/backend |
+| `POST` | `/haproxy/config/pgsql` | Create PostgreSQL HAProxy frontend/backend |
+| `DELETE` | `/haproxy/config` | Remove a HAProxy tenant config |
+| `GET` | `/haproxy/configs` | List all tenant configs |
+| `GET` | `/haproxy/configs/download` | Download all tenant configs as zip |
+| `POST` | `/haproxy/reload` | Reload HAProxy |
+| `POST` | `/cluster/mysql/deploy` | Deploy MySQL InnoDB Cluster |
+| `GET` | `/cluster/mysql/jobs` | List MySQL deploy jobs |
+| `GET` | `/cluster/mysql/jobs/{jobID}` | Get MySQL job details |
+| `POST` | `/cluster/mysql/jobs/{jobID}/resume` | Resume a failed MySQL job |
+| `POST` | `/cluster/mysql/jobs/{jobID}/rollback` | Roll back a MySQL cluster |
+| `POST` | `/cluster/pgsql/deploy` | Deploy PostgreSQL Patroni cluster |
+| `POST` | `/cluster/pgsql/metrics` | Collect live cluster metrics (8 categories) |
+| `GET` | `/cluster/pgsql/jobs` | List PostgreSQL deploy jobs |
+| `GET` | `/cluster/pgsql/jobs/{jobID}` | Get PostgreSQL job details |
+| `POST` | `/cluster/pgsql/jobs/{jobID}/resume` | Resume a failed PostgreSQL job |
 
 ---
 

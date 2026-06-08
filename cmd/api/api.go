@@ -66,6 +66,7 @@ func (app *application) mount() *chi.Mux {
 
 	r.Route("/cluster/pgsql", func(r chi.Router) {
 		r.Post("/deploy", app.deployPGSQLClusterHandler)
+		r.Post("/metrics", app.pgsqlMetricsHandler)
 		r.Get("/jobs", app.listPGSQLClusterJobsHandler)
 		r.Get("/jobs/{jobID}", app.getPGSQLClusterJobHandler)
 		r.Post("/jobs/{jobID}/resume", app.resumePGSQLClusterJobHandler)

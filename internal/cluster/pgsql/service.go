@@ -12,6 +12,7 @@ type Service struct {
 	ctx           context.Context
 	store         *Store
 	runner        *Runner
+	collector     *Collector
 	steps         []step
 	sshUser       string
 	sshKeyPath    string
@@ -27,9 +28,10 @@ type step struct {
 
 func NewService(store *Store, runner *Runner) *Service {
 	svc := &Service{
-		ctx:    context.Background(),
-		store:  store,
-		runner: runner,
+		ctx:       context.Background(),
+		store:     store,
+		runner:    runner,
+		collector: NewCollector(),
 		steps: []step{
 			{Name: "preflight", Tag: "preflight"},
 			{Name: "base_config", Tag: "base_config"},
@@ -88,6 +90,7 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 			SSHPrivateKeyPath:  s.sshKeyPath,
 			SSHPort:            req.SSHPort,
 			PostgresPort:       req.PostgresPort,
+			PostgresVersion:    req.PostgresVersion,
 			StepTimeoutSeconds: req.StepTimeoutSeconds,
 		},
 		Steps: make([]StepResult, 0, len(s.steps)),
@@ -104,7 +107,9 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 		NewUserPassword:    req.NewUserPassword,
 	}
 	if err := s.store.SaveSecret(job.ID, StoredSecret{
+		PostgresUser:       defaultPostgresSuperuser,
 		PostgresPassword:   secrets.PostgresPassword,
+		ReplicatorUser:     defaultReplicationUser,
 		ReplicatorPassword: secrets.ReplicatorPassword,
 		AdminPassword:      secrets.AdminPassword,
 	}); err != nil {
@@ -305,6 +310,10 @@ func (s *Service) runDeploy(ctx context.Context, cfg runConfig) StepResult {
 		}
 	}
 	return s.runDeployStep(ctx, cfg)
+}
+
+func (s *Service) CollectMetrics(ctx context.Context, req MetricRequest) MetricResponse {
+	return s.collector.Collect(ctx, req)
 }
 
 func shouldSkipStep(st step, spec StoredSpec) (string, bool) {

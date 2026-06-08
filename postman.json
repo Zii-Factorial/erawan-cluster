@@ -30,6 +30,10 @@
     { "key": "PGSQL_PRIMARY_IP", "value": "10.0.0.1" },
     { "key": "PGSQL_STANDBY_IP_1", "value": "10.0.0.2" },
     { "key": "PGSQL_STANDBY_IP_2", "value": "10.0.0.3" },
+    { "key": "PGSQL_PROXY_HOST", "value": "127.0.0.1", "description": "HAProxy host for PostgreSQL — metrics connect here instead of directly to the primary" },
+    { "key": "PGSQL_PROXY_PORT", "value": "25432", "description": "HAProxy listen port for PostgreSQL (set when creating the pgsql HAProxy config)" },
+    { "key": "PGSQL_DB_USER", "value": "postgres", "description": "PostgreSQL superuser — auto-filled from Deploy response" },
+    { "key": "PGSQL_DB_PASSWORD", "value": "", "description": "PostgreSQL superuser password — auto-filled from Deploy response secret" },
     { "key": "PATRONI_ADMIN_PASSWORD", "value": "adminpassword", "disabled": true }
   ],
   "event": [
@@ -63,7 +67,7 @@
           "(async () => {",
           "    const keyBytes = new Uint8Array(keyHex.match(/.{2}/g).map(b => parseInt(b, 16)));",
           "    const nonce = crypto.getRandomValues(new Uint8Array(12));",
-          "    const plaintext = new TextEncoder().encode(pm.request.body.raw);",
+          "    const plaintext = new TextEncoder().encode(pm.variables.replaceIn(pm.request.body.raw));",
           "    const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['encrypt']);",
           "    const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, cryptoKey, plaintext);",
           "    const payload = new Uint8Array(12 + encrypted.byteLength);",
@@ -417,14 +421,23 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "// Auto-extract JOB_ID from plain-JSON deploy response (no encryption)",
+                  "// Auto-extract JOB_ID and credentials from plain-JSON deploy response (no encryption)",
                   "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
                   "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
                   "try {",
                   "    const body = pm.response.json();",
-                  "    if (body && body.data && body.data.id) {",
-                  "        pm.collectionVariables.set('JOB_ID', body.data.id);",
-                  "        console.log('[erawan] JOB_ID set to:', body.data.id);",
+                  "    if (body && body.data) {",
+                  "        if (body.data.id) {",
+                  "            pm.collectionVariables.set('JOB_ID', body.data.id);",
+                  "            console.log('[erawan] JOB_ID set to:', body.data.id);",
+                  "        }",
+                  "        if (body.data.secret) {",
+                  "            const s = body.data.secret;",
+                  "            if (s.postgres_user) pm.collectionVariables.set('PGSQL_DB_USER', s.postgres_user);",
+                  "            if (s.postgres_password) pm.collectionVariables.set('PGSQL_DB_PASSWORD', s.postgres_password);",
+                  "            console.log('[erawan] PGSQL_DB_USER set to:', s.postgres_user);",
+                  "            console.log('[erawan] PGSQL_DB_PASSWORD auto-filled from deploy secret');",
+                  "        }",
                   "    }",
                   "} catch(e) {}"
                 ]
@@ -439,7 +452,7 @@
             "body": {
               "mode": "raw",
               "options": { "raw": { "language": "json" } },
-              "raw": "{\n  \"cluster_name\": \"{{CLUSTER_NAME}}\",\n  \"admin_username\": \"admin\",\n  \"admin_password\": \"\",\n  \"primary_ip\": \"{{PGSQL_PRIMARY_IP}}\",\n  \"standby_ips\": [],\n  \"new_user\": \"{{NEW_USER}}\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\",\n  \"new_user_ssl_required\": true,\n  \"new_db\": \"{{NEW_DB}}\",\n  \"ssh_port\": 22,\n  \"postgres_port\": 5432,\n  \"step_timeout_seconds\": 900\n}"
+              "raw": "{\n  \"cluster_name\": \"{{CLUSTER_NAME}}\",\n  \"admin_username\": \"admin\",\n  \"admin_password\": \"\",\n  \"primary_ip\": \"{{PGSQL_PRIMARY_IP}}\",\n  \"standby_ips\": [],\n  \"new_user\": \"{{NEW_USER}}\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\",\n  \"new_user_ssl_required\": true,\n  \"new_db\": \"{{NEW_DB}}\",\n  \"ssh_port\": 22,\n  \"postgres_port\": 5432,\n  \"postgres_version\": 16,\n  \"step_timeout_seconds\": 900\n}"
             },
             "description": "Starts a PostgreSQL/Patroni cluster deployment. Returns a job immediately (202 Accepted). Poll 'Get Job' to track progress.\n\nUse `standby_ips: []` for primary-only mode, or provide one or more standby IPs for HA mode.\n\nJOB_ID is auto-extracted from the response and stored as a collection variable.",
             "url": {
@@ -448,6 +461,28 @@
               "host": ["{{API_HOST}}"],
               "port": "{{API_PORT}}",
               "path": ["cluster", "pgsql", "deploy"]
+            }
+          }
+        },
+        {
+          "name": "Collect Metrics",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": { "raw": { "language": "json" } },
+              "raw": "{\n  \"host\": \"{{PGSQL_PROXY_HOST}}\",\n  \"port\": {{PGSQL_PROXY_PORT}},\n  \"node_ips\": [\"{{PGSQL_PRIMARY_IP}}\", \"{{PGSQL_STANDBY_IP_1}}\", \"{{PGSQL_STANDBY_IP_2}}\"],\n  \"user\": \"{{PGSQL_DB_USER}}\",\n  \"password\": \"{{PGSQL_DB_PASSWORD}}\",\n  \"database\": \"postgres\",\n  \"ssl_mode\": \"require\",\n  \"connect_timeout\": 10,\n  \"patroni_port\": 8008,\n  \"categories\": [],\n  \"limit\": 20\n}"
+            },
+            "description": "Collects live metrics from a running PostgreSQL/Patroni cluster.\n\n**Required:** `host`, `user`\n\n**Connection routing:**\n- `host` + `port` — HAProxy address; all PostgreSQL queries go through here\n- `node_ips` — list of all cluster member IPs; the collector calls `GET /leader` on each and auto-discovers the current primary for Patroni REST (`cluster`, `failover` categories). Required only when collecting those categories.\n\n**Optional:** `port` (default 5432), `password`, `database` (default `postgres`), `ssl_mode` (`disable`|`require`, default `disable`), `connect_timeout` (seconds, default 10), `patroni_port` (default 8008), `limit` (top-N for slow queries/latency, default 20), `from`/`to` (ISO 8601, filter failover events and slow queries)\n\n**`categories`** — empty array returns all; pick any subset:\n- `cluster` — Patroni HA state, DCS health, node roles, TTL/loop_wait\n- `uptime` — PostgreSQL process uptime\n- `failover` — Patroni timeline/failover history (supports `from`/`to` filter)\n- `connections` — active, idle, idle-in-transaction, lock-waiters, wait-event breakdown\n- `replication` — streaming lag (LSN pipeline), standby count, WAL config, slot lag\n- `performance` — TPS, cache hit ratio, temp files, checkpoint pressure, bgwriter stats\n- `query` — avg/p95/p99 latency, slow queries, lock/deadlock counts, scan efficiency\n- `maintenance` — autovacuum workers, XID wraparound age, logical slot lag, pg_locks",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/metrics",
+              "protocol": "http",
+              "host": ["{{API_HOST}}"],
+              "port": "{{API_PORT}}",
+              "path": ["cluster", "pgsql", "metrics"]
             }
           }
         },
