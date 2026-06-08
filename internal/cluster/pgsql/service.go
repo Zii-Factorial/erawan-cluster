@@ -107,7 +107,9 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 		NewUserPassword:    req.NewUserPassword,
 	}
 	if err := s.store.SaveSecret(job.ID, StoredSecret{
+		PostgresUser:       defaultPostgresSuperuser,
 		PostgresPassword:   secrets.PostgresPassword,
+		ReplicatorUser:     defaultReplicationUser,
 		ReplicatorPassword: secrets.ReplicatorPassword,
 		AdminPassword:      secrets.AdminPassword,
 	}); err != nil {

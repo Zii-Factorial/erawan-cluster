@@ -84,7 +84,9 @@ type SecretInput struct {
 }
 
 type StoredSecret struct {
+	PostgresUser       string `json:"postgres_user"`
 	PostgresPassword   string `json:"postgres_password"`
+	ReplicatorUser     string `json:"replicator_user"`
 	ReplicatorPassword string `json:"replicator_password"`
 	AdminPassword      string `json:"admin_password"`
 }

@@ -30,7 +30,11 @@ func (app *application) deployPGSQLClusterHandler(w http.ResponseWriter, r *http
 		return
 	}
 
-	accepted(w, "PostgreSQL cluster deployment started", job)
+	secret, _ := app.pgsqlCluster.GetSecret(job.ID)
+	accepted(w, "PostgreSQL cluster deployment started", struct {
+		*pgsqlcluster.Job
+		Secret *pgsqlcluster.StoredSecret `json:"secret,omitempty"`
+	}{job, secret})
 }
 
 func (app *application) getPGSQLClusterJobHandler(w http.ResponseWriter, r *http.Request) {
