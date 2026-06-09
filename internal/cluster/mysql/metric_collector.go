@@ -413,9 +413,14 @@ func collectReplication(ctx context.Context, db *sql.DB) (*ReplicationMetric, er
 					t := applyTs.Time.UTC()
 					s.LastAppliedAt = &t
 				}
-				// lag = time between original commit and when this node applied it
+				// lag = time between original commit and when this node applied it.
+				// Clamp to 0 — negative values indicate clock skew between nodes.
 				if commitTs.Valid && applyTs.Valid && !commitTs.Time.IsZero() && !applyTs.Time.IsZero() {
-					s.LagSeconds = math.Round(applyTs.Time.Sub(commitTs.Time).Seconds()*1000) / 1000
+					lag := applyTs.Time.Sub(commitTs.Time).Seconds()
+					if lag < 0 {
+						lag = 0
+					}
+					s.LagSeconds = math.Round(lag*1000) / 1000
 				}
 				m.Appliers = append(m.Appliers, s)
 			}
@@ -651,6 +656,7 @@ func collectQuery(ctx context.Context, db *sql.DB, limit int, from, to *time.Tim
 		    AND (SUM_NO_INDEX_USED + SUM_NO_GOOD_INDEX_USED) > 0
 		    AND SCHEMA_NAME NOT IN ('information_schema','performance_schema','mysql','sys')
 		    AND SCHEMA_NAME IS NOT NULL
+		    AND DIGEST_TEXT NOT LIKE 'SHOW%'
 		ORDER BY (SUM_NO_INDEX_USED + SUM_NO_GOOD_INDEX_USED) DESC
 		LIMIT ?`, limit)
 	if err == nil {
