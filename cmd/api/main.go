@@ -37,6 +37,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("init haproxy service: %v", err)
 	}
+	if raw := env.GetString("HAPROXY_MAIN_CONFIGS", ""); raw != "" {
+		haproxySvc.SetMainConfigs(strings.Split(raw, ","))
+	}
 
 	stateDir := env.GetString("CLUSTER_STATE_DIR", "/var/lib/erawan-cluster/cluster/jobs")
 	store, err := mysqlcluster.NewStore(env.GetString("MYSQL_CLUSTER_STATE_DIR", filepath.Join(stateDir, "mysql")))
