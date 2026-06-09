@@ -161,7 +161,6 @@
       mysqlrouter \
         --bootstrap {{ cluster_admin_username | quote }}@{{ hostvars['primary'].erawan_node_ip }}:{{ mysql_port }} \
         --conf-use-gr-notifications \
-        --conf-skip-x-protocol \
         --conf-base-port 6446 \
         --directory /etc/mysqlrouter/{{ cluster_name }} \
         --user=mysqlrouter
@@ -218,7 +217,15 @@
       Group=mysqlrouter
       # Wait for MySQL socket to be ready before starting Router.
       # Ensures Router can reach the cluster on first start after a node reboot.
-      ExecStartPre=/bin/bash -c 'for i in $(seq 1 15); do mysql -uroot -e "SELECT 1" 2>/dev/null && break || sleep 2; done'
+      ExecStartPre=/bin/bash -c '\
+        for i in $(seq 1 45); do \
+          state=$(mysql -uroot -Nse \
+            "SELECT member_state FROM performance_schema.replication_group_members \
+             WHERE member_host = @@report_host LIMIT 1" 2>/dev/null); \
+          [ "$state" = "ONLINE" ] && exit 0; \
+          sleep 2; \
+        done; \
+        exit 1'
       ExecStart=/usr/bin/mysqlrouter -c /etc/mysqlrouter/{{ cluster_name }}/mysqlrouter.conf
       Restart=always
       # 10s gap between restarts — gives MySQL time to stabilise before Router reconnects.
