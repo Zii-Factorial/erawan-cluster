@@ -181,7 +181,9 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 		secret.AdminPassword = stringOrGenerated("")
 	}
 	if err := s.store.SaveSecret(job.ID, StoredSecret{
+		PostgresUser:       defaultPostgresSuperuser,
 		PostgresPassword:   secret.PostgresPassword,
+		ReplicatorUser:     defaultReplicationUser,
 		ReplicatorPassword: secret.ReplicatorPassword,
 		AdminPassword:      secret.AdminPassword,
 	}); err != nil {

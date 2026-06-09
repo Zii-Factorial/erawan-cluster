@@ -12,6 +12,7 @@ type Service struct {
 	ctx             context.Context
 	store           *Store
 	runner          *Runner
+	collector       *Collector
 	steps           []step
 	sshUser         string
 	sshKeyPath      string
@@ -28,9 +29,10 @@ type step struct {
 
 func NewService(store *Store, runner *Runner) *Service {
 	svc := &Service{
-		ctx:    context.Background(),
-		store:  store,
-		runner: runner,
+		ctx:       context.Background(),
+		store:     store,
+		runner:    runner,
+		collector: NewCollector(),
 		steps: []step{
 			{Name: "preflight", Tag: "preflight"},
 			{Name: "configure_instances", Tag: "configure_instances"},
@@ -93,6 +95,7 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 			SSHPrivateKeyPath:    s.sshKeyPath,
 			SSHPort:              req.SSHPort,
 			MySQLPort:            req.MySQLPort,
+			MySQLVersion:         req.MySQLVersion,
 			StepTimeoutSeconds:   req.StepTimeoutSeconds,
 		},
 		Steps: make([]StepResult, 0, len(s.steps)+1),
@@ -108,7 +111,7 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 		AdminPassword: stringOrGenerated(req.AdminPassword),
 		NewUserPassword:      req.NewUserPassword,
 	}
-	if err := s.store.SaveSecret(job.ID, StoredSecret{AdminPassword: secrets.AdminPassword}); err != nil {
+	if err := s.store.SaveSecret(job.ID, StoredSecret{AdminUser: req.AdminUsername, AdminPassword: secrets.AdminPassword}); err != nil {
 		return nil, err
 	}
 
@@ -163,7 +166,7 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 			secret.AdminPassword = storedSecret.AdminPassword
 		} else {
 			secret.AdminPassword = stringOrGenerated("")
-			if saveErr := s.store.SaveSecret(job.ID, StoredSecret{AdminPassword: secret.AdminPassword}); saveErr != nil {
+			if saveErr := s.store.SaveSecret(job.ID, StoredSecret{AdminUser: job.Request.AdminUsername, AdminPassword: secret.AdminPassword}); saveErr != nil {
 				return nil, saveErr
 			}
 		}
@@ -392,6 +395,10 @@ func completedSteps(job *Job) int {
 		}
 	}
 	return count
+}
+
+func (s *Service) CollectMetrics(ctx context.Context, req MetricRequest) MetricResponse {
+	return s.collector.Collect(ctx, req)
 }
 
 func shouldSkipStep(st step, spec StoredSpec) (string, bool) {

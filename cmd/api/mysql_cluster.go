@@ -29,7 +29,11 @@ func (app *application) deployMySQLClusterHandler(w http.ResponseWriter, r *http
 		return
 	}
 
-	accepted(w, "MySQL cluster deployment started", job)
+	secret, _ := app.mysqlCluster.GetSecret(job.ID)
+	accepted(w, "MySQL cluster deployment started", struct {
+		*mysqlcluster.Job
+		Secret *mysqlcluster.StoredSecret `json:"secret,omitempty"`
+	}{job, secret})
 }
 
 func (app *application) getMySQLClusterJobHandler(w http.ResponseWriter, r *http.Request) {
@@ -84,7 +88,11 @@ func (app *application) resumeMySQLClusterJobHandler(w http.ResponseWriter, r *h
 		return
 	}
 
-	accepted(w, "MySQL cluster job resumed", job)
+	secret, _ := app.mysqlCluster.GetSecret(job.ID)
+	accepted(w, "MySQL cluster job resumed", struct {
+		*mysqlcluster.Job
+		Secret *mysqlcluster.StoredSecret `json:"secret,omitempty"`
+	}{job, secret})
 }
 
 func (app *application) rollbackMySQLClusterJobHandler(w http.ResponseWriter, r *http.Request) {

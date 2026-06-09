@@ -11,8 +11,8 @@
     SET PERSIST group_replication_start_on_boot                = ON;
     SET GLOBAL  group_replication_autorejoin_tries             = {{ mysql_gr_autorejoin_tries | default(3) | int }};
     SET PERSIST group_replication_autorejoin_tries             = {{ mysql_gr_autorejoin_tries | default(3) | int }};
-    SET GLOBAL  group_replication_unreachable_majority_timeout = {{ mysql_gr_unreachable_majority_timeout | default(30) | int }};
-    SET PERSIST group_replication_unreachable_majority_timeout = {{ mysql_gr_unreachable_majority_timeout | default(30) | int }};
+    SET GLOBAL  group_replication_unreachable_majority_timeout = {{ mysql_gr_unreachable_majority_timeout | default(0) | int }};
+    SET PERSIST group_replication_unreachable_majority_timeout = {{ mysql_gr_unreachable_majority_timeout | default(0) | int }};
     SET GLOBAL  group_replication_exit_state_action            = '{{ mysql_gr_exit_state_action | default('READ_ONLY') }}';
     SET PERSIST group_replication_exit_state_action            = '{{ mysql_gr_exit_state_action | default('READ_ONLY') }}';
     SQL
@@ -57,6 +57,14 @@
         "SELECT member_state FROM performance_schema.replication_group_members \
          WHERE member_host = @@report_host LIMIT 1" 2>/dev/null)
       logger -t erawan-gr-watchdog "GR state after recovery attempt: '${NEW_STATE:-unknown}'"
+
+      # After a successful rejoin, restart MySQL Router so it re-discovers the
+      # current cluster topology and re-binds port 6446 (R/W) cleanly.
+      # Without this, Router may retain stale state and refuse R/W connections.
+      if [[ "$NEW_STATE" == "ONLINE" ]]; then
+        logger -t erawan-gr-watchdog "Restarting MySQL Router to re-discover cluster topology"
+        systemctl restart {{ router_service_name }} 2>/dev/null || true
+      fi
   delegate_to: "{{ item }}"
   loop: "{{ groups['all'] }}"
   tags: ["enable_auto_rejoin"]

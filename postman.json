@@ -8,33 +8,129 @@
   "auth": {
     "type": "apikey",
     "apikey": [
-      { "key": "key", "value": "X-API-Key", "type": "string" },
-      { "key": "value", "value": "{{API_KEY}}", "type": "string" },
-      { "key": "in", "value": "header", "type": "string" }
+      {
+        "key": "key",
+        "value": "X-API-Key",
+        "type": "string"
+      },
+      {
+        "key": "value",
+        "value": "{{API_KEY}}",
+        "type": "string"
+      },
+      {
+        "key": "in",
+        "value": "header",
+        "type": "string"
+      }
     ]
   },
   "variable": [
-    { "key": "API_HOST", "value": "127.0.0.1", "description": "API server host" },
-    { "key": "API_PORT", "value": "8080", "description": "API server port" },
-    { "key": "API_KEY", "value": "", "description": "[REQUIRED] API key — sent as X-API-Key header on every request" },
-    { "key": "ENCRYPTION_KEY", "value": "", "description": "[REQUIRED] 64-char hex string (32 bytes, AES-256-GCM). Generate: openssl rand -hex 32. Leave empty for plain JSON (dev only)." },
-    { "key": "JOB_ID", "value": "", "description": "Job ID — auto-filled from Deploy response, or copy manually from List Jobs" },
-    { "key": "LAST_RESPONSE", "value": "", "description": "Last decrypted JSON response — inspect after any request when ENCRYPTION_KEY is set" },
-    { "key": "PRIMARY_IP", "value": "192.168.122.154" },
-    { "key": "SECONDARY_IP", "value": "192.168.122.111" },
-    { "key": "CLUSTER_NAME", "value": "prodCluster" },
-    { "key": "NEW_USER", "value": "appuser" },
-    { "key": "NEW_USER_PASSWORD", "value": "AppUser#2026" },
-    { "key": "NEW_USER_SSL_REQUIRED", "value": "true" },
-    { "key": "NEW_DB", "value": "appdb" },
-    { "key": "PGSQL_PRIMARY_IP", "value": "10.0.0.1" },
-    { "key": "PGSQL_STANDBY_IP_1", "value": "10.0.0.2" },
-    { "key": "PGSQL_STANDBY_IP_2", "value": "10.0.0.3" },
-    { "key": "PGSQL_PROXY_HOST", "value": "127.0.0.1", "description": "HAProxy host for PostgreSQL — metrics connect here instead of directly to the primary" },
-    { "key": "PGSQL_PROXY_PORT", "value": "25432", "description": "HAProxy listen port for PostgreSQL (set when creating the pgsql HAProxy config)" },
-    { "key": "PGSQL_DB_USER", "value": "postgres", "description": "PostgreSQL superuser — auto-filled from Deploy response" },
-    { "key": "PGSQL_DB_PASSWORD", "value": "", "description": "PostgreSQL superuser password — auto-filled from Deploy response secret" },
-    { "key": "PATRONI_ADMIN_PASSWORD", "value": "adminpassword", "disabled": true }
+    {
+      "key": "API_HOST",
+      "value": "127.0.0.1",
+      "description": "API server host"
+    },
+    {
+      "key": "API_PORT",
+      "value": "8080",
+      "description": "API server port"
+    },
+    {
+      "key": "API_KEY",
+      "value": "",
+      "description": "[REQUIRED] API key — sent as X-API-Key header on every request"
+    },
+    {
+      "key": "ENCRYPTION_KEY",
+      "value": "",
+      "description": "[REQUIRED] 64-char hex string (32 bytes, AES-256-GCM). Generate: openssl rand -hex 32. Leave empty for plain JSON (dev only)."
+    },
+    {
+      "key": "JOB_ID",
+      "value": "",
+      "description": "Job ID — auto-filled from Deploy response, or copy manually from List Jobs"
+    },
+    {
+      "key": "LAST_RESPONSE",
+      "value": "",
+      "description": "Last decrypted JSON response — inspect after any request when ENCRYPTION_KEY is set"
+    },
+    {
+      "key": "PRIMARY_IP",
+      "value": "192.168.122.154"
+    },
+    {
+      "key": "SECONDARY_IP",
+      "value": "192.168.122.111"
+    },
+    {
+      "key": "CLUSTER_NAME",
+      "value": "prodCluster"
+    },
+    {
+      "key": "NEW_USER",
+      "value": "appuser"
+    },
+    {
+      "key": "NEW_USER_PASSWORD",
+      "value": "AppUser#2026"
+    },
+    {
+      "key": "NEW_USER_SSL_REQUIRED",
+      "value": "true"
+    },
+    {
+      "key": "NEW_DB",
+      "value": "appdb"
+    },
+    {
+      "key": "PGSQL_PRIMARY_IP",
+      "value": "10.0.0.1"
+    },
+    {
+      "key": "PGSQL_STANDBY_IP_1",
+      "value": "10.0.0.2"
+    },
+    {
+      "key": "PGSQL_STANDBY_IP_2",
+      "value": "10.0.0.3"
+    },
+    {
+      "key": "PGSQL_PROXY_PORT",
+      "value": "25432",
+      "description": "HAProxy listen port for PostgreSQL (set when creating the pgsql HAProxy config)"
+    },
+    {
+      "key": "PGSQL_DB_USER",
+      "value": "postgres",
+      "description": "PostgreSQL superuser — auto-filled from Deploy response"
+    },
+    {
+      "key": "PGSQL_DB_PASSWORD",
+      "value": "",
+      "description": "PostgreSQL superuser password — auto-filled from Deploy response secret"
+    },
+    {
+      "key": "PATRONI_ADMIN_PASSWORD",
+      "value": "adminpassword",
+      "disabled": true
+    },
+    {
+      "key": "MYSQL_PROXY_PORT",
+      "value": "25010",
+      "type": "default"
+    },
+    {
+      "key": "MYSQL_DB_USER",
+      "value": "clusteradmin",
+      "type": "default"
+    },
+    {
+      "key": "MYSQL_DB_PASSWORD",
+      "value": "",
+      "type": "default"
+    }
   ],
   "event": [
     {
@@ -132,6 +228,13 @@
           "            pm.collectionVariables.set('JOB_ID', json.data.id);",
           "            console.log('[erawan] JOB_ID set to:', json.data.id);",
           "        }",
+          "        if (json && json.data && json.data.secret) {",
+          "            const s = json.data.secret;",
+          "            if (s.admin_user) { pm.collectionVariables.set('MYSQL_DB_USER', s.admin_user); console.log('[erawan] MYSQL_DB_USER set to:', s.admin_user); }",
+          "            if (s.admin_password) { pm.collectionVariables.set('MYSQL_DB_PASSWORD', s.admin_password); console.log('[erawan] MYSQL_DB_PASSWORD captured'); }",
+          "            if (s.postgres_user) { pm.collectionVariables.set('PGSQL_DB_USER', s.postgres_user); console.log('[erawan] PGSQL_DB_USER set to:', s.postgres_user); }",
+          "            if (s.postgres_password) { pm.collectionVariables.set('PGSQL_DB_PASSWORD', s.postgres_password); console.log('[erawan] PGSQL_DB_PASSWORD captured'); }",
+          "        }",
           "    } catch(e) {",
           "        console.warn('[erawan] response decryption failed:', e.message);",
           "    }",
@@ -152,9 +255,13 @@
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/health",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["health"]
+              "path": [
+                "health"
+              ]
             }
           }
         },
@@ -166,9 +273,13 @@
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/docs",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["docs"]
+              "path": [
+                "docs"
+              ]
             }
           }
         }
@@ -182,20 +293,33 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
-              "options": { "raw": { "language": "json" } },
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
               "raw": "{\n  \"port\": 25010,\n  \"node_ips\": [\"10.10.107.182\", \"10.10.107.183\"],\n  \"db_port\": 6446\n}"
             },
             "description": "Creates an HAProxy frontend for a MySQL Router cluster. db_port is typically 6446 (R/W) or 6447 (R/O).",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/config/mysql",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["haproxy", "config", "mysql"]
+              "path": [
+                "haproxy",
+                "config",
+                "mysql"
+              ]
             }
           }
         },
@@ -204,20 +328,33 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
-              "options": { "raw": { "language": "json" } },
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
               "raw": "{\n  \"port\": 25432,\n  \"node_ips\": [\"10.0.0.1\", \"10.0.0.2\"],\n  \"db_port\": 5432,\n  \"patroni_port\": 8008\n}"
             },
             "description": "Creates an HAProxy frontend for a PostgreSQL/Patroni cluster. Uses httpchk GET /leader on the Patroni REST port so only the current leader receives traffic. patroni_port defaults to 8008 when omitted.",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/config/pgsql",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["haproxy", "config", "pgsql"]
+              "path": [
+                "haproxy",
+                "config",
+                "pgsql"
+              ]
             }
           }
         },
@@ -226,19 +363,31 @@
           "request": {
             "method": "DELETE",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
-              "options": { "raw": { "language": "json" } },
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
               "raw": "{\n  \"port\": 25010\n}"
             },
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/config",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["haproxy", "config"]
+              "path": [
+                "haproxy",
+                "config"
+              ]
             }
           }
         },
@@ -250,9 +399,14 @@
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/configs",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["haproxy", "configs"]
+              "path": [
+                "haproxy",
+                "configs"
+              ]
             }
           }
         },
@@ -265,9 +419,15 @@
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/configs/download",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["haproxy", "configs", "download"]
+              "path": [
+                "haproxy",
+                "configs",
+                "download"
+              ]
             }
           }
         },
@@ -279,9 +439,14 @@
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/reload",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["haproxy", "reload"]
+              "path": [
+                "haproxy",
+                "reload"
+              ]
             }
           }
         }
@@ -298,14 +463,27 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "// Auto-extract JOB_ID from plain-JSON deploy response (no encryption)",
+                  "// Auto-extract JOB_ID and credentials from deploy response (no encryption)",
                   "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
                   "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
                   "try {",
                   "    const body = pm.response.json();",
-                  "    if (body && body.data && body.data.id) {",
-                  "        pm.collectionVariables.set('JOB_ID', body.data.id);",
-                  "        console.log('[erawan] JOB_ID set to:', body.data.id);",
+                  "    if (body && body.data) {",
+                  "        if (body.data.id) {",
+                  "            pm.collectionVariables.set('JOB_ID', body.data.id);",
+                  "            console.log('[erawan] JOB_ID set to:', body.data.id);",
+                  "        }",
+                  "        if (body.data.secret) {",
+                  "            const s = body.data.secret;",
+                  "            if (s.admin_user) {",
+                  "                pm.collectionVariables.set('MYSQL_DB_USER', s.admin_user);",
+                  "                console.log('[erawan] MYSQL_DB_USER set to:', s.admin_user);",
+                  "            }",
+                  "            if (s.admin_password) {",
+                  "                pm.collectionVariables.set('MYSQL_DB_PASSWORD', s.admin_password);",
+                  "                console.log('[erawan] MYSQL_DB_PASSWORD captured');",
+                  "            }",
+                  "        }",
                   "    }",
                   "} catch(e) {}"
                 ]
@@ -315,22 +493,69 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
-              "options": { "raw": { "language": "json" } },
-              "raw": "{\n  \"cluster_name\": \"{{CLUSTER_NAME}}\",\n  \"admin_username\": \"clusteradmin\",\n  \"admin_password\": \"\",\n  \"primary_ip\": \"{{PRIMARY_IP}}\",\n  \"standby_ips\": [\"{{SECONDARY_IP}}\"],\n  \"new_user\": \"{{NEW_USER}}\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\",\n  \"new_user_ssl_required\": {{NEW_USER_SSL_REQUIRED}},\n  \"new_db\": \"{{NEW_DB}}\",\n  \"assume_prepared\": false,\n  \"bootstrap_router\": true,\n  \"ssh_port\": 22,\n  \"mysql_port\": 3306,\n  \"step_timeout_seconds\": 900\n}"
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"cluster_name\": \"{{CLUSTER_NAME}}\",\n  \"admin_username\": \"clusteradmin\",\n  \"admin_password\": \"\",\n  \"primary_ip\": \"{{PRIMARY_IP}}\",\n  \"standby_ips\": [\"{{SECONDARY_IP}}\"],\n  \"new_user\": \"{{NEW_USER}}\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\",\n  \"new_user_ssl_required\": {{NEW_USER_SSL_REQUIRED}},\n  \"new_db\": \"{{NEW_DB}}\",\n  \"assume_prepared\": false,\n  \"bootstrap_router\": true,\n  \"ssh_port\": 22,\n  \"mysql_port\": 3306,\n  \"mysql_version\": 8,\n  \"step_timeout_seconds\": 900\n}"
             },
             "description": "Starts a MySQL InnoDB Cluster deployment. Returns a job immediately (202 Accepted). Poll 'Get Job' to track progress.\n\nJOB_ID is auto-extracted from the response and stored as a collection variable.",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/deploy",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["cluster", "mysql", "deploy"]
+              "path": [
+                "cluster",
+                "mysql",
+                "deploy"
+              ]
             }
           }
+        },
+        {
+          "name": "Collect Metrics",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"port\": {{MYSQL_PROXY_PORT}},\n  \"user\": \"{{MYSQL_DB_USER}}\",\n  \"password\": \"{{MYSQL_DB_PASSWORD}}\",\n  \"ssl_mode\": \"disable\",\n  \"connect_timeout\": 10,\n  \"categories\": [],\n  \"limit\": 20\n}"
+            },
+            "url": {
+              "raw": "{{API_HOST}}:{{API_PORT}}/cluster/mysql/metrics",
+              "host": [
+                "{{API_HOST}}:{{API_PORT}}"
+              ],
+              "path": [
+                "cluster",
+                "mysql",
+                "metrics"
+              ]
+            },
+            "description": "Collects live metrics from a running MySQL InnoDB Cluster.\n\n**Required:** `user`\n\n**Connection routing:**\n- `host` (optional) — HAProxy or MySQL Router address; defaults to `PROXY_HOST` env var on the server (usually `127.0.0.1`)\n- `port` — HAProxy listen port for MySQL R/W traffic (e.g. 25010)\n\n**Optional:** `host`, `port` (default 3306), `password`, `database` (default `information_schema`), `ssl_mode` (`disable`|`require`, default `disable`), `connect_timeout` (seconds, default 10), `limit` (top-N for slow queries/digest lists, default 20), `from`/`to` (ISO 8601, filter slow queries)\n\n**`categories`** — empty array returns all 7; pick any subset:\n- `cluster` — Group Replication membership, primary election, node states\n- `uptime` — MySQL server process uptime\n- `connections` — active/sleeping threads, utilisation, per-database breakdown\n- `replication` — GR member certification stats and applier worker lag\n- `performance` — InnoDB buffer-pool hit ratio, QPS/TPS, temp-table and sort pressure\n- `query` — Digest stats from performance_schema, slow queries, full-scan digests\n- `maintenance` — InnoDB purge lag, table fragmentation, metadata locks"
+          },
+          "response": []
         },
         {
           "name": "List Jobs",
@@ -340,26 +565,63 @@
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/jobs?limit=20",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["cluster", "mysql", "jobs"],
+              "path": [
+                "cluster",
+                "mysql",
+                "jobs"
+              ],
               "query": [
-                { "key": "limit", "value": "20" }
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
               ]
             }
           }
         },
         {
           "name": "Get Job",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Auto-extract credentials from plain-JSON get-job response (no encryption)",
+                  "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
+                  "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
+                  "try {",
+                  "    const body = pm.response.json();",
+                  "    if (body && body.data && body.data.secret) {",
+                  "        const s = body.data.secret;",
+                  "        if (s.admin_user) { pm.collectionVariables.set('MYSQL_DB_USER', s.admin_user); console.log('[erawan] MYSQL_DB_USER set to:', s.admin_user); }",
+                  "        if (s.admin_password) { pm.collectionVariables.set('MYSQL_DB_PASSWORD', s.admin_password); console.log('[erawan] MYSQL_DB_PASSWORD captured'); }",
+                  "    }",
+                  "} catch(e) {}"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "GET",
             "header": [],
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/jobs/{{JOB_ID}}",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["cluster", "mysql", "jobs", "{{JOB_ID}}"]
+              "path": [
+                "cluster",
+                "mysql",
+                "jobs",
+                "{{JOB_ID}}"
+              ]
             }
           }
         },
@@ -368,20 +630,35 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
-              "options": { "raw": { "language": "json" } },
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
               "raw": "{\n  \"admin_password\": \"\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\"\n}"
             },
             "description": "Resumes a failed MySQL cluster job from the last completed step.\n\n- `admin_password` — leave empty to reuse the password stored from the original deploy\n- `new_user_password` — required when the job has a `new_user`",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/jobs/{{JOB_ID}}/resume",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["cluster", "mysql", "jobs", "{{JOB_ID}}", "resume"]
+              "path": [
+                "cluster",
+                "mysql",
+                "jobs",
+                "{{JOB_ID}}",
+                "resume"
+              ]
             }
           }
         },
@@ -390,20 +667,35 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
-              "options": { "raw": { "language": "json" } },
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
               "raw": "{\n  \"admin_password\": \"\"\n}"
             },
             "description": "Runs the rollback playbook to undo a failed MySQL cluster deployment.\n\n- `admin_password` — leave empty to reuse the password stored from the original deploy",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/jobs/{{JOB_ID}}/rollback",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["cluster", "mysql", "jobs", "{{JOB_ID}}", "rollback"]
+              "path": [
+                "cluster",
+                "mysql",
+                "jobs",
+                "{{JOB_ID}}",
+                "rollback"
+              ]
             }
           }
         }
@@ -447,20 +739,33 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
-              "options": { "raw": { "language": "json" } },
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
               "raw": "{\n  \"cluster_name\": \"{{CLUSTER_NAME}}\",\n  \"admin_username\": \"admin\",\n  \"admin_password\": \"\",\n  \"primary_ip\": \"{{PGSQL_PRIMARY_IP}}\",\n  \"standby_ips\": [],\n  \"new_user\": \"{{NEW_USER}}\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\",\n  \"new_user_ssl_required\": true,\n  \"new_db\": \"{{NEW_DB}}\",\n  \"ssh_port\": 22,\n  \"postgres_port\": 5432,\n  \"postgres_version\": 16,\n  \"step_timeout_seconds\": 900\n}"
             },
             "description": "Starts a PostgreSQL/Patroni cluster deployment. Returns a job immediately (202 Accepted). Poll 'Get Job' to track progress.\n\nUse `standby_ips: []` for primary-only mode, or provide one or more standby IPs for HA mode.\n\nJOB_ID is auto-extracted from the response and stored as a collection variable.",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/deploy",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["cluster", "pgsql", "deploy"]
+              "path": [
+                "cluster",
+                "pgsql",
+                "deploy"
+              ]
             }
           }
         },
@@ -469,20 +774,33 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
-              "options": { "raw": { "language": "json" } },
-              "raw": "{\n  \"host\": \"{{PGSQL_PROXY_HOST}}\",\n  \"port\": {{PGSQL_PROXY_PORT}},\n  \"node_ips\": [\"{{PGSQL_PRIMARY_IP}}\", \"{{PGSQL_STANDBY_IP_1}}\", \"{{PGSQL_STANDBY_IP_2}}\"],\n  \"user\": \"{{PGSQL_DB_USER}}\",\n  \"password\": \"{{PGSQL_DB_PASSWORD}}\",\n  \"database\": \"postgres\",\n  \"ssl_mode\": \"require\",\n  \"connect_timeout\": 10,\n  \"patroni_port\": 8008,\n  \"categories\": [],\n  \"limit\": 20\n}"
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"port\": {{PGSQL_PROXY_PORT}},\n  \"node_ips\": [\"{{PGSQL_PRIMARY_IP}}\", \"{{PGSQL_STANDBY_IP_1}}\", \"{{PGSQL_STANDBY_IP_2}}\"],\n  \"user\": \"{{PGSQL_DB_USER}}\",\n  \"password\": \"{{PGSQL_DB_PASSWORD}}\",\n  \"database\": \"postgres\",\n  \"ssl_mode\": \"require\",\n  \"connect_timeout\": 10,\n  \"patroni_port\": 8008,\n  \"categories\": [],\n  \"limit\": 20\n}"
             },
-            "description": "Collects live metrics from a running PostgreSQL/Patroni cluster.\n\n**Required:** `host`, `user`\n\n**Connection routing:**\n- `host` + `port` — HAProxy address; all PostgreSQL queries go through here\n- `node_ips` — list of all cluster member IPs; the collector calls `GET /leader` on each and auto-discovers the current primary for Patroni REST (`cluster`, `failover` categories). Required only when collecting those categories.\n\n**Optional:** `port` (default 5432), `password`, `database` (default `postgres`), `ssl_mode` (`disable`|`require`, default `disable`), `connect_timeout` (seconds, default 10), `patroni_port` (default 8008), `limit` (top-N for slow queries/latency, default 20), `from`/`to` (ISO 8601, filter failover events and slow queries)\n\n**`categories`** — empty array returns all; pick any subset:\n- `cluster` — Patroni HA state, DCS health, node roles, TTL/loop_wait\n- `uptime` — PostgreSQL process uptime\n- `failover` — Patroni timeline/failover history (supports `from`/`to` filter)\n- `connections` — active, idle, idle-in-transaction, lock-waiters, wait-event breakdown\n- `replication` — streaming lag (LSN pipeline), standby count, WAL config, slot lag\n- `performance` — TPS, cache hit ratio, temp files, checkpoint pressure, bgwriter stats\n- `query` — avg/p95/p99 latency, slow queries, lock/deadlock counts, scan efficiency\n- `maintenance` — autovacuum workers, XID wraparound age, logical slot lag, pg_locks",
+            "description": "Collects live metrics from a running PostgreSQL/Patroni cluster.\n\n**Required:** `user`\n\n**Connection routing:**\n- `host` (optional) — HAProxy address; defaults to `PROXY_HOST` env var on the server (usually `127.0.0.1`)\n- `port` — HAProxy listen port for PostgreSQL traffic (e.g. 25432)\n- `node_ips` — list of all cluster member IPs; the collector calls `GET /leader` on each and auto-discovers the current primary for Patroni REST (`cluster`, `failover` categories). Required only when collecting those categories.\n\n**Optional:** `host`, `port` (default 5432), `password`, `database` (default `postgres`), `ssl_mode` (`disable`|`require`, default `disable`), `connect_timeout` (seconds, default 10), `patroni_port` (default 8008), `limit` (top-N for slow queries/latency, default 20), `from`/`to` (ISO 8601, filter failover events and slow queries)\n\n**`categories`** — empty array returns all; pick any subset:\n- `cluster` — Patroni HA state, DCS health, node roles, TTL/loop_wait\n- `uptime` — PostgreSQL process uptime\n- `failover` — Patroni timeline/failover history (supports `from`/`to` filter)\n- `connections` — active, idle, idle-in-transaction, lock-waiters, wait-event breakdown\n- `replication` — streaming lag (LSN pipeline), standby count, WAL config, slot lag\n- `performance` — TPS, cache hit ratio, temp files, checkpoint pressure, bgwriter stats\n- `query` — avg/p95/p99 latency, slow queries, lock/deadlock counts, scan efficiency\n- `maintenance` — autovacuum workers, XID wraparound age, logical slot lag, pg_locks",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/metrics",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["cluster", "pgsql", "metrics"]
+              "path": [
+                "cluster",
+                "pgsql",
+                "metrics"
+              ]
             }
           }
         },
@@ -494,11 +812,20 @@
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/jobs?limit=20",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["cluster", "pgsql", "jobs"],
+              "path": [
+                "cluster",
+                "pgsql",
+                "jobs"
+              ],
               "query": [
-                { "key": "limit", "value": "20" }
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
               ]
             }
           }
@@ -511,9 +838,16 @@
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/jobs/{{JOB_ID}}",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["cluster", "pgsql", "jobs", "{{JOB_ID}}"]
+              "path": [
+                "cluster",
+                "pgsql",
+                "jobs",
+                "{{JOB_ID}}"
+              ]
             }
           }
         },
@@ -522,20 +856,35 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
-              "options": { "raw": { "language": "json" } },
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
               "raw": "{\n  \"admin_password\": \"\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\"\n}"
             },
             "description": "Resumes a failed PostgreSQL cluster job from the last completed step.\n\n- `admin_password` — leave empty to reuse the password stored from the original deploy\n- `new_user_password` — required when the job has a `new_user`",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/jobs/{{JOB_ID}}/resume",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["cluster", "pgsql", "jobs", "{{JOB_ID}}", "resume"]
+              "path": [
+                "cluster",
+                "pgsql",
+                "jobs",
+                "{{JOB_ID}}",
+                "resume"
+              ]
             }
           }
         }

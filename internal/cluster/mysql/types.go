@@ -29,6 +29,7 @@ type DeployRequest struct {
 	BootstrapRouter    *bool    `json:"bootstrap_router"`
 	SSHPort            int      `json:"ssh_port"`
 	MySQLPort          int      `json:"mysql_port"`
+	MySQLVersion       int      `json:"mysql_version"`       // major version: 7=5.7, 8=8.x, 9=9.x; default 8
 	StepTimeoutSeconds int      `json:"step_timeout_seconds"`
 }
 
@@ -90,6 +91,7 @@ type StoredSpec struct {
 	SSHPrivateKeyPath  string   `json:"ssh_private_key_path,omitempty"`
 	SSHPort            int      `json:"ssh_port"`
 	MySQLPort          int      `json:"mysql_port"`
+	MySQLVersion       int      `json:"mysql_version"`
 	StepTimeoutSeconds int      `json:"step_timeout_seconds"`
 }
 
@@ -100,6 +102,7 @@ type SecretInput struct {
 }
 
 type StoredSecret struct {
+	AdminUser     string `json:"admin_user"`
 	AdminPassword string `json:"admin_password"`
 }
 

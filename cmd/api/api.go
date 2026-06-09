@@ -26,10 +26,11 @@ type application struct {
 }
 
 type config struct {
-	addr    string
-	env     string
-	apiKey  string
-	version string
+	addr      string
+	env       string
+	apiKey    string
+	version   string
+	proxyHost string // default host for metric connections; filled from PROXY_HOST env
 }
 
 func (app *application) mount() *chi.Mux {
@@ -58,6 +59,7 @@ func (app *application) mount() *chi.Mux {
 
 	r.Route("/cluster/mysql", func(r chi.Router) {
 		r.Post("/deploy", app.deployMySQLClusterHandler)
+		r.Post("/metrics", app.mysqlMetricsHandler)
 		r.Get("/jobs", app.listMySQLClusterJobsHandler)
 		r.Get("/jobs/{jobID}", app.getMySQLClusterJobHandler)
 		r.Post("/jobs/{jobID}/resume", app.resumeMySQLClusterJobHandler)

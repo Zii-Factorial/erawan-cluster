@@ -215,9 +215,16 @@
       Type=simple
       User=mysqlrouter
       Group=mysqlrouter
+      # Wait for MySQL socket to be ready before starting Router.
+      # Ensures Router can reach the cluster on first start after a node reboot.
+      ExecStartPre=+/bin/bash -c 'for i in $(seq 1 45); do state=$(mysql -uroot -Nse "SELECT member_state FROM performance_schema.replication_group_members WHERE member_host=@@report_host LIMIT 1" 2>/dev/null); [ "$state" = "ONLINE" ] && exit 0; sleep 2; done; exit 1'
       ExecStart=/usr/bin/mysqlrouter -c /etc/mysqlrouter/{{ cluster_name }}/mysqlrouter.conf
       Restart=always
-      RestartSec=5
+      # 10s gap between restarts — gives MySQL time to stabilise before Router reconnects.
+      RestartSec=10
+      # Cap restart rate: max 5 starts per 5 minutes to avoid a crash loop.
+      StartLimitIntervalSec=300
+      StartLimitBurst=5
       LimitNOFILE=65535
 
       [Install]

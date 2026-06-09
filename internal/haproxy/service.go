@@ -21,9 +21,10 @@ const (
 )
 
 type Service struct {
-	tenantsDir    string
-	reloadCmd     []string
-	reloadTimeout time.Duration
+	tenantsDir      string
+	reloadCmd       []string
+	reloadTimeout   time.Duration
+	mainConfigFiles []string // optional; enables pre-validation before every reload
 }
 
 func NewService(tenantsDir string, reloadCmd []string, reloadTimeout time.Duration) (*Service, error) {
@@ -40,6 +41,90 @@ func NewService(tenantsDir string, reloadCmd []string, reloadTimeout time.Durati
 		return nil, fmt.Errorf("create tenants directory: %w", err)
 	}
 	return &Service{tenantsDir: tenantsDir, reloadCmd: reloadCmd, reloadTimeout: reloadTimeout}, nil
+}
+
+// SetMainConfigs sets the main HAProxy config file paths used for pre-validation.
+// When set, every applyConfig call validates the new tenant config against the full
+// config set (main files + all existing tenant files + new file) before writing,
+// so a bad config for one cluster never blocks reloads for other clusters.
+func (s *Service) SetMainConfigs(paths []string) {
+	filtered := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if strings.TrimSpace(p) != "" {
+			filtered = append(filtered, p)
+		}
+	}
+	s.mainConfigFiles = filtered
+}
+
+// minimalGlobalCfg is a syntactically valid HAProxy global+defaults stub used when
+// no mainConfigFiles are provided. It satisfies haproxy -c requirements so tenant
+// listen blocks can be validated in isolation.
+const minimalGlobalCfg = `global
+    log /dev/null local0
+    maxconn 50000
+
+defaults
+    mode tcp
+    log global
+    option dontlognull
+    timeout connect 5s
+    timeout client 30s
+    timeout server 30s
+`
+
+// validateConfigSyntax runs haproxy -c against the new content combined with all
+// existing tenant configs. Returns an error if haproxy reports a config problem,
+// preventing the broken config from ever reaching disk or causing a reload failure.
+func (s *Service) validateConfigSyntax(content string) error {
+	stubFile, err := os.CreateTemp("", "haproxy-stub-*.cfg")
+	if err != nil {
+		return fmt.Errorf("create validation stub: %w", err)
+	}
+	defer os.Remove(stubFile.Name())
+	if _, err := stubFile.WriteString(minimalGlobalCfg); err != nil {
+		stubFile.Close()
+		return fmt.Errorf("write validation stub: %w", err)
+	}
+	stubFile.Close()
+
+	newFile, err := os.CreateTemp("", "haproxy-candidate-*.cfg")
+	if err != nil {
+		return fmt.Errorf("create candidate config: %w", err)
+	}
+	defer os.Remove(newFile.Name())
+	if _, err := newFile.WriteString(content); err != nil {
+		newFile.Close()
+		return fmt.Errorf("write candidate config: %w", err)
+	}
+	newFile.Close()
+
+	args := []string{"-c"}
+	if len(s.mainConfigFiles) > 0 {
+		for _, f := range s.mainConfigFiles {
+			args = append(args, "-f", f)
+		}
+	} else {
+		args = append(args, "-f", stubFile.Name())
+	}
+
+	// Include all existing tenant configs so port-conflict errors are caught upfront.
+	entries, _ := os.ReadDir(s.tenantsDir)
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".cfg") && !strings.HasSuffix(e.Name(), ".bak") {
+			args = append(args, "-f", filepath.Join(s.tenantsDir, e.Name()))
+		}
+	}
+	args = append(args, "-f", newFile.Name())
+
+	var out bytes.Buffer
+	cmd := exec.Command("haproxy", args...)
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("config validation failed: %s", strings.TrimSpace(out.String()))
+	}
+	return nil
 }
 
 const defaultPatroniPort = 8008
@@ -159,6 +244,10 @@ func (s *Service) CreatePGSQLConfig(ctx context.Context, in CreatePGSQLConfigInp
 }
 
 func (s *Service) applyConfig(ctx context.Context, port int, content string) error {
+	if err := s.validateConfigSyntax(content); err != nil {
+		return err
+	}
+
 	filename := s.filename(port)
 	backup := ""
 
@@ -429,26 +518,27 @@ func buildMySQLConfig(port int, nodeIPs []string, dbPort int) string {
 	b.WriteString("    option tcp-check\n")
 	b.WriteString("\n")
 	b.WriteString("    # Proper timeouts\n")
-	b.WriteString("    timeout connect  500ms\n")
-	b.WriteString("    timeout check    200ms\n")
-	b.WriteString("    timeout queue    5s\n")
+	b.WriteString("    timeout connect  1s\n")
+	b.WriteString("    timeout check    500ms\n")
+	b.WriteString("    timeout queue    10s\n")
 	b.WriteString("    timeout client   10m\n")
 	b.WriteString("    timeout server   10m\n")
-	b.WriteString("    timeout client-fin  2s\n")
-	b.WriteString("    timeout server-fin  2s\n")
+	b.WriteString("    timeout client-fin  5s\n")
+	b.WriteString("    timeout server-fin  5s\n")
 	b.WriteString("\n")
 	b.WriteString("    # Redispatch to backup on the first retry — don't waste retries on a dead router\n")
 	b.WriteString("    option redispatch 1\n")
-	b.WriteString("    retries 2\n")
+	b.WriteString("    retries 3\n")
 	b.WriteString("\n")
 	b.WriteString("    # Health check tuning\n")
-	b.WriteString("    # fall 2      = mark DOWN after 2 consecutive failures — detects dead primary in ~1s\n")
-	b.WriteString("    # rise 2      = mark UP after 2 consecutive successes (avoid premature recovery)\n")
-	b.WriteString("    # inter       = check every 500ms when healthy\n")
-	b.WriteString("    # fastinter   = check every 100ms when just failed (detect recovery fast)\n")
-	b.WriteString("    # downinter   = check every 200ms when DOWN\n")
+	b.WriteString("    # fall 3      = mark DOWN after 3 consecutive failures — avoids false DOWN on brief Router hiccup\n")
+	b.WriteString("    # rise 3      = mark UP after 3 consecutive successes — avoids premature recovery after rejoin\n")
+	b.WriteString("    # inter       = check every 2s when healthy — reduces check storm and flapping\n")
+	b.WriteString("    # fastinter   = check every 500ms when just failed (faster failure detection)\n")
+	b.WriteString("    # downinter   = check every 500ms when DOWN (consistent with fastinter)\n")
 	b.WriteString("    # on-marked-down shutdown-sessions = kill connections immediately when server goes down\n")
-	b.WriteString("    default-server inter 500ms fastinter 100ms downinter 200ms fall 2 rise 2 on-marked-down shutdown-sessions on-marked-up shutdown-backup-sessions\n")
+	b.WriteString("    # slowstart 10s = ramp up traffic to rejoining server gradually — prevents connection flood\n")
+	b.WriteString("    default-server inter 2s fastinter 500ms downinter 500ms fall 3 rise 3 on-marked-down shutdown-sessions slowstart 10s\n")
 	b.WriteString("\n")
 	b.WriteString(fmt.Sprintf("    # Backend port %d (%s)\n", dbPort, mysqlPortDesc(dbPort)))
 	b.WriteString("    # Use first server as primary, others as backup\n")
