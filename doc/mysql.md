@@ -22,9 +22,11 @@ Supported topologies:
 
 For production automatic failover, use at least 3 database nodes so Group Replication can keep quorum after a single node loss.
 
-## API payload
+## API payloads
 
-Use a MySQL deploy body like this:
+### Deploy
+
+Full example (with app user and DB):
 
 ```json
 {
@@ -39,11 +41,69 @@ Use a MySQL deploy body like this:
   "bootstrap_router": true,
   "ssh_port": 22,
   "mysql_port": 3306,
+  "mysql_version": 8,
   "step_timeout_seconds": 900
 }
 ```
 
-To resume a failed job:
+Single-node example — set `standby_ips` to `[]`:
+
+```json
+{
+  "cluster_name": "prodCluster",
+  "primary_ip": "192.168.122.154",
+  "standby_ips": [],
+  "bootstrap_router": false,
+  "ssh_port": 22,
+  "mysql_port": 3306,
+  "mysql_version": 8,
+  "step_timeout_seconds": 900
+}
+```
+
+### Deploy response
+
+The `202 Accepted` response includes the job and the generated cluster credentials:
+
+```json
+{
+  "status": "accepted",
+  "message": "MySQL cluster deployment started",
+  "data": {
+    "id": "abc123...",
+    "status": "running",
+    "secret": {
+      "admin_user": "clusteradmin",
+      "admin_password": "<generated>"
+    }
+  }
+}
+```
+
+Save `admin_user` and `admin_password` — they are required for the Collect Metrics request.
+
+### Get Job response
+
+`GET /cluster/mysql/jobs/{jobID}` returns the secret alongside the job:
+
+```json
+{
+  "status": "ok",
+  "message": "success",
+  "data": {
+    "id": "abc123...",
+    "status": "completed",
+    "secret": {
+      "admin_user": "clusteradmin",
+      "admin_password": "<stored password>"
+    }
+  }
+}
+```
+
+### Resume a failed job
+
+`POST /cluster/mysql/jobs/{jobID}/resume`
 
 ```json
 {
@@ -51,7 +111,13 @@ To resume a failed job:
 }
 ```
 
-To roll back a MySQL job:
+Omit `new_user_password` if the original deploy had no `new_user`. The cluster-admin password is reused automatically from stored job state.
+
+The resume `202` response also returns the secret in the same format as the deploy response.
+
+### Rollback
+
+`POST /cluster/mysql/jobs/{jobID}/rollback`
 
 ```json
 {}
@@ -60,9 +126,11 @@ To roll back a MySQL job:
 ## Field behavior
 
 - `primary_ip`: node used to create the initial InnoDB Cluster.
-- `standby_ips`: optional list of replica nodes to add after cluster creation.
+- `standby_ips`: optional list of replica nodes to add after cluster creation. Set to `[]` for single-node.
 - `cluster_admin_username`: optional override for the internally managed cluster admin account. Defaults to `clusteradmin`.
 - `bootstrap_router`: when `true`, bootstraps MySQL Router on all DB nodes.
+- `mysql_version`: target MySQL major version. Supported: `8`. Defaults to `8`.
+- `mysql_port`: MySQL port on each target node. Defaults to `3306`.
 - `mysql_recovery_method`: optional Ansible variable override for how standbys join the cluster. Defaults to `auto`, which prefers faster incremental recovery and falls back to clone when necessary.
 - `ssh_port`: SSH port for the target nodes. Defaults to `22`.
 - `assume_prepared`: when `true`, skips preflight and instance-configuration steps.
@@ -76,6 +144,69 @@ The generated MySQL instance config also points to MySQL's default auto-generate
 - `/var/lib/mysql/ca.pem`
 - `/var/lib/mysql/server-cert.pem`
 - `/var/lib/mysql/server-key.pem`
+
+## Collect Metrics
+
+`POST /cluster/mysql/metrics`
+
+Point `host`/`port` at HAProxy or MySQL Router when a proxy is in front of the cluster.
+
+**Always use the cluster admin credentials** (`admin_user` / `admin_password` from the deploy response). The cluster admin requires `PROCESS` privilege and access to `performance_schema`. Application users (`new_user`) do not have these privileges.
+
+### Request
+
+```json
+{
+  "host": "192.168.122.154",
+  "port": 3306,
+  "user": "clusteradmin",
+  "password": "<admin_password from deploy response>",
+  "database": "information_schema",
+  "ssl_mode": "disable",
+  "connect_timeout": 10,
+  "categories": [],
+  "limit": 20
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `host` | — | HAProxy, MySQL Router, or primary IP |
+| `port` | `3306` | Proxy or MySQL port |
+| `user` | — | Cluster admin user (`clusteradmin`). Must have `PROCESS` + `performance_schema` access. |
+| `password` | — | Cluster admin password from deploy response |
+| `database` | `information_schema` | Target database for table/query stats |
+| `ssl_mode` | `disable` | `disable` or `require` |
+| `connect_timeout` | `10` | Seconds |
+| `categories` | all | Leave empty for all 7, or name specific ones |
+| `limit` | `20` | Top-N cap for slow queries and digest lists. Max 500. |
+| `from` | — | ISO 8601 lower bound for slow queries |
+| `to` | — | ISO 8601 upper bound for slow queries |
+
+### Available categories
+
+| Category | Source | Description |
+|----------|--------|-------------|
+| `cluster` | `performance_schema.replication_group_members` | InnoDB Cluster / GR membership, primary host, member states |
+| `uptime` | `SHOW STATUS LIKE 'Uptime'` | MySQL server process uptime |
+| `connections` | `SHOW PROCESSLIST` + `SHOW STATUS` | Active/sleeping threads, utilization, max-used, aborted connects, per-database breakdown |
+| `replication` | `performance_schema.replication_*` | GR member certification stats, applier worker lag |
+| `performance` | `SHOW STATUS` + `information_schema.innodb_metrics` | QPS/TPS, InnoDB buffer pool, temp tables, sort pressure, row-lock waits |
+| `query` | `performance_schema.events_statements_summary_by_digest` + `SHOW PROCESSLIST` | Avg/P95/P99 latency, top queries, slow queries, lock waits, deadlocks, full-scan tables |
+| `maintenance` | `information_schema` + `performance_schema.metadata_locks` | InnoDB purge lag, table fragmentation, metadata lock contention, open tables |
+
+### `limit` scope
+
+`limit` only applies to list-type fields:
+- `query.slow_queries` — currently-running queries exceeding `slow_query_threshold_ms`
+- `query.top_by_mean_exec_ms` — top queries ranked by mean execution time
+- `query.top_by_total_exec_ms` — top queries ranked by total execution time
+- `query.high_full_scan_tables` — digest entries that required full-table scans
+- `maintenance.fragmented_tables` — tables ranked by fragmentation percentage
+
+All snapshot categories (`cluster`, `uptime`, `connections`, `replication`, `performance`) return full results regardless of `limit`.
+
+`from` / `to` only filters `query.slow_queries` (by query start time).
 
 ## Deployment flow
 
@@ -155,3 +286,4 @@ The MySQL playbooks manage:
   - `group_replication_autorejoin_tries = 3`
   - `group_replication_unreachable_majority_timeout = 30`
   - `group_replication_exit_state_action = READ_ONLY`
+- The cluster admin password is generated internally if not supplied and stored per-job. It is returned in the deploy `202` response and reused automatically on resume.

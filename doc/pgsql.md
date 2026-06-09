@@ -115,9 +115,33 @@ The `202 Accepted` response includes the job and the generated cluster credentia
 }
 ```
 
-Save `postgres_user` and `postgres_password` — they are needed for the Collect Metrics request.
+Save `postgres_user` and `postgres_password` — they are needed for the Collect Metrics request. All five secret fields are reused automatically on resume.
+
+### Get Job response
+
+`GET /cluster/pgsql/jobs/{jobID}` returns the secret alongside the job:
+
+```json
+{
+  "status": "ok",
+  "message": "success",
+  "data": {
+    "id": "abc123...",
+    "status": "completed",
+    "secret": {
+      "postgres_user": "postgres",
+      "postgres_password": "<stored password>",
+      "replicator_user": "replicator",
+      "replicator_password": "<stored password>",
+      "admin_password": "<stored password>"
+    }
+  }
+}
+```
 
 ### Resume a failed job
+
+`POST /cluster/pgsql/jobs/{jobID}/resume`
 
 ```json
 {
@@ -126,6 +150,8 @@ Save `postgres_user` and `postgres_password` — they are needed for the Collect
 ```
 
 Omit `new_user_password` if the original deploy had no `new_user`. Stored secrets (postgres, replicator, admin passwords) are reused automatically from the saved job state.
+
+The resume `202` response also returns the secret in the same format as the deploy response.
 
 ## Deployment flow
 
@@ -143,6 +169,8 @@ SSH user and private key are configured once on the API host through `CLUSTER_SS
 `POST /cluster/pgsql/metrics`
 
 Point `host`/`port` at HAProxy when a proxy is in front of the cluster. Use `node_ips` for Patroni REST auto-discovery (cluster and failover categories).
+
+**Always use the PostgreSQL superuser credentials** (`postgres_user` / `postgres_password` from the deploy response). The `postgres` superuser has full access to `pg_stat_*` views and `pg_stat_statements`. Application users (`new_user`) and the replicator user do not have these privileges.
 
 ### Request
 
@@ -166,14 +194,14 @@ Point `host`/`port` at HAProxy when a proxy is in front of the cluster. Use `nod
 |-------|---------|-------------|
 | `host` | — | HAProxy or primary IP |
 | `port` | `5432` | HAProxy or PostgreSQL port |
-| `node_ips` | — | All cluster member IPs — used to auto-discover the Patroni leader via `GET /leader` |
+| `node_ips` | — | All cluster member IPs — used to auto-discover the Patroni leader via `GET /leader`. Required for `cluster` and `failover` categories. |
 | `user` | — | PostgreSQL superuser (`postgres`) |
 | `password` | — | Superuser password from deploy response |
 | `database` | `postgres` | Target database for table/query stats |
 | `ssl_mode` | `disable` | `disable` or `require` |
 | `connect_timeout` | `10` | Seconds |
 | `patroni_port` | `8008` | Patroni REST port on each node |
-| `categories` | all | Leave empty for all, or name specific ones |
+| `categories` | all | Leave empty for all 8, or name specific ones |
 | `limit` | `20` | Top-N cap for `slow_queries`, `high_seq_scan_tables`, `stale_tables`. Max 500. |
 | `from` | — | ISO 8601 lower bound for failover events and slow queries |
 | `to` | — | ISO 8601 upper bound for failover events and slow queries |
@@ -201,6 +229,8 @@ Point `host`/`port` at HAProxy when a proxy is in front of the cluster. Use `nod
 - `maintenance.stale_tables` — tables ranked by dead tuple count
 
 All snapshot categories (`connections`, `replication`, `performance`, `uptime`, `cluster`, `failover`) return full results regardless of `limit`.
+
+`from` / `to` filters `failover.events` (by `occurred_at`) and `query.slow_queries` (by query start time).
 
 ## Optional modes
 

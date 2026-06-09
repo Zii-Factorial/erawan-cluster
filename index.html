@@ -380,7 +380,7 @@
               <div class="rounded-2xl bg-slate-50 p-4 transition-colors duration-300 dark:bg-white/5">
                 <p class="font-medium text-slate-900 dark:text-white">MySQL</p>
                 <p class="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                  Caller provides SSH credentials. Cluster-admin credentials are generated and managed internally. MySQL root password is no longer part of the public API contract.
+                  Cluster-admin credentials (<code class="font-mono text-xs">admin_user</code> / <code class="font-mono text-xs">admin_password</code>) are generated internally and returned in the deploy <code class="font-mono text-xs">202</code> response under <code class="font-mono text-xs">secret</code>. They are also available via Get Job and Resume responses, and reused automatically on resume. Use these credentials — not the app user — for the metrics endpoint.
                 </p>
               </div>
               <div class="rounded-2xl bg-slate-50 p-4 transition-colors duration-300 dark:bg-white/5">
@@ -525,7 +525,26 @@ POST /cluster/pgsql/jobs/{jobID}/resume</pre>
   "db_port": 5432,
   "patroni_port": 8008
 }</pre>
-              <pre id="metrics-payload" class="payload-panel hidden overflow-x-auto p-6 font-mono text-sm leading-7 text-slate-100"><span class="text-slate-400">// POST /cluster/pgsql/metrics</span>
+              <pre id="metrics-payload" class="payload-panel hidden overflow-x-auto p-6 font-mono text-sm leading-7 text-slate-100"><span class="text-slate-400">// POST /cluster/mysql/metrics</span>
+<span class="text-slate-400">// user: admin_user from deploy response (clusteradmin)</span>
+{
+  "host": "192.168.122.154",
+  "port": 3306,
+  "user": "clusteradmin",
+  "password": "&lt;admin_password from deploy response&gt;",
+  "database": "information_schema",
+  "ssl_mode": "disable",
+  "connect_timeout": 10,
+  "categories": [],
+  "limit": 20
+}
+
+<span class="text-slate-400">// MySQL: 7 categories — cluster | uptime | connections</span>
+<span class="text-slate-400">// replication | performance | query | maintenance</span>
+
+<span class="text-slate-400">// POST /cluster/pgsql/metrics</span>
+<span class="text-slate-400">// user: postgres_user from deploy response (postgres)</span>
+<span class="text-slate-400">// node_ips: required for cluster + failover categories</span>
 {
   "host": "192.168.51.117",
   "port": 25005,
@@ -535,7 +554,7 @@ POST /cluster/pgsql/jobs/{jobID}/resume</pre>
     "10.0.0.3"
   ],
   "user": "postgres",
-  "password": "&lt;postgres_password&gt;",
+  "password": "&lt;postgres_password from deploy response&gt;",
   "database": "postgres",
   "ssl_mode": "require",
   "connect_timeout": 10,
@@ -544,9 +563,8 @@ POST /cluster/pgsql/jobs/{jobID}/resume</pre>
   "limit": 20
 }
 
-<span class="text-slate-400">// categories: leave empty for all 8, or pick:</span>
-<span class="text-slate-400">// cluster | uptime | failover | connections</span>
-<span class="text-slate-400">// replication | performance | query | maintenance</span></pre>
+<span class="text-slate-400">// PostgreSQL: 8 categories — cluster | uptime | failover</span>
+<span class="text-slate-400">// connections | replication | performance | query | maintenance</span></pre>
             </div>
           </div>
 
