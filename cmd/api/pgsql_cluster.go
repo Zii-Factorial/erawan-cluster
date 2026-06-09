@@ -89,5 +89,9 @@ func (app *application) resumePGSQLClusterJobHandler(w http.ResponseWriter, r *h
 		return
 	}
 
-	accepted(w, "PostgreSQL cluster job resumed", job)
+	secret, _ := app.pgsqlCluster.GetSecret(job.ID)
+	accepted(w, "PostgreSQL cluster job resumed", struct {
+		*pgsqlcluster.Job
+		Secret *pgsqlcluster.StoredSecret `json:"secret,omitempty"`
+	}{job, secret})
 }

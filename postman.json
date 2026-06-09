@@ -238,6 +238,13 @@
           "            pm.collectionVariables.set('JOB_ID', json.data.id);",
           "            console.log('[erawan] JOB_ID set to:', json.data.id);",
           "        }",
+          "        if (json && json.data && json.data.secret) {",
+          "            const s = json.data.secret;",
+          "            if (s.admin_user) { pm.collectionVariables.set('MYSQL_DB_USER', s.admin_user); console.log('[erawan] MYSQL_DB_USER set to:', s.admin_user); }",
+          "            if (s.admin_password) { pm.collectionVariables.set('MYSQL_DB_PASSWORD', s.admin_password); console.log('[erawan] MYSQL_DB_PASSWORD captured'); }",
+          "            if (s.postgres_user) { pm.collectionVariables.set('PGSQL_DB_USER', s.postgres_user); console.log('[erawan] PGSQL_DB_USER set to:', s.postgres_user); }",
+          "            if (s.postgres_password) { pm.collectionVariables.set('PGSQL_DB_PASSWORD', s.postgres_password); console.log('[erawan] PGSQL_DB_PASSWORD captured'); }",
+          "        }",
           "    } catch(e) {",
           "        console.warn('[erawan] response decryption failed:', e.message);",
           "    }",
@@ -588,6 +595,27 @@
         },
         {
           "name": "Get Job",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Auto-extract credentials from plain-JSON get-job response (no encryption)",
+                  "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
+                  "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
+                  "try {",
+                  "    const body = pm.response.json();",
+                  "    if (body && body.data && body.data.secret) {",
+                  "        const s = body.data.secret;",
+                  "        if (s.admin_user) { pm.collectionVariables.set('MYSQL_DB_USER', s.admin_user); console.log('[erawan] MYSQL_DB_USER set to:', s.admin_user); }",
+                  "        if (s.admin_password) { pm.collectionVariables.set('MYSQL_DB_PASSWORD', s.admin_password); console.log('[erawan] MYSQL_DB_PASSWORD captured'); }",
+                  "    }",
+                  "} catch(e) {}"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "GET",
             "header": [],

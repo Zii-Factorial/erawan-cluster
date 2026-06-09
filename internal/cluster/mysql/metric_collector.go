@@ -587,7 +587,7 @@ func collectQuery(ctx context.Context, db *sql.DB, limit int, from, to *time.Tim
 
 	// Slow queries from information_schema.PROCESSLIST (TIME is in seconds).
 	// Filter to active Query commands exceeding the threshold.
-	slowThresholdSec := m.SlowQueryThresholdMs / 1000
+	// TIME * 1000 converts to ms so we compare directly against SlowQueryThresholdMs.
 
 	const qSlow = `
 		SELECT ID, COALESCE(DB,''), USER, HOST, COALESCE(STATE,''),
@@ -597,13 +597,15 @@ func collectQuery(ctx context.Context, db *sql.DB, limit int, from, to *time.Tim
 		WHERE COMMAND = 'Query'
 		    AND TIME * 1000 > ?
 		    AND ID != CONNECTION_ID()
+		    AND USER != 'system user'
+		    AND INFO != ''
 		    AND (? IS NULL OR FROM_UNIXTIME(UNIX_TIMESTAMP() - TIME) >= ?)
 		    AND (? IS NULL OR FROM_UNIXTIME(UNIX_TIMESTAMP() - TIME) <= ?)
 		ORDER BY TIME DESC
 		LIMIT ?`
 
 	rows, err := db.QueryContext(ctx, qSlow,
-		slowThresholdSec,
+		m.SlowQueryThresholdMs,
 		nullTimeStr(from), nullTimeStr(from),
 		nullTimeStr(to), nullTimeStr(to),
 		limit,

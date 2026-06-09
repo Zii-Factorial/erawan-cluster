@@ -166,7 +166,7 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 			secret.AdminPassword = storedSecret.AdminPassword
 		} else {
 			secret.AdminPassword = stringOrGenerated("")
-			if saveErr := s.store.SaveSecret(job.ID, StoredSecret{AdminPassword: secret.AdminPassword}); saveErr != nil {
+			if saveErr := s.store.SaveSecret(job.ID, StoredSecret{AdminUser: job.Request.AdminUsername, AdminPassword: secret.AdminPassword}); saveErr != nil {
 				return nil, saveErr
 			}
 		}
