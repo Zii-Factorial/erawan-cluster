@@ -26,10 +26,11 @@ type application struct {
 }
 
 type config struct {
-	addr    string
-	env     string
-	apiKey  string
-	version string
+	addr      string
+	env       string
+	apiKey    string
+	version   string
+	proxyHost string // default host for metric connections; filled from PROXY_HOST env
 }
 
 func (app *application) mount() *chi.Mux {

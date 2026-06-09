@@ -109,10 +109,11 @@ func main() {
 
 	app := &application{
 		config: config{
-			addr:    addr,
-			env:     env.GetString("ENV", "dev"),
-			apiKey:  env.GetString("API_KEY", ""),
-			version: appVersion,
+			addr:      addr,
+			env:       env.GetString("ENV", "dev"),
+			apiKey:    env.GetString("API_KEY", ""),
+			version:   appVersion,
+			proxyHost: env.GetString("PROXY_HOST", "127.0.0.1"),
 		},
 		haproxy:      haproxySvc,
 		mysqlCluster: mysqlSvc,

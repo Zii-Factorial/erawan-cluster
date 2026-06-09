@@ -23,6 +23,10 @@ func (app *application) mysqlMetricsHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	if req.Host == "" {
+		req.Host = app.config.proxyHost
+	}
+
 	if err := mysqlcluster.ValidateMetricRequest(&req); err != nil {
 		errJSON(w, http.StatusBadRequest, err.Error())
 		return

@@ -25,6 +25,10 @@ func (app *application) pgsqlMetricsHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	if req.Host == "" {
+		req.Host = app.config.proxyHost
+	}
+
 	if err := pgsqlcluster.ValidateMetricRequest(&req); err != nil {
 		errJSON(w, http.StatusBadRequest, err.Error())
 		return

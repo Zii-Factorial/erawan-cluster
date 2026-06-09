@@ -105,9 +105,6 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 // ValidateMetricRequest applies defaults and validates required fields.
 func ValidateMetricRequest(req *MetricRequest) error {
 	req.Host = strings.TrimSpace(req.Host)
-	if req.Host == "" {
-		return fmt.Errorf("host is required")
-	}
 	if req.Port == 0 {
 		req.Port = 3306
 	}
