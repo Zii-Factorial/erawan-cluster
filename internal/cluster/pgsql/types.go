@@ -55,6 +55,9 @@ type Job struct {
 	UpdatedAt         time.Time    `json:"updated_at"`
 	CurrentStep       string       `json:"current_step,omitempty"`
 	LastCompletedStep int          `json:"last_completed_step"`
+	CompletedSteps    int          `json:"completed_steps"`
+	TotalSteps        int          `json:"total_steps"`
+	ProgressPercent   int          `json:"progress_percent"`
 	Error             string       `json:"error,omitempty"`
 	Request           StoredSpec   `json:"request"`
 	Steps             []StepResult `json:"steps"`
