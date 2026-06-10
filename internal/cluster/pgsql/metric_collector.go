@@ -286,7 +286,7 @@ func collectDatabaseCount(ctx context.Context, db *sql.DB) (int, error) {
 	var count int
 	err := db.QueryRowContext(ctx, `
 		SELECT count(*) FROM pg_database
-		WHERE datistemplate = false AND datname NOT IN ('postgres')`).Scan(&count)
+		WHERE datistemplate = false`).Scan(&count)
 	return count, err
 }
 
@@ -528,14 +528,16 @@ func collectConnections(ctx context.Context, db *sql.DB, databases []string) (*C
 
 	const qPerDB = `
 		SELECT
-		    datname,
-		    count(*)                                  AS total,
-		    count(*) FILTER (WHERE state='active')   AS active,
-		    count(*) FILTER (WHERE state='idle')     AS idle
-		FROM pg_stat_activity
-		WHERE datname IS NOT NULL AND pid <> pg_backend_pid()
-		GROUP BY datname
-		ORDER BY total DESC`
+		    d.datname,
+		    count(a.pid)                                  AS total,
+		    count(a.pid) FILTER (WHERE a.state='active') AS active,
+		    count(a.pid) FILTER (WHERE a.state='idle')   AS idle
+		FROM pg_database d
+		LEFT JOIN pg_stat_activity a
+		    ON a.datname = d.datname AND a.pid <> pg_backend_pid()
+		WHERE d.datistemplate = false
+		GROUP BY d.datname
+		ORDER BY total DESC, d.datname`
 
 	m := &ConnectionMetric{ByDatabase: []DBConnStat{}, WaitEvents: []WaitEvent{}}
 

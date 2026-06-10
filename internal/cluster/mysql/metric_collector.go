@@ -360,14 +360,16 @@ func collectConnections(ctx context.Context, db *sql.DB, databases []string) (*C
 
 	filter := dbSet(databases)
 	rows, err := db.QueryContext(ctx, `
-		SELECT db,
-		    COUNT(*),
-		    SUM(CASE WHEN COMMAND = 'Query' THEN 1 ELSE 0 END),
-		    SUM(CASE WHEN COMMAND = 'Sleep' THEN 1 ELSE 0 END)
-		FROM information_schema.PROCESSLIST
-		WHERE db IS NOT NULL
-		GROUP BY db
-		ORDER BY COUNT(*) DESC`)
+		SELECT
+		    s.schema_name,
+		    COUNT(p.id),
+		    SUM(CASE WHEN p.COMMAND = 'Query' THEN 1 ELSE 0 END),
+		    SUM(CASE WHEN p.COMMAND = 'Sleep'  THEN 1 ELSE 0 END)
+		FROM information_schema.schemata s
+		LEFT JOIN information_schema.PROCESSLIST p ON p.db = s.schema_name
+		WHERE s.schema_name NOT IN ('information_schema','mysql','performance_schema','sys')
+		GROUP BY s.schema_name
+		ORDER BY COUNT(p.id) DESC, s.schema_name`)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
