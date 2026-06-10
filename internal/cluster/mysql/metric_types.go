@@ -58,6 +58,7 @@ type MetricRequest struct {
 
 	// Collection filters
 	Categories []string   `json:"categories"` // empty = all
+	Databases  []string   `json:"databases"`  // empty = all user databases; non-empty = filter per-db results to these names
 	Limit      int        `json:"limit"`      // top-N cap for slow queries, digest lists; default 20
 	From       *time.Time `json:"from"`       // ISO 8601 lower bound for slow queries
 	To         *time.Time `json:"to"`         // ISO 8601 upper bound for slow queries
@@ -65,11 +66,12 @@ type MetricRequest struct {
 
 // MetricResponse is the top-level JSON envelope.
 type MetricResponse struct {
-	CollectedAt time.Time         `json:"collected_at"`
-	Host        string            `json:"host"`
-	Port        int               `json:"port"`
-	Categories  map[string]any    `json:"categories"`
-	Errors      map[string]string `json:"errors,omitempty"`
+	CollectedAt   time.Time         `json:"collected_at"`
+	Host          string            `json:"host"`
+	Port          int               `json:"port"`
+	DatabaseCount int               `json:"database_count"` // total user databases on this server
+	Categories    map[string]any    `json:"categories"`
+	Errors        map[string]string `json:"errors,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
