@@ -149,7 +149,7 @@ The generated MySQL instance config also points to MySQL's default auto-generate
 
 `POST /cluster/mysql/metrics`
 
-Point `host`/`port` at HAProxy or MySQL Router when a proxy is in front of the cluster.
+Point `port` at HAProxy or MySQL Router when a proxy is in front of the cluster. `host` is optional — when omitted the server uses the `PROXY_HOST` environment variable (typically `127.0.0.1`).
 
 **Always use the cluster admin credentials** (`admin_user` / `admin_password` from the deploy response). The cluster admin requires `PROCESS` privilege and access to `performance_schema`. Application users (`new_user`) do not have these privileges.
 
@@ -157,56 +157,91 @@ Point `host`/`port` at HAProxy or MySQL Router when a proxy is in front of the c
 
 ```json
 {
-  "host": "192.168.122.154",
-  "port": 3306,
+  "port": 25010,
   "user": "clusteradmin",
   "password": "<admin_password from deploy response>",
-  "database": "information_schema",
   "ssl_mode": "disable",
   "connect_timeout": 10,
   "categories": [],
+  "databases": [],
   "limit": 20
 }
 ```
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `host` | — | HAProxy, MySQL Router, or primary IP |
-| `port` | `3306` | Proxy or MySQL port |
+| `host` | `PROXY_HOST` env | HAProxy, MySQL Router, or primary IP. Omit to use server default. |
+| `port` | `3306` | HAProxy listen port or direct MySQL port |
 | `user` | — | Cluster admin user (`clusteradmin`). Must have `PROCESS` + `performance_schema` access. |
 | `password` | — | Cluster admin password from deploy response |
-| `database` | `information_schema` | Target database for table/query stats |
+| `database` | `information_schema` | Connection default database |
 | `ssl_mode` | `disable` | `disable` or `require` |
 | `connect_timeout` | `10` | Seconds |
-| `categories` | all | Leave empty for all 7, or name specific ones |
+| `categories` | all | Leave empty for all 7, or specify a subset |
+| `databases` | all | Optional list of database names to filter per-database results. Empty = all user databases. |
 | `limit` | `20` | Top-N cap for slow queries and digest lists. Max 500. |
-| `from` | — | ISO 8601 lower bound for slow queries |
-| `to` | — | ISO 8601 upper bound for slow queries |
+| `from` | — | ISO 8601 lower bound for slow query filter |
+| `to` | — | ISO 8601 upper bound for slow query filter |
+
+### Response envelope
+
+Every response includes `database_count` — the total number of user databases on the server (excludes `information_schema`, `mysql`, `performance_schema`, `sys`):
+
+```json
+{
+  "collected_at": "...",
+  "host": "127.0.0.1",
+  "port": 25010,
+  "database_count": 3,
+  "categories": { ... },
+  "errors": { ... }
+}
+```
 
 ### Available categories
 
 | Category | Source | Description |
 |----------|--------|-------------|
-| `cluster` | `performance_schema.replication_group_members` | InnoDB Cluster / GR membership, primary host, member states |
-| `uptime` | `SHOW STATUS LIKE 'Uptime'` | MySQL server process uptime |
-| `connections` | `SHOW PROCESSLIST` + `SHOW STATUS` | Active/sleeping threads, utilization, max-used, aborted connects, per-database breakdown |
-| `replication` | `performance_schema.replication_*` | GR member certification stats, applier worker lag |
-| `performance` | `SHOW STATUS` + `information_schema.innodb_metrics` | QPS/TPS, InnoDB buffer pool, temp tables, sort pressure, row-lock waits |
-| `query` | `performance_schema.events_statements_summary_by_digest` + `SHOW PROCESSLIST` | Avg/P95/P99 latency, top queries, slow queries, lock waits, deadlocks, full-scan tables |
-| `maintenance` | `information_schema` + `performance_schema.metadata_locks` | InnoDB purge lag, table fragmentation, metadata lock contention, open tables |
+| `cluster` | `performance_schema.replication_group_members` | InnoDB Cluster / GR membership, current primary host and port, all member states and roles |
+| `uptime` | `performance_schema.global_status` | MySQL server process uptime in seconds and human-readable form |
+| `connections` | `information_schema.PROCESSLIST` + `performance_schema.global_status` | Active/sleeping threads, utilization %, max-used, aborted connects, per-database breakdown (all user databases shown, including those with zero connections) |
+| `replication` | `performance_schema.replication_group_member_stats` + `replication_applier_status_by_worker` | GR member certification queue, conflicts detected, applier worker lag per channel |
+| `performance` | `performance_schema.global_status` | QPS/TPS, InnoDB buffer pool hit ratio and dirty/free pages, temp-table disk ratio, sort pressure, row-lock waits |
+| `query` | `performance_schema.events_statements_summary_by_digest` + `information_schema.PROCESSLIST` | Avg/P95/P99 digest latency, top queries by mean and total time, slow queries, lock waits, deadlocks, full-scan digest entries |
+| `maintenance` | `information_schema.TABLES` + `performance_schema.metadata_locks` + `performance_schema.global_status` | InnoDB purge lag (history list length), fragmented tables, metadata lock contention, open/opened table counts |
+
+### `databases` filter scope
+
+When `databases` is non-empty, only matching database names appear in these fields:
+
+- `connections.by_database` — per-database connection counts
+- `query.slow_queries` — filtered by the query's active database
+- `query.high_full_scan_tables` — filtered by digest schema name
+- `maintenance.fragmented_tables` — filtered by table schema name
+
+`database_count` always reflects the total on the server regardless of the filter.
+
+### Detecting failover
+
+MySQL InnoDB Cluster has no failover history API. Use these fields to detect that a primary change occurred:
+
+- `cluster.primary_host` / `cluster.primary_port` — the current elected primary
+- `cluster.member_count` — if lower than expected, a node left the cluster
+- `cluster.members[].state` — `ERROR` or `UNREACHABLE` indicates a troubled node
+- `uptime.uptime_seconds` — a short uptime means the server recently restarted
 
 ### `limit` scope
 
-`limit` only applies to list-type fields:
-- `query.slow_queries` — currently-running queries exceeding `slow_query_threshold_ms`
-- `query.top_by_mean_exec_ms` — top queries ranked by mean execution time
-- `query.top_by_total_exec_ms` — top queries ranked by total execution time
-- `query.high_full_scan_tables` — digest entries that required full-table scans
-- `maintenance.fragmented_tables` — tables ranked by fragmentation percentage
+`limit` applies to list-type fields only:
+- `query.slow_queries`
+- `query.top_by_mean_exec_ms`
+- `query.top_by_total_exec_ms`
+- `query.high_full_scan_tables`
+- `maintenance.fragmented_tables`
 
 All snapshot categories (`cluster`, `uptime`, `connections`, `replication`, `performance`) return full results regardless of `limit`.
 
-`from` / `to` only filters `query.slow_queries` (by query start time).
+`from` / `to` filters `query.slow_queries` by query start time only.
 
 ## Deployment flow
 

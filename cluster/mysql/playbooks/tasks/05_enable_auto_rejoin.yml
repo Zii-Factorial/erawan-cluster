@@ -6,7 +6,7 @@
       if [ -S "$s" ]; then sock="$s"; break; fi
     done
     [ -n "$sock" ] || { echo "no MySQL socket found" >&2; exit 1; }
-    mysql -uroot --socket="$sock" <<'SQL'
+    mysql -uroot --socket="$sock" <<'SQL' || exit 1
     SET GLOBAL  group_replication_start_on_boot                = ON;
     SET PERSIST group_replication_start_on_boot                = ON;
     SET GLOBAL  group_replication_autorejoin_tries             = {{ mysql_gr_autorejoin_tries | default(3) | int }};

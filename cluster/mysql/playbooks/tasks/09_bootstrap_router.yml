@@ -163,7 +163,8 @@
         --conf-use-gr-notifications \
         --conf-base-port 6446 \
         --directory /etc/mysqlrouter/{{ cluster_name }} \
-        --user=mysqlrouter
+        --user=mysqlrouter \
+        --force
   args:
     executable: /bin/bash
   register: bootstrap_router_result

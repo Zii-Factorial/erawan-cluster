@@ -44,6 +44,9 @@
     - name: Include init-app-db tasks
       ansible.builtin.import_tasks: tasks/07_init_app_db.yml
 
+    - name: Include boot-recovery tasks
+      ansible.builtin.import_tasks: tasks/08_boot_recovery.yml
+
 # ---------------------------------------------------------------------------
 # PLAY 4 — Bootstrap MySQL Router on all nodes
 # ---------------------------------------------------------------------------
@@ -53,4 +56,4 @@
   become: true
   tasks:
     - name: Include bootstrap-router tasks
-      ansible.builtin.import_tasks: tasks/08_bootstrap_router.yml
+      ansible.builtin.import_tasks: tasks/09_bootstrap_router.yml

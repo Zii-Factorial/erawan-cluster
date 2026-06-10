@@ -168,7 +168,7 @@ SSH user and private key are configured once on the API host through `CLUSTER_SS
 
 `POST /cluster/pgsql/metrics`
 
-Point `host`/`port` at HAProxy when a proxy is in front of the cluster. Use `node_ips` for Patroni REST auto-discovery (cluster and failover categories).
+Point `port` at HAProxy when a proxy is in front of the cluster. `host` is optional — when omitted the server uses the `PROXY_HOST` environment variable (typically `127.0.0.1`). Use `node_ips` for Patroni REST auto-discovery (`cluster` and `failover` categories).
 
 **Always use the PostgreSQL superuser credentials** (`postgres_user` / `postgres_password` from the deploy response). The `postgres` superuser has full access to `pg_stat_*` views and `pg_stat_statements`. Application users (`new_user`) and the replicator user do not have these privileges.
 
@@ -176,57 +176,111 @@ Point `host`/`port` at HAProxy when a proxy is in front of the cluster. Use `nod
 
 ```json
 {
-  "host": "192.168.51.117",
   "port": 25005,
   "node_ips": ["10.0.0.1", "10.0.0.2", "10.0.0.3"],
   "user": "postgres",
   "password": "<postgres_password from deploy response>",
-  "database": "postgres",
   "ssl_mode": "require",
   "connect_timeout": 10,
   "patroni_port": 8008,
   "categories": [],
+  "databases": [],
   "limit": 20
 }
 ```
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `host` | — | HAProxy or primary IP |
-| `port` | `5432` | HAProxy or PostgreSQL port |
-| `node_ips` | — | All cluster member IPs — used to auto-discover the Patroni leader via `GET /leader`. Required for `cluster` and `failover` categories. |
+| `host` | `PROXY_HOST` env | HAProxy or primary IP. Omit to use server default. |
+| `port` | `5432` | HAProxy listen port or direct PostgreSQL port |
+| `node_ips` | — | All cluster member IPs. The collector calls `GET /leader` on each to auto-discover the Patroni leader. Required for `cluster` and `failover` categories. |
 | `user` | — | PostgreSQL superuser (`postgres`) |
 | `password` | — | Superuser password from deploy response |
-| `database` | `postgres` | Target database for table/query stats |
+| `database` | `postgres` | Connection default database |
 | `ssl_mode` | `disable` | `disable` or `require` |
 | `connect_timeout` | `10` | Seconds |
 | `patroni_port` | `8008` | Patroni REST port on each node |
-| `categories` | all | Leave empty for all 8, or name specific ones |
-| `limit` | `20` | Top-N cap for `slow_queries`, `high_seq_scan_tables`, `stale_tables`. Max 500. |
+| `categories` | all | Leave empty for all 8, or specify a subset |
+| `databases` | all | Optional list of database names to filter per-database results. Empty = all databases. |
+| `limit` | `20` | Top-N cap for slow queries, stale tables, and seq-scan tables. Max 500. |
 | `from` | — | ISO 8601 lower bound for failover events and slow queries |
 | `to` | — | ISO 8601 upper bound for failover events and slow queries |
+
+### Response envelope
+
+Every response includes `database_count` — the total number of non-template databases on the server (includes `postgres`):
+
+```json
+{
+  "collected_at": "...",
+  "host": "127.0.0.1",
+  "port": 25005,
+  "database_count": 3,
+  "categories": { ... },
+  "errors": { ... }
+}
+```
 
 ### Available categories
 
 | Category | Source | Description |
 |----------|--------|-------------|
-| `cluster` | Patroni REST `/` + `/cluster` | HA state, node roles, DCS health, TTL |
-| `uptime` | `pg_postmaster_start_time()` | PostgreSQL process uptime |
-| `failover` | Patroni REST `/history` | Timeline change events with time-range filter |
-| `connections` | `pg_stat_activity` | Active, idle, idle-in-transaction, lock-waiters, wait-event breakdown, per-database counts |
-| `replication` | `pg_stat_replication` + `pg_replication_slots` | Streaming lag (LSN pipeline), sync state, slot lag bytes |
-| `performance` | `pg_stat_bgwriter` + `pg_stat_database` | TPS, cache hit ratio, checkpoint pressure, bgwriter stats |
-| `query` | `pg_stat_activity` + `pg_stat_statements` | Avg/P95/P99 latency, slow queries, deadlocks, seq-scan vs index-scan ratio |
-| `maintenance` | `pg_stat_user_tables` + `pg_locks` | Autovacuum workers, stale tables, XID wraparound age, logical slot lag, lock grants |
+| `cluster` | Patroni REST `/` + `/cluster` + `/config` | HA state, node roles (leader/sync_standby/replica), DCS health, TTL, loop_wait, retry_timeout |
+| `uptime` | `pg_postmaster_start_time()` | Server start time, uptime in seconds and human-readable form |
+| `failover` | Patroni REST `/history` | Timeline change events, time since last failover, supports `from`/`to` filter |
+| `connections` | `pg_database` + `pg_stat_activity` | Active, idle, idle-in-transaction, lock-waiters, wait-event breakdown, per-database counts (all databases shown including those with zero connections) |
+| `replication` | `pg_stat_replication` + `pg_replication_slots` + `pg_settings` | Streaming lag (LSN pipeline), sync state, WAL level, max_wal_senders, slot lag bytes |
+| `performance` | `pg_stat_bgwriter` + `pg_stat_database` | Avg TPS since stats reset, cache hit ratio, temp files/bytes, checkpoint pressure, bgwriter stats |
+| `query` | `pg_stat_activity` + `pg_stat_statements` | Avg/P95/P99 latency (when `pg_stat_statements` is available), slow queries, lock/deadlock counts, seq-scan vs index-scan ratio, high seq-scan tables |
+| `maintenance` | `pg_stat_progress_vacuum` + `pg_stat_user_tables` + `pg_replication_slots` + `pg_locks` | Running autovacuum workers, stale tables (high dead tuple count), tables needing vacuum, XID wraparound age and risk level, logical slot lag, lock grant/wait counts |
+
+### `databases` filter scope
+
+When `databases` is non-empty, only matching database names appear in these fields:
+
+- `connections.by_database` — per-database connection counts
+- `query.slow_queries` — filtered by the query's active database (`datname`)
+- `maintenance.workers` — autovacuum workers filtered by database name
+- `maintenance.logical_slot_lag` — logical replication slots filtered by slot database
+
+`database_count` always reflects the total on the server regardless of the filter.
+
+### Failover detection
+
+The `failover` category returns Patroni timeline change history from `/history`:
+
+```json
+"failover": {
+  "current_timeline": 3,
+  "total_events": 2,
+  "time_since_last_failover_seconds": 3600,
+  "events": [
+    { "timeline": 2, "lsn": "...", "reason": "...", "occurred_at": "..." }
+  ]
+}
+```
+
+The `cluster` category shows the current leader and all member roles, which confirms which node holds primary after a failover:
+
+```json
+"cluster": {
+  "role": "primary",
+  "members": [
+    { "name": "node1", "role": "leader",       "state": "running" },
+    { "name": "node2", "role": "sync_standby", "state": "streaming" },
+    { "name": "node3", "role": "replica",      "state": "streaming" }
+  ]
+}
+```
 
 ### `limit` scope
 
-`limit` only applies to list-type fields:
-- `query.slow_queries` — running queries exceeding `slow_query_threshold_ms`
-- `query.high_seq_scan_tables` — tables ranked by sequential scan count
-- `query.top_by_mean_exec_ms` — top queries from `pg_stat_statements` (when available)
-- `query.top_by_total_exec_ms` — top queries from `pg_stat_statements` (when available)
-- `maintenance.stale_tables` — tables ranked by dead tuple count
+`limit` applies to list-type fields only:
+- `query.slow_queries`
+- `query.high_seq_scan_tables`
+- `query.top_by_mean_exec_ms`
+- `query.top_by_total_exec_ms`
+- `maintenance.stale_tables`
 
 All snapshot categories (`connections`, `replication`, `performance`, `uptime`, `cluster`, `failover`) return full results regardless of `limit`.
 

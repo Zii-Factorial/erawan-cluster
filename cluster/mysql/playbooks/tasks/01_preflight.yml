@@ -15,13 +15,15 @@
 - name: Verify MySQL root connectivity
   ansible.builtin.shell: |
     set -euo pipefail
-    for sock in /var/run/mysqld/mysqld.sock /run/mysqld/mysqld.sock /var/lib/mysql/mysql.sock; do
-      if [ -S "$sock" ]; then
-        mysqladmin --socket="$sock" --user=root ping
-        exit 0
-      fi
+    for i in $(seq 1 30); do
+      for sock in /var/run/mysqld/mysqld.sock /run/mysqld/mysqld.sock /var/lib/mysql/mysql.sock; do
+        if [ -S "$sock" ] && mysqladmin --socket="$sock" --user=root ping >/dev/null 2>&1; then
+          exit 0
+        fi
+      done
+      sleep 2
     done
-    echo "unable to find a MySQL local socket for root connectivity check" >&2
+    echo "MySQL did not become ready after 60s" >&2
     exit 1
   args:
     executable: /bin/bash

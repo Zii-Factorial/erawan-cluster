@@ -42,6 +42,8 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 	}
 	defer db.Close()
 
+	resp.DatabaseCount, _ = collectDatabaseCount(ctx, db)
+
 	limit := req.Limit
 	if limit <= 0 {
 		limit = 20
@@ -71,15 +73,15 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 			case MetricCategoryUptime:
 				data, err = collectUptime(ctx, db)
 			case MetricCategoryConnections:
-				data, err = collectConnections(ctx, db)
+				data, err = collectConnections(ctx, db, req.Databases)
 			case MetricCategoryReplication:
 				data, err = collectReplication(ctx, db)
 			case MetricCategoryPerformance:
 				data, err = collectPerformance(ctx, db)
 			case MetricCategoryQuery:
-				data, err = collectQuery(ctx, db, limit, req.From, req.To)
+				data, err = collectQuery(ctx, db, limit, req.From, req.To, req.Databases)
 			case MetricCategoryMaintenance:
-				data, err = collectMaintenance(ctx, db, limit)
+				data, err = collectMaintenance(ctx, db, limit, req.Databases)
 			}
 			mu.Lock()
 			results[cat] = catResult{data, err}
@@ -209,6 +211,37 @@ func openDB(req MetricRequest) (*sql.DB, error) {
 // ctx returns a background context; openDB ping does not need the request ctx.
 func ctx() context.Context { return context.Background() }
 
+// collectDatabaseCount returns the number of user databases (excludes system schemas).
+func collectDatabaseCount(ctx context.Context, db *sql.DB) (int, error) {
+	var count int
+	err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM information_schema.schemata
+		WHERE schema_name NOT IN ('information_schema','mysql','performance_schema','sys')`).Scan(&count)
+	return count, err
+}
+
+// dbSet builds a lookup set from a list of database names.
+// Returns nil when the list is empty, meaning "no filter — include all".
+func dbSet(databases []string) map[string]bool {
+	if len(databases) == 0 {
+		return nil
+	}
+	s := make(map[string]bool, len(databases))
+	for _, d := range databases {
+		s[d] = true
+	}
+	return s
+}
+
+// inDBSet reports whether name passes the filter.
+// A nil set means no filter (always passes).
+func inDBSet(set map[string]bool, name string) bool {
+	if set == nil {
+		return true
+	}
+	return set[name]
+}
+
 // formatDuration converts seconds to "3d 14h 22m 5s".
 func formatDuration(seconds int64) string {
 	days := seconds / 86400
@@ -293,7 +326,7 @@ func collectUptime(ctx context.Context, db *sql.DB) (*UptimeMetric, error) {
 // connections — threads + processlist
 // =============================================================================
 
-func collectConnections(ctx context.Context, db *sql.DB) (*ConnectionMetric, error) {
+func collectConnections(ctx context.Context, db *sql.DB, databases []string) (*ConnectionMetric, error) {
 	m := &ConnectionMetric{ByDatabase: []DBConnStat{}}
 
 	_ = db.QueryRowContext(ctx, `SELECT @@max_connections`).Scan(&m.MaxConnections)
@@ -325,21 +358,26 @@ func collectConnections(ctx context.Context, db *sql.DB) (*ConnectionMetric, err
 		SELECT COUNT(*) FROM information_schema.PROCESSLIST
 		WHERE STATE LIKE '%Waiting for%lock%' OR STATE LIKE '%lock wait%'`).Scan(&m.WaitingForLock)
 
+	filter := dbSet(databases)
 	rows, err := db.QueryContext(ctx, `
-		SELECT db,
-		    COUNT(*),
-		    SUM(CASE WHEN COMMAND = 'Query' THEN 1 ELSE 0 END),
-		    SUM(CASE WHEN COMMAND = 'Sleep' THEN 1 ELSE 0 END)
-		FROM information_schema.PROCESSLIST
-		WHERE db IS NOT NULL
-		GROUP BY db
-		ORDER BY COUNT(*) DESC`)
+		SELECT
+		    s.schema_name,
+		    COUNT(p.id),
+		    SUM(CASE WHEN p.COMMAND = 'Query' THEN 1 ELSE 0 END),
+		    SUM(CASE WHEN p.COMMAND = 'Sleep'  THEN 1 ELSE 0 END)
+		FROM information_schema.schemata s
+		LEFT JOIN information_schema.PROCESSLIST p ON p.db = s.schema_name
+		WHERE s.schema_name NOT IN ('information_schema','mysql','performance_schema','sys')
+		GROUP BY s.schema_name
+		ORDER BY COUNT(p.id) DESC, s.schema_name`)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
 			var s DBConnStat
 			if rows.Scan(&s.Database, &s.Total, &s.Running, &s.Sleeping) == nil {
-				m.ByDatabase = append(m.ByDatabase, s)
+				if inDBSet(filter, s.Database) {
+					m.ByDatabase = append(m.ByDatabase, s)
+				}
 			}
 		}
 		_ = rows.Err()
@@ -534,7 +572,7 @@ func collectPerformance(ctx context.Context, db *sql.DB) (*PerformanceMetric, er
 // performance_schema TIMER_WAIT is in picoseconds: 1 ms = 1,000,000,000 ps.
 const psPerMs = 1_000_000_000.0
 
-func collectQuery(ctx context.Context, db *sql.DB, limit int, from, to *time.Time) (*QueryMetric, error) {
+func collectQuery(ctx context.Context, db *sql.DB, limit int, from, to *time.Time, databases []string) (*QueryMetric, error) {
 	m := &QueryMetric{
 		SlowQueryThresholdMs: 1000,
 		SlowQueries:          []SlowQuery{},
@@ -606,6 +644,7 @@ func collectQuery(ctx context.Context, db *sql.DB, limit int, from, to *time.Tim
 		ORDER BY TIME DESC
 		LIMIT ?`
 
+	dbFilter := dbSet(databases)
 	rows, err := db.QueryContext(ctx, qSlow,
 		m.SlowQueryThresholdMs,
 		nullTimeStr(from), nullTimeStr(from),
@@ -619,6 +658,9 @@ func collectQuery(ctx context.Context, db *sql.DB, limit int, from, to *time.Tim
 	for rows.Next() {
 		var s SlowQuery
 		if rows.Scan(&s.ID, &s.Database, &s.User, &s.Host, &s.State, &s.Query, &s.DurationMs) == nil {
+			if !inDBSet(dbFilter, s.Database) {
+				continue
+			}
 			if s.DurationMs > m.LongestRunningMs {
 				m.LongestRunningMs = s.DurationMs
 			}
@@ -661,7 +703,9 @@ func collectQuery(ctx context.Context, db *sql.DB, limit int, from, to *time.Tim
 		for rows2.Next() {
 			var s ScanDigest
 			if rows2.Scan(&s.Schema, &s.Query, &s.FullScans, &s.TotalCalls, &s.FullScanPct) == nil {
-				m.HighFullScanTables = append(m.HighFullScanTables, s)
+				if inDBSet(dbFilter, s.Schema) {
+					m.HighFullScanTables = append(m.HighFullScanTables, s)
+				}
 			}
 		}
 		_ = rows2.Err()
@@ -697,7 +741,7 @@ func nullTimeStr(t *time.Time) any {
 // maintenance — InnoDB purge lag, fragmentation, metadata locks
 // =============================================================================
 
-func collectMaintenance(ctx context.Context, db *sql.DB, limit int) (*MaintenanceMetric, error) {
+func collectMaintenance(ctx context.Context, db *sql.DB, limit int, databases []string) (*MaintenanceMetric, error) {
 	m := &MaintenanceMetric{
 		FragmentedTables: []FragmentedTable{},
 	}
@@ -716,6 +760,7 @@ func collectMaintenance(ctx context.Context, db *sql.DB, limit int) (*Maintenanc
 	}
 
 	// Fragmented tables (DATA_FREE > 0, non-system schemas).
+	dbFilter := dbSet(databases)
 	rows, err := db.QueryContext(ctx, `
 		SELECT TABLE_SCHEMA, TABLE_NAME,
 		    COALESCE(ROW_FORMAT, ''),
@@ -735,7 +780,9 @@ func collectMaintenance(ctx context.Context, db *sql.DB, limit int) (*Maintenanc
 	for rows.Next() {
 		var t FragmentedTable
 		if rows.Scan(&t.Schema, &t.Table, &t.RowFormat, &t.DataLength, &t.DataFree, &t.FragmentPct) == nil {
-			m.FragmentedTables = append(m.FragmentedTables, t)
+			if inDBSet(dbFilter, t.Schema) {
+				m.FragmentedTables = append(m.FragmentedTables, t)
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {

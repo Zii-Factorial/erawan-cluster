@@ -109,7 +109,10 @@ func (s *Service) validateConfigSyntax(content string) error {
 	}
 
 	// Include all existing tenant configs so port-conflict errors are caught upfront.
-	entries, _ := os.ReadDir(s.tenantsDir)
+	entries, err := os.ReadDir(s.tenantsDir)
+	if err != nil {
+		return fmt.Errorf("read tenants directory for validation: %w", err)
+	}
 	for _, e := range entries {
 		if !e.IsDir() && strings.HasSuffix(e.Name(), ".cfg") && !strings.HasSuffix(e.Name(), ".bak") {
 			args = append(args, "-f", filepath.Join(s.tenantsDir, e.Name()))

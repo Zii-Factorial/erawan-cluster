@@ -1,0 +1,130 @@
+- name: Ensure erawan config directory exists
+  ansible.builtin.file:
+    path: /etc/erawan-cluster
+    state: directory
+    mode: "0700"
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['all'] }}"
+  tags: ["boot_recovery"]
+
+- name: Write cluster recovery credentials
+  ansible.builtin.copy:
+    dest: /etc/erawan-cluster/mysql-recovery.json
+    mode: "0600"
+    content: |
+      {{ {
+        'cluster_name': cluster_name,
+        'admin_user':   cluster_admin_username,
+        'admin_pass':   cluster_admin_password,
+        'mysql_port':   mysql_port | int
+      } | to_nice_json }}
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['all'] }}"
+  tags: ["boot_recovery"]
+
+- name: Install boot recovery script
+  ansible.builtin.copy:
+    dest: /usr/local/bin/erawan-mysql-boot-recovery
+    mode: "0755"
+    content: |
+      #!/bin/bash
+      # Auto-reboots InnoDB Cluster after a complete outage (all nodes down together).
+      # Installed on every node. Staggered delay (30 / 60 / 90 s) prevents all nodes
+      # racing to bootstrap simultaneously. The first node to run wins; others see GR
+      # already ONLINE and exit. The existing GR watchdog rejoins remaining secondaries.
+      set -uo pipefail
+
+      CONF=/etc/erawan-cluster/mysql-recovery.json
+      [ -f "$CONF" ] || { logger -t erawan-boot-recovery "no config found, skipping"; exit 0; }
+
+      # Wait up to 120 s for local MySQL to accept connections
+      _ready=0
+      for i in $(seq 1 60); do
+        if mysql -uroot -e "SELECT 1" >/dev/null 2>&1; then _ready=1; break; fi
+        sleep 2
+      done
+      if [[ "$_ready" -eq 0 ]]; then
+        logger -t erawan-boot-recovery "MySQL not ready after 120s, skipping"
+        exit 0
+      fi
+
+      logger -t erawan-boot-recovery "sleeping ${BOOT_RECOVERY_DELAY_SECONDS:-30}s before recovery check"
+      sleep "${BOOT_RECOVERY_DELAY_SECONDS:-30}"
+
+      # Exit early if ANY cluster member is already ONLINE (another node recovered first)
+      ONLINE_COUNT=$(mysql -uroot -Nse \
+        "SELECT COUNT(*) FROM performance_schema.replication_group_members \
+         WHERE member_state = 'ONLINE'" 2>/dev/null || echo "0")
+      if [[ "${ONLINE_COUNT}" -gt 0 ]]; then
+        logger -t erawan-boot-recovery "cluster already has ${ONLINE_COUNT} ONLINE member(s), skipping"
+        exit 0
+      fi
+
+      logger -t erawan-boot-recovery "no ONLINE members found — attempting reboot_cluster_from_complete_outage"
+
+      _tmp=""
+      trap 'rm -f "$_tmp"' EXIT
+      _tmp=$(mktemp /tmp/erawan-boot-XXXXXX.py)
+      cat >"$_tmp" <<'PY'
+      import json
+      shell.options["useWizards"] = False
+      with open("/etc/erawan-cluster/mysql-recovery.json") as f:
+          cfg = json.load(f)
+      shell.connect({
+          "user":     cfg["admin_user"],
+          "password": cfg["admin_pass"],
+          "host":     "127.0.0.1",
+          "port":     cfg["mysql_port"],
+          "scheme":   "mysql",
+      })
+      try:
+          dba.reboot_cluster_from_complete_outage(cfg["cluster_name"], {"force": True})
+          print("cluster rebooted from complete outage")
+      except Exception as e:
+          msg = str(e).lower()
+          if "already active" in msg or "online" in msg:
+              print(f"cluster already active: {e}")
+          else:
+              raise
+      PY
+
+      if mysqlsh --no-wizard --py --file "$_tmp"; then
+        logger -t erawan-boot-recovery "boot recovery succeeded"
+      else
+        logger -t erawan-boot-recovery "boot recovery failed — GR watchdog will retry"
+      fi
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['all'] }}"
+  tags: ["boot_recovery"]
+
+- name: Install boot recovery systemd service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/erawan-mysql-boot-recovery.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Erawan MySQL boot recovery — reboot InnoDB Cluster after complete outage
+      After=mysql.service network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      Environment=BOOT_RECOVERY_DELAY_SECONDS={{ ((groups['all'] | list).index(item) + 1) * (boot_recovery_delay_step_seconds | default(30) | int) }}
+      ExecStart=/usr/local/bin/erawan-mysql-boot-recovery
+      StandardOutput=journal
+      StandardError=journal
+
+      [Install]
+      WantedBy=multi-user.target
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['all'] }}"
+  tags: ["boot_recovery"]
+
+- name: Enable boot recovery service on all nodes
+  ansible.builtin.systemd:
+    name: erawan-mysql-boot-recovery.service
+    daemon_reload: true
+    enabled: true
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['all'] }}"
+  tags: ["boot_recovery"]

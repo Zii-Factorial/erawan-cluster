@@ -56,6 +56,7 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 			}
 		} else {
 			defer db.Close()
+			resp.DatabaseCount, _ = collectDatabaseCount(ctx, db)
 		}
 	}
 
@@ -93,15 +94,15 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 			case MetricCategoryFailover:
 				data, err = c.collectFailover(ctx, req)
 			case MetricCategoryConnections:
-				data, err = collectConnections(ctx, db)
+				data, err = collectConnections(ctx, db, req.Databases)
 			case MetricCategoryReplication:
 				data, err = collectReplication(ctx, db)
 			case MetricCategoryPerformance:
 				data, err = collectPerformance(ctx, db)
 			case MetricCategoryQuery:
-				data, err = collectQuery(ctx, db, limit, req.From, req.To)
+				data, err = collectQuery(ctx, db, limit, req.From, req.To, req.Databases)
 			case MetricCategoryMaintenance:
-				data, err = collectMaintenance(ctx, db, limit)
+				data, err = collectMaintenance(ctx, db, limit, req.Databases)
 			}
 			mu.Lock()
 			results[cat] = catResult{data, err}
@@ -278,6 +279,37 @@ func nullTime(t *time.Time) any {
 		return nil
 	}
 	return *t
+}
+
+// collectDatabaseCount returns the number of user databases (excludes templates).
+func collectDatabaseCount(ctx context.Context, db *sql.DB) (int, error) {
+	var count int
+	err := db.QueryRowContext(ctx, `
+		SELECT count(*) FROM pg_database
+		WHERE datistemplate = false`).Scan(&count)
+	return count, err
+}
+
+// dbSet builds a lookup set from a list of database names.
+// Returns nil when the list is empty, meaning "no filter — include all".
+func dbSet(databases []string) map[string]bool {
+	if len(databases) == 0 {
+		return nil
+	}
+	s := make(map[string]bool, len(databases))
+	for _, d := range databases {
+		s[d] = true
+	}
+	return s
+}
+
+// inDBSet reports whether name passes the filter.
+// A nil set means no filter (always passes).
+func inDBSet(set map[string]bool, name string) bool {
+	if set == nil {
+		return true
+	}
+	return set[name]
 }
 
 // =============================================================================
@@ -472,7 +504,7 @@ func (c *Collector) collectFailover(ctx context.Context, req MetricRequest) (*Fa
 // connections — pg_stat_activity
 // =============================================================================
 
-func collectConnections(ctx context.Context, db *sql.DB) (*ConnectionMetric, error) {
+func collectConnections(ctx context.Context, db *sql.DB, databases []string) (*ConnectionMetric, error) {
 	const qSummary = `
 		SELECT
 		    count(*)                                                          AS total,
@@ -496,14 +528,16 @@ func collectConnections(ctx context.Context, db *sql.DB) (*ConnectionMetric, err
 
 	const qPerDB = `
 		SELECT
-		    datname,
-		    count(*)                                  AS total,
-		    count(*) FILTER (WHERE state='active')   AS active,
-		    count(*) FILTER (WHERE state='idle')     AS idle
-		FROM pg_stat_activity
-		WHERE datname IS NOT NULL AND pid <> pg_backend_pid()
-		GROUP BY datname
-		ORDER BY total DESC`
+		    d.datname,
+		    count(a.pid)                                  AS total,
+		    count(a.pid) FILTER (WHERE a.state='active') AS active,
+		    count(a.pid) FILTER (WHERE a.state='idle')   AS idle
+		FROM pg_database d
+		LEFT JOIN pg_stat_activity a
+		    ON a.datname = d.datname AND a.pid <> pg_backend_pid()
+		WHERE d.datistemplate = false
+		GROUP BY d.datname
+		ORDER BY total DESC, d.datname`
 
 	m := &ConnectionMetric{ByDatabase: []DBConnStat{}, WaitEvents: []WaitEvent{}}
 
@@ -534,6 +568,7 @@ func collectConnections(ctx context.Context, db *sql.DB) (*ConnectionMetric, err
 		_ = rows.Err()
 	}
 
+	dbFilter := dbSet(databases)
 	rows2, err := db.QueryContext(ctx, qPerDB)
 	if err != nil {
 		return nil, fmt.Errorf("query connections per db: %w", err)
@@ -544,7 +579,9 @@ func collectConnections(ctx context.Context, db *sql.DB) (*ConnectionMetric, err
 		if err := rows2.Scan(&s.Database, &s.Total, &s.Active, &s.Idle); err != nil {
 			continue
 		}
-		m.ByDatabase = append(m.ByDatabase, s)
+		if inDBSet(dbFilter, s.Database) {
+			m.ByDatabase = append(m.ByDatabase, s)
+		}
 	}
 	return m, rows2.Err()
 }
@@ -728,7 +765,7 @@ func collectPerformance(ctx context.Context, db *sql.DB) (*PerformanceMetric, er
 // query — latency, slow queries, locks, scans, row throughput
 // =============================================================================
 
-func collectQuery(ctx context.Context, db *sql.DB, limit int, from, to *time.Time) (*QueryMetric, error) {
+func collectQuery(ctx context.Context, db *sql.DB, limit int, from, to *time.Time, databases []string) (*QueryMetric, error) {
 	m := &QueryMetric{
 		SlowQueryThresholdMs: 1000,
 		SlowQueries:          []SlowQuery{},
@@ -788,6 +825,7 @@ func collectQuery(ctx context.Context, db *sql.DB, limit int, from, to *time.Tim
 		ORDER BY dur_ms DESC
 		LIMIT $3`
 
+	dbFilter := dbSet(databases)
 	rows, err := db.QueryContext(ctx, qSlow, nullTime(from), nullTime(to), limit, m.SlowQueryThresholdMs)
 	if err != nil {
 		return nil, fmt.Errorf("query slow queries: %w", err)
@@ -798,6 +836,9 @@ func collectQuery(ctx context.Context, db *sql.DB, limit int, from, to *time.Tim
 		if err := rows.Scan(
 			&s.PID, &s.Database, &s.User, &s.State, &s.Query, &s.StartedAt, &s.DurationMs,
 		); err != nil {
+			continue
+		}
+		if !inDBSet(dbFilter, s.Database) {
 			continue
 		}
 		s.StartedAt = s.StartedAt.UTC()
@@ -885,7 +926,7 @@ func scanQueryStats(ctx context.Context, db *sql.DB, q string, limit int) ([]Que
 // maintenance — autovacuum, XID age, logical slots, lock grants
 // =============================================================================
 
-func collectMaintenance(ctx context.Context, db *sql.DB, limit int) (*MaintenanceMetric, error) {
+func collectMaintenance(ctx context.Context, db *sql.DB, limit int, databases []string) (*MaintenanceMetric, error) {
 	m := &MaintenanceMetric{
 		Workers:        []VacuumWorker{},
 		StaleTables:    []StaleTable{},
@@ -902,6 +943,7 @@ func collectMaintenance(ctx context.Context, db *sql.DB, limit int) (*Maintenanc
 		JOIN pg_stat_activity a ON a.pid = p.pid
 		ORDER BY a.query_start`
 
+	dbFilter := dbSet(databases)
 	rows, err := db.QueryContext(ctx, qVacuum)
 	if err != nil {
 		return nil, fmt.Errorf("query vacuum progress: %w", err)
@@ -910,7 +952,9 @@ func collectMaintenance(ctx context.Context, db *sql.DB, limit int) (*Maintenanc
 	for rows.Next() {
 		var w VacuumWorker
 		if rows.Scan(&w.PID, &w.Database, &w.Phase, &w.Schema, &w.Table, &w.Duration) == nil {
-			m.Workers = append(m.Workers, w)
+			if inDBSet(dbFilter, w.Database) {
+				m.Workers = append(m.Workers, w)
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -987,7 +1031,9 @@ func collectMaintenance(ctx context.Context, db *sql.DB, limit int) (*Maintenanc
 	for rows3.Next() {
 		var s LogicalSlotStat
 		if rows3.Scan(&s.Name, &s.Database, &s.Active, &s.LagBytes) == nil {
-			m.LogicalSlotLag = append(m.LogicalSlotLag, s)
+			if inDBSet(dbFilter, s.Database) {
+				m.LogicalSlotLag = append(m.LogicalSlotLag, s)
+			}
 		}
 	}
 	if err := rows3.Err(); err != nil {

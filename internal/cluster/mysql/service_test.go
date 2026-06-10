@@ -137,7 +137,7 @@ func TestResumeSchedulesBackgroundExecution(t *testing.T) {
 		UpdatedAt:         time.Now().UTC(),
 		LastCompletedStep: 0,
 		Request: StoredSpec{
-			ClusterAdminUsername: "clusteradmin",
+			AdminUsername: "clusteradmin",
 			ClusterName:          "prodCluster",
 			PrimaryIP:            "10.0.0.1",
 			SSHUser:              "clusterops",
