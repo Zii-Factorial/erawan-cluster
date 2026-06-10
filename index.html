@@ -224,7 +224,7 @@
                 <p class="text-xs uppercase tracking-[0.26em] text-slate-400">System View</p>
                 <h2 class="mt-2 text-2xl font-bold">Control plane + cluster workers</h2>
               </div>
-              <span class="rounded-full border border-white/15 bg-white/10 px-3 py-1 font-mono text-xs text-slate-200">v1.01</span>
+              <span class="rounded-full border border-white/15 bg-white/10 px-3 py-1 font-mono text-xs text-slate-200">v1.02</span>
             </div>
 
             <div class="mt-8 grid gap-4">
@@ -526,27 +526,29 @@ POST /cluster/pgsql/jobs/{jobID}/resume</pre>
   "patroni_port": 8008
 }</pre>
               <pre id="metrics-payload" class="payload-panel hidden overflow-x-auto p-6 font-mono text-sm leading-7 text-slate-100"><span class="text-slate-400">// POST /cluster/mysql/metrics</span>
-<span class="text-slate-400">// user: admin_user from deploy response (clusteradmin)</span>
+<span class="text-slate-400">// host: omit — server reads PROXY_HOST env (127.0.0.1)</span>
+<span class="text-slate-400">// user: admin_user from deploy response</span>
 {
-  "host": "192.168.122.154",
-  "port": 3306,
+  "port": 25010,
   "user": "clusteradmin",
   "password": "&lt;admin_password from deploy response&gt;",
-  "database": "information_schema",
   "ssl_mode": "disable",
   "connect_timeout": 10,
   "categories": [],
+  "databases": [],
   "limit": 20
 }
 
-<span class="text-slate-400">// MySQL: 7 categories — cluster | uptime | connections</span>
+<span class="text-slate-400">// MySQL categories (7): cluster | uptime | connections</span>
 <span class="text-slate-400">// replication | performance | query | maintenance</span>
+<span class="text-slate-400">// Response always includes database_count (all user DBs)</span>
+<span class="text-slate-400">// databases: [] = all; ["appdb","mydb"] = filter per-DB fields</span>
 
 <span class="text-slate-400">// POST /cluster/pgsql/metrics</span>
-<span class="text-slate-400">// user: postgres_user from deploy response (postgres)</span>
+<span class="text-slate-400">// host: omit — server reads PROXY_HOST env (127.0.0.1)</span>
+<span class="text-slate-400">// user: postgres_user from deploy response</span>
 <span class="text-slate-400">// node_ips: required for cluster + failover categories</span>
 {
-  "host": "192.168.51.117",
   "port": 25005,
   "node_ips": [
     "10.0.0.1",
@@ -555,16 +557,18 @@ POST /cluster/pgsql/jobs/{jobID}/resume</pre>
   ],
   "user": "postgres",
   "password": "&lt;postgres_password from deploy response&gt;",
-  "database": "postgres",
   "ssl_mode": "require",
   "connect_timeout": 10,
   "patroni_port": 8008,
   "categories": [],
+  "databases": [],
   "limit": 20
 }
 
-<span class="text-slate-400">// PostgreSQL: 8 categories — cluster | uptime | failover</span>
-<span class="text-slate-400">// connections | replication | performance | query | maintenance</span></pre>
+<span class="text-slate-400">// PostgreSQL categories (8): cluster | uptime | failover</span>
+<span class="text-slate-400">// connections | replication | performance | query | maintenance</span>
+<span class="text-slate-400">// Response always includes database_count (non-template DBs)</span>
+<span class="text-slate-400">// databases: [] = all; ["appdb"] = filter per-DB fields</span></pre>
             </div>
           </div>
 
@@ -590,7 +594,12 @@ POST /cluster/pgsql/jobs/{jobID}/resume</pre>
                 <li>SSH credentials are configured on the API host via env vars — they are not part of any request payload.</li>
                 <li>Omit PostgreSQL cluster passwords to use auto-generated values returned in the deploy response and reused on resume.</li>
                 <li>Set <code class="font-mono text-xs">postgres_version</code> to target a specific major version (14–18). Defaults to 16.</li>
-                <li>For <code class="font-mono text-xs">POST /cluster/pgsql/metrics</code>, point <code class="font-mono text-xs">host</code>/<code class="font-mono text-xs">port</code> at HAProxy and supply <code class="font-mono text-xs">node_ips</code> for Patroni leader discovery.</li>
+                <li>Metrics <code class="font-mono text-xs">host</code> is optional — the server reads <code class="font-mono text-xs">PROXY_HOST</code> env when omitted. Set <code class="font-mono text-xs">port</code> to the HAProxy listen port.</li>
+                <li>For PostgreSQL metrics, supply <code class="font-mono text-xs">node_ips</code> to enable Patroni leader auto-discovery for the <code class="font-mono text-xs">cluster</code> and <code class="font-mono text-xs">failover</code> categories.</li>
+                <li>Every metrics response includes <code class="font-mono text-xs">database_count</code> — total user databases on the server.</li>
+                <li><code class="font-mono text-xs">databases: []</code> returns all databases. Pass names to filter per-database fields (connections by_database, slow queries, fragmented tables, autovacuum workers).</li>
+                <li><code class="font-mono text-xs">by_database</code> shows all user databases including those with zero active connections.</li>
+                <li><code class="font-mono text-xs">categories: []</code> collects all categories. Pass a subset to reduce response size and collection time.</li>
               </ul>
             </div>
           </div>

@@ -4,7 +4,7 @@
 
 # erawan-cluster
 
-**Version 1.01** — REST API for automated database cluster lifecycle management and HAProxy configuration.
+**Version 1.02** — REST API for automated database cluster lifecycle management, live metrics collection, and HAProxy configuration.
 
 ---
 
@@ -29,12 +29,14 @@
 - Supports single-node bootstrap or primary-plus-secondary topologies
 - Auto-failover using MySQL InnoDB Cluster native HA
 - Explicit Group Replication auto-rejoin and restart rejoin settings for multi-node clusters
+- Boot-recovery service installed on all nodes — auto-rejoins cluster after full outage with staggered delays
 - MySQL Router bootstrap and service configuration on DB nodes
 - MySQL Shell (`mysqlsh`) for cluster operations (`dba.configure_instance`, `dba.createCluster`, `dba.addInstance`)
 - Optional prepared-node mode via `assume_prepared`
 - Application database and user provisioning
 - Job-based async deployment with resume and rollback support
 - Optional router bootstrap via `bootstrap_router`
+- Live metrics collection via `POST /cluster/mysql/metrics` (7 categories)
 
 ### PostgreSQL Cluster
 - Automated Patroni-based PostgreSQL cluster deployment
@@ -49,6 +51,13 @@
 - `pg_stat_statements` enabled by default for query telemetry
 - Cluster credentials returned in deploy response and stored per-job
 - Live metrics collection via `POST /cluster/pgsql/metrics` (8 categories)
+
+### Live Metrics
+- Both MySQL and PostgreSQL expose a `POST /cluster/{engine}/metrics` endpoint
+- `database_count` — total user databases on the server included in every response
+- `databases` filter — optional array to restrict per-database results (connections, slow queries, fragmentation) to named databases; empty or omitted returns all
+- `by_database` in connections shows all databases including those with zero active connections
+- `categories` filter — collect only the categories you need; empty returns all
 
 ### HAProxy (Optional)
 - Tenant-based HAProxy config generation and hot reload
