@@ -35,7 +35,7 @@
     port: "{{ mysql_port | string }}"
     proto: tcp
     comment: MySQL InnoDB Cluster
-  when: _ufw_status.rc == 0 and 'Status: active' in _ufw_status.stdout
+  when: "_ufw_status.rc == 0 and 'Status: active' in _ufw_status.stdout"
   tags: ["configure_instances", "configure_mysql"]
 
 - name: Ensure minimal MySQL config for InnoDB Cluster

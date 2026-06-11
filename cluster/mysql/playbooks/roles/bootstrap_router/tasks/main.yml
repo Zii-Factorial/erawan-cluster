@@ -153,7 +153,7 @@
     port: "{{ mysql_router_rw_port | string }}"
     proto: tcp
     comment: MySQL Router RW
-  when: bootstrap_router | default(false) | bool and _ufw_status.rc == 0 and 'Status: active' in (_ufw_status.stdout | default(''))
+  when: "bootstrap_router | default(false) | bool and _ufw_status.rc == 0 and 'Status: active' in (_ufw_status.stdout | default(''))"
   tags: ["bootstrap_router"]
 
 - name: Allow MySQL Router RO port through UFW
@@ -162,7 +162,7 @@
     port: "{{ mysql_router_ro_port | string }}"
     proto: tcp
     comment: MySQL Router RO
-  when: bootstrap_router | default(false) | bool and _ufw_status.rc == 0 and 'Status: active' in (_ufw_status.stdout | default(''))
+  when: "bootstrap_router | default(false) | bool and _ufw_status.rc == 0 and 'Status: active' in (_ufw_status.stdout | default(''))"
   tags: ["bootstrap_router"]
 
 - name: Bootstrap mysqlrouter
