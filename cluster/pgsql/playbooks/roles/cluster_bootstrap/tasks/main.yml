@@ -55,14 +55,23 @@
   when: inventory_hostname in groups['pgsql_primary']
   tags: ["cluster_bootstrap"]
 
+- name: Wait for Patroni REST port to open on primary
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: "{{ patroni_rest_port }}"
+    state: started
+    timeout: "{{ patroni_port_open_timeout }}"
+  when: inventory_hostname in groups['pgsql_primary']
+  tags: ["cluster_bootstrap"]
+
 - name: Wait for Patroni leader API on primary
   ansible.builtin.uri:
     url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/leader"
     return_content: true
   register: patroni_primary_leader
   until: patroni_primary_leader.status == 200
-  retries: 40
-  delay: 3
+  retries: "{{ patroni_leader_retries }}"
+  delay: "{{ patroni_leader_delay }}"
   changed_when: false
   when: inventory_hostname in groups['pgsql_primary']
   tags: ["cluster_bootstrap"]
@@ -85,14 +94,23 @@
   throttle: 1
   tags: ["cluster_bootstrap"]
 
+- name: Wait for Patroni REST port to open on standbys
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: "{{ patroni_rest_port }}"
+    state: started
+    timeout: "{{ patroni_replica_port_open_timeout }}"
+  when: inventory_hostname in groups['pgsql_standby']
+  tags: ["cluster_bootstrap"]
+
 - name: Wait for Patroni replica API on standbys
   ansible.builtin.uri:
     url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/replica"
     return_content: true
   register: patroni_replica_status
   until: patroni_replica_status.status == 200
-  retries: 40
-  delay: 3
+  retries: "{{ patroni_replica_retries }}"
+  delay: "{{ patroni_replica_delay }}"
   changed_when: false
   when: inventory_hostname in groups['pgsql_standby']
   tags: ["cluster_bootstrap"]

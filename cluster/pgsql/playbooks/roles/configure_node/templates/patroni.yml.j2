@@ -3,7 +3,7 @@ namespace: {{ patroni_namespace }}
 name: {{ erawan_pg_node_name }}
 
 restapi:
-  listen: {{ ansible_host }}:{{ patroni_rest_port }}
+  listen: 0.0.0.0:{{ patroni_rest_port }}
   connect_address: {{ ansible_host }}:{{ patroni_rest_port }}
 
 etcd:
@@ -65,7 +65,7 @@ bootstrap:
         - createdb
 
 postgresql:
-  listen: {{ ansible_host }}:{{ postgres_port }}
+  listen: 0.0.0.0:{{ postgres_port }}
   connect_address: {{ ansible_host }}:{{ postgres_port }}
   data_dir: {{ erawan_pg_data_directory }}
   bin_dir: {{ erawan_pg_bindir }}

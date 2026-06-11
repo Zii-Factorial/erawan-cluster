@@ -2,3 +2,12 @@
 etcd_client_port: 2379
 patroni_rest_port: 8008
 postgres_port: 5432
+
+# Timeouts for bootstrapping Patroni on a fresh cluster.
+# initdb + etcd leader election can easily take 90 s on slow disks.
+patroni_port_open_timeout: 180
+patroni_leader_retries: 60
+patroni_leader_delay: 5
+patroni_replica_port_open_timeout: 120
+patroni_replica_retries: 60
+patroni_replica_delay: 5
