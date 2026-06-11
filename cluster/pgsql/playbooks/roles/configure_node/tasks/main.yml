@@ -3,17 +3,25 @@
   ansible.builtin.import_role:
     name: runtime_facts
 
-- name: Ensure ssl-cert package is installed
+- name: Ensure openssl is installed for certificate generation
   ansible.builtin.apt:
-    name: ssl-cert
+    name: openssl
     state: present
     update_cache: false
 
-- name: Ensure postgres user is in ssl-cert group
-  ansible.builtin.user:
-    name: postgres
-    groups: ssl-cert
-    append: true
+- name: Generate self-signed SSL certificate for PostgreSQL
+  ansible.builtin.shell: |
+    set -euo pipefail
+    openssl req -new -x509 -days 3650 -nodes \
+      -out "{{ patroni_ssl_cert_file }}" \
+      -keyout "{{ patroni_ssl_key_file }}" \
+      -subj "/CN={{ ansible_host }}/O=Patroni"
+    chown postgres:postgres "{{ patroni_ssl_cert_file }}" "{{ patroni_ssl_key_file }}"
+    chmod 600 "{{ patroni_ssl_key_file }}"
+    chmod 644 "{{ patroni_ssl_cert_file }}"
+  args:
+    executable: /bin/bash
+  creates: "{{ patroni_ssl_key_file }}"
 
 - name: Check whether PostgreSQL data reset already ran for this job
   ansible.builtin.stat:

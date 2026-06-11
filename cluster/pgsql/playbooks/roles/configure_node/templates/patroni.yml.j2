@@ -7,6 +7,7 @@ restapi:
   connect_address: {{ ansible_host }}:{{ patroni_rest_port }}
 
 etcd3:
+  protocol: http
   hosts: "{% for host_name in groups['all'] %}{{ hostvars[host_name].ansible_host }}:{{ etcd_client_port }}{% if not loop.last %},{% endif %}{% endfor %}"
 
 bootstrap:
