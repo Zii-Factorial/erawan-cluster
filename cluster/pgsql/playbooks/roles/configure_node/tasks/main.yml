@@ -3,6 +3,18 @@
   ansible.builtin.import_role:
     name: runtime_facts
 
+- name: Ensure ssl-cert package is installed
+  ansible.builtin.apt:
+    name: ssl-cert
+    state: present
+    update_cache: false
+
+- name: Ensure postgres user is in ssl-cert group
+  ansible.builtin.user:
+    name: postgres
+    groups: ssl-cert
+    append: true
+
 - name: Check whether PostgreSQL data reset already ran for this job
   ansible.builtin.stat:
     path: "{{ erawan_pg_reset_marker }}"

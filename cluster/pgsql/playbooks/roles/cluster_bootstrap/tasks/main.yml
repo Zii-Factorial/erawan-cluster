@@ -68,12 +68,37 @@
   ansible.builtin.uri:
     url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/leader"
     return_content: true
-  register: patroni_primary_leader
-  until: patroni_primary_leader.status == 200
+  register: _patroni_leader
+  until: _patroni_leader.status == 200
   retries: "{{ patroni_leader_retries }}"
   delay: "{{ patroni_leader_delay }}"
   changed_when: false
+  ignore_errors: true
   when: inventory_hostname in groups['pgsql_primary']
+  tags: ["cluster_bootstrap"]
+
+- name: Collect Patroni journal on primary bootstrap failure
+  ansible.builtin.command:
+    argv: [journalctl, -u, patroni, --no-pager, -n, 80]
+  register: _patroni_journal
+  changed_when: false
+  failed_when: false
+  when:
+    - inventory_hostname in groups['pgsql_primary']
+    - _patroni_leader is defined
+    - _patroni_leader.failed | default(false)
+  tags: ["cluster_bootstrap"]
+
+- name: Fail with Patroni log context
+  ansible.builtin.fail:
+    msg: |
+      Patroni failed to become leader on {{ inventory_hostname }}.
+      Last 80 Patroni journal lines:
+      {{ _patroni_journal.stdout | default('(no journal output)') }}
+  when:
+    - inventory_hostname in groups['pgsql_primary']
+    - _patroni_leader is defined
+    - _patroni_leader.failed | default(false)
   tags: ["cluster_bootstrap"]
 
 - name: Wait for PostgreSQL to listen on primary
@@ -107,12 +132,37 @@
   ansible.builtin.uri:
     url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/replica"
     return_content: true
-  register: patroni_replica_status
-  until: patroni_replica_status.status == 200
+  register: _patroni_replica
+  until: _patroni_replica.status == 200
   retries: "{{ patroni_replica_retries }}"
   delay: "{{ patroni_replica_delay }}"
   changed_when: false
+  ignore_errors: true
   when: inventory_hostname in groups['pgsql_standby']
+  tags: ["cluster_bootstrap"]
+
+- name: Collect Patroni journal on standby bootstrap failure
+  ansible.builtin.command:
+    argv: [journalctl, -u, patroni, --no-pager, -n, 80]
+  register: _patroni_standby_journal
+  changed_when: false
+  failed_when: false
+  when:
+    - inventory_hostname in groups['pgsql_standby']
+    - _patroni_replica is defined
+    - _patroni_replica.failed | default(false)
+  tags: ["cluster_bootstrap"]
+
+- name: Fail with Patroni log context on standbys
+  ansible.builtin.fail:
+    msg: |
+      Patroni failed to reach replica state on {{ inventory_hostname }}.
+      Last 80 Patroni journal lines:
+      {{ _patroni_standby_journal.stdout | default('(no journal output)') }}
+  when:
+    - inventory_hostname in groups['pgsql_standby']
+    - _patroni_replica is defined
+    - _patroni_replica.failed | default(false)
   tags: ["cluster_bootstrap"]
 
 - name: Wait for PostgreSQL to listen on standbys
