@@ -21,7 +21,7 @@
     chmod 644 "{{ patroni_ssl_cert_file }}"
   args:
     executable: /bin/bash
-  creates: "{{ patroni_ssl_key_file }}"
+    creates: "{{ patroni_ssl_key_file }}"
 
 - name: Check whether PostgreSQL data reset already ran for this job
   ansible.builtin.stat:
