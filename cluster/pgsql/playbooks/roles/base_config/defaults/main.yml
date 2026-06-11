@@ -1,0 +1,8 @@
+---
+etcd_initial_cluster_state: new
+etcd_client_port: 2379
+etcd_peer_port: 2380
+etcd_config_path: /etc/etcd/etcd.conf
+patroni_config_path: /etc/patroni/patroni.yml
+patroni_pgpass_path: /var/run/postgresql/.pgpass
+postgresql_cluster_name: main

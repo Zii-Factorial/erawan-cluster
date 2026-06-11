@@ -1,9 +1,0 @@
-- name: Wait for SSH to become available
-  ansible.builtin.wait_for_connection:
-    timeout: 120
-    sleep: 5
-  tags: ["preflight"]
-
-- name: Detect PostgreSQL runtime facts
-  ansible.builtin.import_tasks: runtime_facts.yml
-  tags: ["preflight"]

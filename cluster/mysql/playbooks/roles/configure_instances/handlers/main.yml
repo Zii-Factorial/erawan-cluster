@@ -1,0 +1,15 @@
+---
+- name: restart mysql
+  ansible.builtin.systemd:
+    name: mysql
+    state: restarted
+  listen: restart mysql on config change
+
+- name: wait for mysql after config restart
+  ansible.builtin.wait_for:
+    host: "{{ erawan_node_ip }}"
+    port: "{{ mysql_port }}"
+    state: started
+    delay: 5
+    timeout: "{{ mysql_start_timeout_seconds }}"
+  listen: restart mysql on config change

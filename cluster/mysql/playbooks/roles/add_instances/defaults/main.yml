@@ -1,0 +1,8 @@
+---
+step_timeout_seconds: 900
+mysql_recovery_method: auto
+mysqlsh_add_instances_timeout_seconds: 1800
+mysqlsh_add_instances_wait_seconds: 600
+add_instances_retries: 2
+add_instances_retry_delay_seconds: 20
+mysqlsh_rescan_timeout_seconds: 180

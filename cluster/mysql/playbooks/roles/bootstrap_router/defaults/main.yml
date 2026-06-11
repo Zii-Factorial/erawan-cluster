@@ -1,0 +1,9 @@
+---
+bootstrap_router: false
+mysql_router_rw_port: 6446
+mysql_router_ro_port: 6447
+bootstrap_router_prepare_retries: 6
+bootstrap_router_prepare_retry_delay_seconds: 10
+bootstrap_router_retries: 2
+bootstrap_router_retry_delay_seconds: 20
+mysqlrouter_bootstrap_timeout_seconds: 180

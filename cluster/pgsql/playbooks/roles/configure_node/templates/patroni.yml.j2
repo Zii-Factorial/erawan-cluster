@@ -1,0 +1,92 @@
+scope: {{ patroni_scope }}
+namespace: {{ patroni_namespace }}
+name: {{ erawan_pg_node_name }}
+
+restapi:
+  listen: {{ ansible_host }}:{{ patroni_rest_port }}
+  connect_address: {{ ansible_host }}:{{ patroni_rest_port }}
+
+etcd:
+  hosts:
+{% for host_name in groups['all'] %}
+    - {{ hostvars[host_name].ansible_host }}:{{ etcd_client_port }}
+{% endfor %}
+
+bootstrap:
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    maximum_lag_on_failover: 1048576
+    synchronous_mode: true
+    synchronous_mode_strict: false
+    postgresql:
+      use_pg_rewind: true
+      use_slots: true
+      parameters:
+        wal_level: replica
+        hot_standby: "on"
+        max_wal_senders: 10
+        max_replication_slots: 10
+        wal_log_hints: "on"
+        password_encryption: scram-sha-256
+        random_page_cost: 1.1
+        effective_io_concurrency: 200
+        bgwriter_lru_maxpages: 200
+        bgwriter_lru_multiplier: 4.0
+        bgwriter_delay: '100ms'
+        shared_preload_libraries: 'pg_stat_statements'
+        'pg_stat_statements.max': 10000
+        'pg_stat_statements.track': all
+        track_io_timing: "on"
+  initdb:
+    - encoding: UTF8
+    - data-checksums
+  pg_hba:
+    - local all postgres peer
+    - local all all peer
+    - local replication all peer
+{%- if (new_user | default('')) | length > 0 and (new_db | default('')) | length > 0 %}
+{%- if new_user_ssl_required | default(true) | bool %}
+    - hostssl {{ new_db }} {{ new_user }} 0.0.0.0/0 scram-sha-256
+    - hostnossl {{ new_db }} {{ new_user }} 0.0.0.0/0 reject
+{%- else %}
+    - host {{ new_db }} {{ new_user }} 0.0.0.0/0 scram-sha-256
+{%- endif %}
+{%- endif %}
+    - host replication {{ replication_user }} 0.0.0.0/0 scram-sha-256
+    - host all all 0.0.0.0/0 scram-sha-256
+    - host all all ::/0 scram-sha-256
+  users:
+    {{ patroni_admin_user }}:
+      password: {{ patroni_admin_password | to_json }}
+      options:
+        - createrole
+        - createdb
+
+postgresql:
+  listen: {{ ansible_host }}:{{ postgres_port }}
+  connect_address: {{ ansible_host }}:{{ postgres_port }}
+  data_dir: {{ erawan_pg_data_directory }}
+  bin_dir: {{ erawan_pg_bindir }}
+  pgpass: {{ patroni_pgpass_path }}
+  authentication:
+    replication:
+      username: {{ replication_user }}
+      password: {{ replication_password | to_json }}
+    superuser:
+      username: {{ postgres_superuser }}
+      password: {{ postgres_superuser_password | to_json }}
+  parameters:
+    ssl: "on"
+    ssl_cert_file: '{{ patroni_ssl_cert_file }}'
+    ssl_key_file: '{{ patroni_ssl_key_file }}'
+    unix_socket_directories: '/var/run/postgresql'
+  remove_data_directory_on_rewind_failure: {{ patroni_remove_data_on_rewind_failure | bool }}
+  remove_data_directory_on_diverged_timelines: {{ patroni_remove_data_on_diverged_timelines | bool }}
+
+tags:
+  nofailover: false
+  noloadbalance: false
+  clonefrom: false
+  nosync: false

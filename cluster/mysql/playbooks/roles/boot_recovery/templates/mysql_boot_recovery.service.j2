@@ -1,0 +1,14 @@
+[Unit]
+Description=Erawan MySQL boot recovery — reboot InnoDB Cluster after complete outage
+After=mysql.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=BOOT_RECOVERY_DELAY_SECONDS={{ boot_recovery_delay_seconds }}
+ExecStart=/usr/local/bin/erawan-mysql-boot-recovery
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

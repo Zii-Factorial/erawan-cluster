@@ -1,0 +1,8 @@
+---
+mysql_gr_autorejoin_tries: 10
+mysql_gr_member_expel_timeout: 5
+mysql_gr_unreachable_majority_timeout: 60
+mysql_gr_exit_state_action: READ_ONLY
+gr_watchdog_interval_seconds: 60
+enable_auto_rejoin_retries: 6
+enable_auto_rejoin_retry_delay_seconds: 10

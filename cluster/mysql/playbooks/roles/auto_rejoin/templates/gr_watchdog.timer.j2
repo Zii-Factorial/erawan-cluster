@@ -1,0 +1,10 @@
+[Unit]
+Description=Run erawan-gr-watchdog every {{ gr_watchdog_interval_seconds }} seconds
+
+[Timer]
+OnBootSec=120
+OnUnitActiveSec={{ gr_watchdog_interval_seconds }}s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,24 @@
+---
+# ---------------------------------------------------------------------------
+# Site-wide defaults — override via extra vars (-e) or host_vars as needed.
+# Required vars (cluster_name, cluster_admin_username, cluster_admin_password,
+# mysql_port, standby_ips, router_service_name) must be provided at runtime.
+# ---------------------------------------------------------------------------
+
+# MySQL port (must match the server listen port)
+# mysql_port: 3306
+
+# InnoDB Cluster
+# cluster_name: my-cluster
+# cluster_admin_username: clusteradmin
+# cluster_admin_password: ""
+# standby_ips: []
+
+# Router
+# router_service_name: mysqlrouter
+
+# App database (optional)
+# new_user: ""
+# new_db: ""
+# new_user_password: ""
+# new_user_ssl_required: false

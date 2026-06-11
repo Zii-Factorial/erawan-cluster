@@ -1,0 +1,86 @@
+---
+- name: Check etcd service is enabled
+  ansible.builtin.command:
+    argv: [systemctl, is-enabled, etcd]
+  register: etcd_enabled
+  changed_when: false
+  failed_when: etcd_enabled.rc != 0
+  tags: ["verify_cluster"]
+
+- name: Check Patroni service is enabled
+  ansible.builtin.command:
+    argv: [systemctl, is-enabled, patroni]
+  register: patroni_enabled
+  changed_when: false
+  failed_when: patroni_enabled.rc != 0
+  tags: ["verify_cluster"]
+
+- name: Check etcd is active
+  ansible.builtin.command:
+    argv: [systemctl, is-active, etcd]
+  register: etcd_active
+  changed_when: false
+  failed_when: etcd_active.rc != 0
+  tags: ["verify_cluster"]
+
+- name: Check Patroni is active
+  ansible.builtin.command:
+    argv: [systemctl, is-active, patroni]
+  register: patroni_active
+  changed_when: false
+  failed_when: patroni_active.rc != 0
+  tags: ["verify_cluster"]
+
+- name: Check local Patroni REST API
+  ansible.builtin.uri:
+    url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/patroni"
+    return_content: true
+  register: patroni_status
+  changed_when: false
+  failed_when: patroni_status.status != 200
+  tags: ["verify_cluster"]
+
+- name: Query Patroni cluster view from primary
+  ansible.builtin.uri:
+    url: "http://{{ primary_ip }}:{{ patroni_rest_port }}/cluster"
+    return_content: true
+  register: patroni_cluster_view
+  run_once: true
+  delegate_to: "{{ groups['pgsql_primary'][0] }}"
+  changed_when: false
+  failed_when: patroni_cluster_view.status != 200
+  tags: ["verify_cluster"]
+
+- name: Ensure all cluster nodes are registered in Patroni
+  ansible.builtin.assert:
+    that:
+      - patroni_cluster_view.json.members | length >= (standby_ips | length + 1)
+      - patroni_cluster_view.json.members | selectattr('role', 'equalto', 'leader') | list | length == 1
+    fail_msg: "Expected {{ standby_ips | length + 1 }} Patroni members and exactly one leader"
+  run_once: true
+  delegate_to: "{{ groups['pgsql_primary'][0] }}"
+  tags: ["verify_cluster"]
+
+- name: Count replication senders on leader
+  no_log: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    psql -h {{ primary_ip }} -p {{ postgres_port }} -U {{ postgres_superuser }} -d postgres -Atqc "SELECT count(*) FROM pg_stat_replication;"
+  args:
+    executable: /bin/bash
+  environment:
+    PGPASSWORD: "{{ postgres_superuser_password }}"
+  register: pgsql_replication_count
+  changed_when: false
+  run_once: true
+  delegate_to: "{{ groups['pgsql_primary'][0] }}"
+  tags: ["verify_cluster"]
+
+- name: Ensure expected replication connections exist
+  ansible.builtin.assert:
+    that:
+      - pgsql_replication_count.stdout | int >= (standby_ips | length)
+    fail_msg: "Expected at least {{ standby_ips | length }} replication connections on primary"
+  run_once: true
+  delegate_to: "{{ groups['pgsql_primary'][0] }}"
+  tags: ["verify_cluster"]

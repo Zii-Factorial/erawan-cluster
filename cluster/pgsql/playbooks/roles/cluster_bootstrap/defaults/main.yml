@@ -1,0 +1,4 @@
+---
+etcd_client_port: 2379
+patroni_rest_port: 8008
+postgres_port: 5432

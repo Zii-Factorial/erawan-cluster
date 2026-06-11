@@ -1,0 +1,6 @@
+---
+mysqlsh_rollback_timeout_seconds: 180
+rollback_dissolve_retries: 3
+rollback_dissolve_retry_delay_seconds: 15
+rollback_gr_reset_retries: 3
+rollback_gr_reset_retry_delay_seconds: 10

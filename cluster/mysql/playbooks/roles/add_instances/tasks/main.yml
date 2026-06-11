@@ -1,0 +1,108 @@
+---
+- name: Derive node IP (fallback when configure_instances step was skipped)
+  ansible.builtin.set_fact:
+    erawan_node_ip: "{{ ansible_host }}"
+  when: erawan_node_ip is not defined
+  tags: ["add_instances"]
+
+- name: Add secondary instances to cluster
+  no_log: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
+    trap 'rm -f "$_tmp"' EXIT
+    cat >"$_tmp" <<'PY'
+    import json
+    import os
+    import time
+
+    shell.options["useWizards"] = False
+    shell.options["dba.restartWaitTimeout"] = {{ step_timeout_seconds | int }}
+    primary_host        = {{ erawan_node_ip | to_json }}
+    mysql_port          = {{ mysql_port }}
+    cluster_admin_user  = {{ cluster_admin_username | to_json }}
+    cluster_admin_pass  = {{ cluster_admin_password | to_json }}
+    cluster_name        = {{ cluster_name | to_json }}
+    recovery_method     = {{ mysql_recovery_method | to_json }}
+    standby_hosts       = {{ standby_ips | to_json }}
+    expected_nodes      = 1 + len(standby_hosts)
+    shell.connect(f"mysql://{cluster_admin_user}@{primary_host}:{mysql_port}", cluster_admin_pass)
+    cluster   = dba.get_cluster(cluster_name)
+    node_wait = {{ mysqlsh_add_instances_wait_seconds | int }}
+
+    for host in standby_hosts:
+      endpoint   = cluster_admin_user + "@" + host + ":" + str(mysql_port)
+      add_options = {"password": cluster_admin_pass, "recoveryMethod": recovery_method, "waitRecovery": 0}
+      try:
+        cluster.add_instance(endpoint, add_options)
+        print("clone initiated: " + host)
+      except Exception as e:
+        msg = str(e).lower()
+        needs_clone = (
+          recovery_method != "clone"
+          and ("instance provisioning required" in msg
+               or "errant gtid" in msg
+               or "must be either cloned or fully provisioned" in msg)
+        )
+        if "already" in msg:
+          print("already in cluster: " + host)
+        elif needs_clone:
+          clone_options = {"password": cluster_admin_pass, "recoveryMethod": "clone", "waitRecovery": 0}
+          cluster.add_instance(endpoint, clone_options)
+          print("added via clone (fallback): " + host)
+        else:
+          raise
+
+      deadline = time.time() + node_wait
+      while time.time() < deadline:
+        rs   = dba.get_cluster(cluster_name).status().get("defaultReplicaSet", {})
+        topo = rs.get("topology", {})
+        node_status = next((v.get("status") for k, v in topo.items() if host in k), "unknown")
+        print("  " + host + ": " + str(node_status))
+        if node_status == "ONLINE":
+          break
+        time.sleep(10)
+      else:
+        raise RuntimeError("timed out waiting for " + host + " to be ONLINE: " + json.dumps(dba.get_cluster(cluster_name).status(), indent=2))
+
+    print(json.dumps(dba.get_cluster(cluster_name).status(), indent=2))
+    PY
+    timeout {{ mysqlsh_add_instances_timeout_seconds | int }} \
+      mysqlsh --no-wizard --py --file "$_tmp"
+  args:
+    executable: /bin/bash
+  register: add_instances
+  retries: "{{ add_instances_retries }}"
+  delay: "{{ add_instances_retry_delay_seconds }}"
+  until: add_instances.rc == 0
+  changed_when: "'clone initiated' in add_instances.stdout or 'added via clone' in add_instances.stdout"
+  tags: ["add_instances"]
+
+- name: Rescan cluster metadata after instance changes
+  no_log: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
+    trap 'rm -f "$_tmp"' EXIT
+    cat >"$_tmp" <<'PY'
+    import json
+
+    shell.options["useWizards"] = False
+    primary_host       = {{ erawan_node_ip | to_json }}
+    mysql_port         = {{ mysql_port }}
+    cluster_admin_user = {{ cluster_admin_username | to_json }}
+    cluster_admin_pass = {{ cluster_admin_password | to_json }}
+    cluster_name       = {{ cluster_name | to_json }}
+
+    shell.connect(f"mysql://{cluster_admin_user}@{primary_host}:{mysql_port}", cluster_admin_pass)
+    cluster = dba.get_cluster(cluster_name)
+    result  = cluster.rescan()
+    print(json.dumps(result, indent=2) if result is not None else "rescan complete")
+    PY
+    timeout {{ mysqlsh_rescan_timeout_seconds | int }} \
+      mysqlsh --no-wizard --py --file "$_tmp"
+  args:
+    executable: /bin/bash
+  register: rescan_cluster
+  changed_when: "'rescan complete' not in rescan_cluster.stdout"
+  tags: ["add_instances"]

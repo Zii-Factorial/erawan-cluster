@@ -26,14 +26,14 @@ func TestUpdateJobProgressCountsOnlyApplicableCompletedSteps(t *testing.T) {
 
 	svc.updateJobProgress(job)
 
-	if job.TotalSteps != 3 {
-		t.Fatalf("expected total_steps=3, got %d", job.TotalSteps)
+	if job.TotalSteps != 4 {
+		t.Fatalf("expected total_steps=4, got %d", job.TotalSteps)
 	}
 	if job.CompletedSteps != 1 {
 		t.Fatalf("expected completed_steps=1, got %d", job.CompletedSteps)
 	}
-	if job.ProgressPercent != 33 {
-		t.Fatalf("expected progress_percent=33, got %d", job.ProgressPercent)
+	if job.ProgressPercent != 25 {
+		t.Fatalf("expected progress_percent=25, got %d", job.ProgressPercent)
 	}
 }
 
@@ -48,11 +48,11 @@ func TestUpdateJobProgressCompletedJobsReportOneHundredPercent(t *testing.T) {
 
 	svc.updateJobProgress(job)
 
-	if job.TotalSteps != 6 {
-		t.Fatalf("expected total_steps=6, got %d", job.TotalSteps)
+	if job.TotalSteps != 7 {
+		t.Fatalf("expected total_steps=7, got %d", job.TotalSteps)
 	}
-	if job.CompletedSteps != 6 {
-		t.Fatalf("expected completed_steps=6, got %d", job.CompletedSteps)
+	if job.CompletedSteps != 7 {
+		t.Fatalf("expected completed_steps=7, got %d", job.CompletedSteps)
 	}
 	if job.ProgressPercent != 100 {
 		t.Fatalf("expected progress_percent=100, got %d", job.ProgressPercent)

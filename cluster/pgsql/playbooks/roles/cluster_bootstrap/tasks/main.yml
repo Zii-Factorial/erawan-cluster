@@ -1,0 +1,107 @@
+---
+- name: Rediscover PostgreSQL runtime facts
+  ansible.builtin.import_role:
+    name: runtime_facts
+  tags: ["cluster_bootstrap"]
+
+- name: Check whether etcd data reset already ran for this job
+  ansible.builtin.stat:
+    path: "{{ erawan_etcd_reset_marker }}"
+  register: erawan_etcd_reset_marker_stat
+  tags: ["cluster_bootstrap"]
+
+- name: Ensure etcd data directory is cleaned once per deployment job
+  ansible.builtin.shell: |
+    set -euo pipefail
+    mkdir -p /var/lib/etcd
+    find /var/lib/etcd -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+    install -o root -g root -m 0600 /dev/null "{{ erawan_etcd_reset_marker }}"
+  args:
+    executable: /bin/bash
+  when: not erawan_etcd_reset_marker_stat.stat.exists
+  tags: ["cluster_bootstrap"]
+
+- name: Start etcd on all nodes
+  ansible.builtin.systemd:
+    name: etcd
+    enabled: true
+    state: started
+  tags: ["cluster_bootstrap"]
+
+- name: Wait for local etcd client port
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: "{{ etcd_client_port }}"
+    state: started
+    timeout: 90
+  tags: ["cluster_bootstrap"]
+
+- name: Wait for etcd to become healthy on each node
+  ansible.builtin.uri:
+    url: "http://{{ ansible_host }}:{{ etcd_client_port }}/health"
+    return_content: true
+  register: etcd_health
+  until: etcd_health.status == 200 and ('true' in (etcd_health.content | lower))
+  retries: 20
+  delay: 3
+  changed_when: false
+  tags: ["cluster_bootstrap"]
+
+- name: Start Patroni on the requested primary node
+  ansible.builtin.systemd:
+    name: patroni
+    enabled: true
+    state: started
+  when: inventory_hostname in groups['pgsql_primary']
+  tags: ["cluster_bootstrap"]
+
+- name: Wait for Patroni leader API on primary
+  ansible.builtin.uri:
+    url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/leader"
+    return_content: true
+  register: patroni_primary_leader
+  until: patroni_primary_leader.status == 200
+  retries: 40
+  delay: 3
+  changed_when: false
+  when: inventory_hostname in groups['pgsql_primary']
+  tags: ["cluster_bootstrap"]
+
+- name: Wait for PostgreSQL to listen on primary
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: "{{ postgres_port }}"
+    state: started
+    timeout: 180
+  when: inventory_hostname in groups['pgsql_primary']
+  tags: ["cluster_bootstrap"]
+
+- name: Start Patroni on standby nodes
+  ansible.builtin.systemd:
+    name: patroni
+    enabled: true
+    state: started
+  when: inventory_hostname in groups['pgsql_standby']
+  throttle: 1
+  tags: ["cluster_bootstrap"]
+
+- name: Wait for Patroni replica API on standbys
+  ansible.builtin.uri:
+    url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/replica"
+    return_content: true
+  register: patroni_replica_status
+  until: patroni_replica_status.status == 200
+  retries: 40
+  delay: 3
+  changed_when: false
+  when: inventory_hostname in groups['pgsql_standby']
+  tags: ["cluster_bootstrap"]
+
+- name: Wait for PostgreSQL to listen on standbys
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: "{{ postgres_port }}"
+    state: started
+    timeout: 180
+  when: inventory_hostname in groups['pgsql_standby']
+  tags: ["cluster_bootstrap"]

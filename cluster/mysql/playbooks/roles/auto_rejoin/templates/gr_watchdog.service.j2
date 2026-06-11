@@ -1,0 +1,7 @@
+[Unit]
+Description=Erawan GR watchdog — auto-heal stuck Group Replication applier
+After=mysql.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/erawan-gr-watchdog

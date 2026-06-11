@@ -39,9 +39,10 @@ func NewService(store *Store, runner *Runner) *Service {
 			{Name: "create_cluster", Tag: "create_cluster"},
 			{Name: "add_instances", Tag: "add_instances"},
 			{Name: "enable_auto_rejoin", Tag: "enable_auto_rejoin"},
-			{Name: "bootstrap_router", Tag: "bootstrap_router", Skippable: true},
 			{Name: "verify_cluster", Tag: "verify_cluster"},
 			{Name: "init_app_db", Tag: "init_app_db"},
+			{Name: "boot_recovery", Tag: "boot_recovery"},
+			{Name: "bootstrap_router", Tag: "bootstrap_router", Skippable: true},
 		},
 	}
 	svc.start = func(fn func()) { go fn() }

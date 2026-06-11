@@ -1,0 +1,4 @@
+---
+patroni_rest_port: 8008
+postgres_port: 5432
+postgres_superuser: postgres

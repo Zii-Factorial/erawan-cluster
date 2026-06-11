@@ -1,0 +1,51 @@
+---
+- name: Derive node IP (fallback when configure_instances step was skipped)
+  ansible.builtin.set_fact:
+    erawan_node_ip: "{{ ansible_host }}"
+  when: erawan_node_ip is not defined
+  tags: ["verify_cluster", "status_check"]
+
+- name: Verify cluster status
+  no_log: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
+    trap 'rm -f "$_tmp"' EXIT
+    cat >"$_tmp" <<'PY'
+    import json, os
+
+    cluster_name   = os.environ["CLUSTER_NAME"]
+    expected_nodes = int(os.environ["EXPECTED_CLUSTER_NODES"])
+    primary_host    = {{ erawan_node_ip | to_json }}
+    mysql_port      = {{ mysql_port }}
+    admin_user      = {{ cluster_admin_username | to_json }}
+    admin_pass      = {{ cluster_admin_password | to_json }}
+
+    shell.connect(f"mysql://{admin_user}@{primary_host}:{mysql_port}", admin_pass)
+
+    status    = dba.get_cluster(cluster_name).status()
+    rs        = status.get("defaultReplicaSet", {})
+    rs_status = str(rs.get("status", ""))
+    topology  = rs.get("topology", {})
+    online    = [k for k, v in topology.items() if v.get("status") == "ONLINE"]
+    not_ready = {k: v.get("status") for k, v in topology.items() if v.get("status") != "ONLINE"}
+
+    if not rs_status.startswith("OK"):
+      raise RuntimeError(f"cluster not healthy — status: {rs_status}")
+    if len(online) < expected_nodes:
+      raise RuntimeError(
+        f"expected {expected_nodes} ONLINE nodes, got {len(online)}"
+        + (f" — not ready: {not_ready}" if not_ready else "")
+      )
+
+    print(json.dumps(status, indent=2))
+    PY
+    timeout {{ mysqlsh_verify_timeout_seconds | int }} \
+      mysqlsh --no-wizard --py --file "$_tmp"
+  args:
+    executable: /bin/bash
+  environment:
+    CLUSTER_NAME:           "{{ cluster_name }}"
+    EXPECTED_CLUSTER_NODES: "{{ (standby_ips | length + 1) | string }}"
+  changed_when: false
+  tags: ["verify_cluster", "status_check"]

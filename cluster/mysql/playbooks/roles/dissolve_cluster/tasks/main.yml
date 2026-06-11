@@ -1,0 +1,48 @@
+---
+# Runs on mysql_primary only — see rollback.yml for host targeting.
+- name: Dissolve InnoDB cluster if exists
+  ansible.builtin.shell: |
+    set -euo pipefail
+    _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
+    trap 'rm -f "$_tmp"' EXIT
+    cat >"$_tmp" <<'PY'
+    import os
+
+    shell.options["useWizards"] = False
+    cluster_name = {{ cluster_name | to_json }}
+
+    last_error = None
+    for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
+      if not os.path.exists(sock):
+        continue
+      try:
+        shell.connect({"user": "root", "scheme": "mysql", "host": "localhost", "socket": sock})
+        break
+      except Exception as exc:
+        last_error = exc
+    else:
+      if last_error is not None:
+        raise last_error
+      raise RuntimeError("unable to find a usable MySQL local socket for root")
+
+    try:
+      dba.get_cluster(cluster_name).dissolve({"force": True})
+      print("cluster dissolved")
+    except Exception as e:
+      msg = str(e).lower()
+      if any(t in msg for t in ("does not exist", "unknown cluster", "standalone instance", "no metadata schema")):
+        print("cluster already absent")
+      else:
+        raise
+    PY
+    timeout {{ mysqlsh_rollback_timeout_seconds | int }} \
+      mysqlsh --no-wizard --py --file "$_tmp"
+  args:
+    executable: /bin/bash
+  register: rollback_cluster
+  retries: "{{ rollback_dissolve_retries }}"
+  delay: "{{ rollback_dissolve_retry_delay_seconds }}"
+  until: rollback_cluster.rc == 0
+  changed_when: "'cluster dissolved' in rollback_cluster.stdout"
+  tags: ["rollback"]
+
