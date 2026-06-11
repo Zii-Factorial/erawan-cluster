@@ -90,3 +90,47 @@
     - etcd
     - patroni
   tags: ["base_config"]
+
+- name: Check UFW availability and status
+  ansible.builtin.command:
+    argv: [ufw, status]
+  register: _ufw_status
+  changed_when: false
+  failed_when: false
+  tags: ["base_config"]
+
+- name: Allow etcd client port through UFW
+  community.general.ufw:
+    rule: allow
+    port: "{{ etcd_client_port | string }}"
+    proto: tcp
+    comment: etcd client
+  when: "_ufw_status.rc == 0 and 'Status: active' in (_ufw_status.stdout | default(''))"
+  tags: ["base_config"]
+
+- name: Allow etcd peer port through UFW
+  community.general.ufw:
+    rule: allow
+    port: "{{ etcd_peer_port | string }}"
+    proto: tcp
+    comment: etcd peer
+  when: "_ufw_status.rc == 0 and 'Status: active' in (_ufw_status.stdout | default(''))"
+  tags: ["base_config"]
+
+- name: Allow Patroni REST API port through UFW
+  community.general.ufw:
+    rule: allow
+    port: "{{ patroni_rest_port | string }}"
+    proto: tcp
+    comment: Patroni REST API
+  when: "_ufw_status.rc == 0 and 'Status: active' in (_ufw_status.stdout | default(''))"
+  tags: ["base_config"]
+
+- name: Allow PostgreSQL port through UFW
+  community.general.ufw:
+    rule: allow
+    port: "{{ postgres_port | string }}"
+    proto: tcp
+    comment: PostgreSQL
+  when: "_ufw_status.rc == 0 and 'Status: active' in (_ufw_status.stdout | default(''))"
+  tags: ["base_config"]
