@@ -7,61 +7,64 @@ import (
 	"strings"
 	"time"
 
+	mysql "erawan-cluster/internal/cluster/mysql"
 	gomysql "github.com/go-sql-driver/mysql"
 )
 
-// Service manages MySQL users and databases on a running InnoDB Cluster.
-// It is stateless; each method opens its own connection to the primary.
-type Service struct{}
+type Service struct {
+	store *mysql.Store
+}
 
-func NewService() *Service { return &Service{} }
+func NewService(store *mysql.Store) *Service { return &Service{store: store} }
 
-// CreateUser creates (or updates) a MySQL user with the following grants:
-//
-//   - Global privileges ON *.*: SELECT, INSERT, UPDATE, DELETE, CREATE, DROP,
-//     ALTER, INDEX, REFERENCES
-//     → full DML; can CREATE/DROP tables and databases; can CREATE/DROP INDEX
-//   - NOT granted: CREATE USER, SUPER, GRANT OPTION, REPLICATION SLAVE
-//     → cannot manage other users, cannot escalate privileges
-//
-// Because the grant is global (ON *.*), the user automatically has access to
-// every existing and future database — satisfying the "all databases shared"
-// requirement without per-database re-grants.
-//
-// The operation is idempotent: re-running it refreshes the password and
-// re-applies grants.
+// resolve loads primary IP, port, and admin credentials from the stored job.
+func (s *Service) resolve(jobID string) (host string, port int, user, password string, err error) {
+	job, err := s.store.Load(jobID)
+	if err != nil {
+		return "", 0, "", "", fmt.Errorf("load job %q: %w", jobID, err)
+	}
+	secret, err := s.store.LoadSecret(jobID)
+	if err != nil {
+		return "", 0, "", "", fmt.Errorf("load job secret %q: %w", jobID, err)
+	}
+	p := job.Request.MySQLPort
+	if p == 0 {
+		p = 3306
+	}
+	return job.Request.PrimaryIP, p, secret.AdminUser, secret.AdminPassword, nil
+}
+
 func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) error {
 	if err := req.validate(); err != nil {
 		return err
 	}
+	host, port, adminUser, adminPass, err := s.resolve(req.JobID)
+	if err != nil {
+		return err
+	}
 
-	db, err := s.connect(ctx, req.PrimaryIP, req.Port, "", req.AdminUser, req.AdminPassword)
+	db, err := s.connect(ctx, host, port, "", adminUser, adminPass)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
 
 	uid := mysqlID(req.Username)
-
-	// Create the account if it does not exist yet.
 	if _, err := db.ExecContext(ctx,
 		fmt.Sprintf("CREATE USER IF NOT EXISTS %s@'%%' IDENTIFIED WITH caching_sha2_password BY ?", uid),
 		req.Password,
 	); err != nil {
 		return fmt.Errorf("create user: %w", err)
 	}
-	// Always refresh the password (covers re-runs / password rotation).
 	if _, err := db.ExecContext(ctx,
 		fmt.Sprintf("ALTER USER %s@'%%' IDENTIFIED WITH caching_sha2_password BY ?", uid),
 		req.Password,
 	); err != nil {
 		return fmt.Errorf("update password: %w", err)
 	}
-
-	grantSQL := fmt.Sprintf(
-		"GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, REFERENCES ON *.* TO %s@'%%'",
-		uid)
-	if _, err := db.ExecContext(ctx, grantSQL); err != nil {
+	if _, err := db.ExecContext(ctx, fmt.Sprintf(
+		"GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, REFERENCES ON *.* TO %s@'%%'", uid),
+	); err != nil {
 		return fmt.Errorf("grant privileges: %w", err)
 	}
 	if _, err := db.ExecContext(ctx, "FLUSH PRIVILEGES"); err != nil {
@@ -70,14 +73,16 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) error {
 	return nil
 }
 
-// DeleteUser drops a MySQL user after verifying it is not a system account or
-// a superuser.
 func (s *Service) DeleteUser(ctx context.Context, req DeleteUserRequest) error {
 	if err := req.validate(); err != nil {
 		return err
 	}
+	host, port, adminUser, adminPass, err := s.resolve(req.JobID)
+	if err != nil {
+		return err
+	}
 
-	db, err := s.connect(ctx, req.PrimaryIP, req.Port, "mysql", req.AdminUser, req.AdminPassword)
+	db, err := s.connect(ctx, host, port, "mysql", adminUser, adminPass)
 	if err != nil {
 		return err
 	}
@@ -95,7 +100,7 @@ func (s *Service) DeleteUser(ctx context.Context, req DeleteUserRequest) error {
 		return fmt.Errorf("lookup user: %w", err)
 	}
 	if systemUsers[req.Username] {
-		return fmt.Errorf("user %q is a protected system user and cannot be deleted", req.Username)
+		return fmt.Errorf("user %q is a protected system user", req.Username)
 	}
 	if superPriv == "Y" {
 		return fmt.Errorf("user %q has SUPER privilege and cannot be deleted through this API", req.Username)
@@ -112,24 +117,22 @@ func (s *Service) DeleteUser(ctx context.Context, req DeleteUserRequest) error {
 	return nil
 }
 
-// CreateDatabase creates a database and adds an explicit per-database grant
-// for every existing non-system user so that SHOW GRANTS reflects the access.
-// (Those users already have ON *.* global grants, so the per-db grant is
-// additive for visibility only.)
 func (s *Service) CreateDatabase(ctx context.Context, req CreateDatabaseRequest) error {
 	if err := req.validate(); err != nil {
 		return err
 	}
+	host, port, adminUser, adminPass, err := s.resolve(req.JobID)
+	if err != nil {
+		return err
+	}
 
-	db, err := s.connect(ctx, req.PrimaryIP, req.Port, "", req.AdminUser, req.AdminPassword)
+	db, err := s.connect(ctx, host, port, "", adminUser, adminPass)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
 
-	if _, err := db.ExecContext(ctx,
-		"CREATE DATABASE "+mysqlID(req.DBName),
-	); err != nil {
+	if _, err := db.ExecContext(ctx, "CREATE DATABASE "+mysqlID(req.DBName)); err != nil {
 		return fmt.Errorf("create database: %w", err)
 	}
 
@@ -139,10 +142,10 @@ func (s *Service) CreateDatabase(ctx context.Context, req CreateDatabaseRequest)
 	}
 	dbid := mysqlID(req.DBName)
 	for _, u := range users {
-		grantSQL := fmt.Sprintf(
+		if _, err := db.ExecContext(ctx, fmt.Sprintf(
 			"GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, REFERENCES ON %s.* TO %s@'%%'",
-			dbid, mysqlID(u))
-		if _, err := db.ExecContext(ctx, grantSQL); err != nil {
+			dbid, mysqlID(u)),
+		); err != nil {
 			return fmt.Errorf("grant on %s to %s: %w", req.DBName, u, err)
 		}
 	}
@@ -152,8 +155,6 @@ func (s *Service) CreateDatabase(ctx context.Context, req CreateDatabaseRequest)
 	return nil
 }
 
-// DeleteDatabase terminates all active connections to the target database, then
-// drops it.  The four MySQL system databases are refused.
 func (s *Service) DeleteDatabase(ctx context.Context, req DeleteDatabaseRequest) error {
 	if err := req.validate(); err != nil {
 		return err
@@ -162,13 +163,17 @@ func (s *Service) DeleteDatabase(ctx context.Context, req DeleteDatabaseRequest)
 		return fmt.Errorf("database %q is a system database and cannot be deleted", req.DBName)
 	}
 
-	db, err := s.connect(ctx, req.PrimaryIP, req.Port, "", req.AdminUser, req.AdminPassword)
+	host, port, adminUser, adminPass, err := s.resolve(req.JobID)
+	if err != nil {
+		return err
+	}
+
+	db, err := s.connect(ctx, host, port, "", adminUser, adminPass)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
 
-	// Collect connection IDs for the target database, excluding our own.
 	rows, err := db.QueryContext(ctx,
 		"SELECT id FROM information_schema.PROCESSLIST WHERE db = ? AND id != CONNECTION_ID()",
 		req.DBName)
@@ -192,9 +197,7 @@ func (s *Service) DeleteDatabase(ctx context.Context, req DeleteDatabaseRequest)
 		_, _ = db.ExecContext(ctx, fmt.Sprintf("KILL %d", id))
 	}
 
-	if _, err := db.ExecContext(ctx,
-		"DROP DATABASE "+mysqlID(req.DBName),
-	); err != nil {
+	if _, err := db.ExecContext(ctx, "DROP DATABASE "+mysqlID(req.DBName)); err != nil {
 		return fmt.Errorf("drop database: %w", err)
 	}
 	return nil
@@ -228,7 +231,6 @@ func (s *Service) connect(ctx context.Context, host string, port int, dbname, us
 	return db, nil
 }
 
-// mysqlID wraps a name in backtick quotes, doubling any internal backticks.
 func mysqlID(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
@@ -247,28 +249,6 @@ var systemUsers = map[string]bool{
 	"mysql.infoschema": true,
 }
 
-// appDatabases returns all non-system databases.
-func appDatabases(ctx context.Context, db *sql.DB) ([]string, error) {
-	rows, err := db.QueryContext(ctx,
-		`SELECT schema_name FROM information_schema.schemata
-		  WHERE schema_name NOT IN ('information_schema','mysql','performance_schema','sys')
-		  ORDER BY schema_name`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
-		}
-		out = append(out, name)
-	}
-	return out, rows.Err()
-}
-
-// appUsers returns all non-system, non-superuser users that connect from any host (%).
 func appUsers(ctx context.Context, db *sql.DB) ([]string, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT User FROM mysql.user

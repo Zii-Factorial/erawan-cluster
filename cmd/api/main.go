@@ -120,8 +120,8 @@ func main() {
 		haproxy:      haproxySvc,
 		mysqlCluster: mysqlSvc,
 		pgsqlCluster: pgsqlSvc,
-		pgsqlDB:      dbmanager.NewService(),
-		mysqlDB:      mysqldbmanager.NewService(),
+		pgsqlDB:      dbmanager.NewService(pgsqlStore),
+		mysqlDB:      mysqldbmanager.NewService(store),
 		cipher:       cipher,
 		baseDir:      baseDir,
 	}

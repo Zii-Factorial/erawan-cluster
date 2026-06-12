@@ -2,7 +2,6 @@ package dbmanager
 
 import (
 	"fmt"
-	"net"
 	"regexp"
 	"strings"
 )
@@ -13,23 +12,9 @@ var (
 )
 
 func (req *CreateUserRequest) validate() error {
-	req.PrimaryIP = strings.TrimSpace(req.PrimaryIP)
-	req.AdminUser = strings.TrimSpace(req.AdminUser)
 	req.Username = strings.TrimSpace(req.Username)
-	if net.ParseIP(req.PrimaryIP) == nil {
-		return fmt.Errorf("primary_ip must be a valid IP address")
-	}
-	if req.Port == 0 {
-		req.Port = 3306
-	}
-	if req.Port < 1 || req.Port > 65535 {
-		return fmt.Errorf("port must be between 1 and 65535")
-	}
-	if req.AdminUser == "" {
-		return fmt.Errorf("admin_user is required")
-	}
-	if req.AdminPassword == "" {
-		return fmt.Errorf("admin_password is required")
+	if strings.TrimSpace(req.JobID) == "" {
+		return fmt.Errorf("job_id is required")
 	}
 	if !userPattern.MatchString(req.Username) {
 		return fmt.Errorf("username must match %s", userPattern)
@@ -41,23 +26,9 @@ func (req *CreateUserRequest) validate() error {
 }
 
 func (req *DeleteUserRequest) validate() error {
-	req.PrimaryIP = strings.TrimSpace(req.PrimaryIP)
-	req.AdminUser = strings.TrimSpace(req.AdminUser)
 	req.Username = strings.TrimSpace(req.Username)
-	if net.ParseIP(req.PrimaryIP) == nil {
-		return fmt.Errorf("primary_ip must be a valid IP address")
-	}
-	if req.Port == 0 {
-		req.Port = 3306
-	}
-	if req.Port < 1 || req.Port > 65535 {
-		return fmt.Errorf("port must be between 1 and 65535")
-	}
-	if req.AdminUser == "" {
-		return fmt.Errorf("admin_user is required")
-	}
-	if req.AdminPassword == "" {
-		return fmt.Errorf("admin_password is required")
+	if strings.TrimSpace(req.JobID) == "" {
+		return fmt.Errorf("job_id is required")
 	}
 	if !userPattern.MatchString(req.Username) {
 		return fmt.Errorf("username must match %s", userPattern)
@@ -66,23 +37,9 @@ func (req *DeleteUserRequest) validate() error {
 }
 
 func (req *CreateDatabaseRequest) validate() error {
-	req.PrimaryIP = strings.TrimSpace(req.PrimaryIP)
-	req.AdminUser = strings.TrimSpace(req.AdminUser)
 	req.DBName = strings.TrimSpace(req.DBName)
-	if net.ParseIP(req.PrimaryIP) == nil {
-		return fmt.Errorf("primary_ip must be a valid IP address")
-	}
-	if req.Port == 0 {
-		req.Port = 3306
-	}
-	if req.Port < 1 || req.Port > 65535 {
-		return fmt.Errorf("port must be between 1 and 65535")
-	}
-	if req.AdminUser == "" {
-		return fmt.Errorf("admin_user is required")
-	}
-	if req.AdminPassword == "" {
-		return fmt.Errorf("admin_password is required")
+	if strings.TrimSpace(req.JobID) == "" {
+		return fmt.Errorf("job_id is required")
 	}
 	if !dbPattern.MatchString(req.DBName) {
 		return fmt.Errorf("dbname must match %s", dbPattern)
@@ -91,23 +48,9 @@ func (req *CreateDatabaseRequest) validate() error {
 }
 
 func (req *DeleteDatabaseRequest) validate() error {
-	req.PrimaryIP = strings.TrimSpace(req.PrimaryIP)
-	req.AdminUser = strings.TrimSpace(req.AdminUser)
 	req.DBName = strings.TrimSpace(req.DBName)
-	if net.ParseIP(req.PrimaryIP) == nil {
-		return fmt.Errorf("primary_ip must be a valid IP address")
-	}
-	if req.Port == 0 {
-		req.Port = 3306
-	}
-	if req.Port < 1 || req.Port > 65535 {
-		return fmt.Errorf("port must be between 1 and 65535")
-	}
-	if req.AdminUser == "" {
-		return fmt.Errorf("admin_user is required")
-	}
-	if req.AdminPassword == "" {
-		return fmt.Errorf("admin_password is required")
+	if strings.TrimSpace(req.JobID) == "" {
+		return fmt.Errorf("job_id is required")
 	}
 	if !dbPattern.MatchString(req.DBName) {
 		return fmt.Errorf("dbname must match %s", dbPattern)

@@ -139,13 +139,14 @@
     {
       "key": "DBMGR_PASSWORD",
       "value": "AppUser#2026",
-      "description": "Password for the DB Manager user"
+      "description": "Password for the new DB Manager user"
     },
     {
       "key": "DBMGR_DBNAME",
       "value": "newdb",
       "description": "Database name to create or delete via DB Manager"
     }
+
   ],
   "event": [
     {
@@ -926,9 +927,9 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"primary_ip\": \"{{PRIMARY_IP}}\",\n  \"port\": 3306,\n  \"admin_user\": \"{{MYSQL_DB_USER}}\",\n  \"admin_password\": \"{{MYSQL_DB_PASSWORD}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"password\": \"{{DBMGR_PASSWORD}}\"\n}"
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"password\": \"{{DBMGR_PASSWORD}}\"\n}"
             },
-            "description": "Creates (or updates) a MySQL user with DML + DDL privileges on every database. Idempotent — re-running refreshes the password and re-applies grants.\n\n- `port` defaults to 3306 when omitted\n- `username` must match ^[a-zA-Z_][a-zA-Z0-9_-]{1,31}$",
+            "description": "Creates (or updates) a MySQL user with DML + DDL privileges on every database. Credentials and primary IP are resolved from the deploy job. Idempotent — re-running refreshes the password and re-applies grants.\n\n- `username` must match ^[a-zA-Z_][a-zA-Z0-9_-]{1,31}$",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/users",
               "protocol": "http",
@@ -961,9 +962,9 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"primary_ip\": \"{{PRIMARY_IP}}\",\n  \"port\": 3306,\n  \"admin_user\": \"{{MYSQL_DB_USER}}\",\n  \"admin_password\": \"{{MYSQL_DB_PASSWORD}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\"\n}"
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\"\n}"
             },
-            "description": "Drops a MySQL user. System users (root, mysql.sys, mysql.session, mysql.infoschema) and users with the SUPER privilege are refused.",
+            "description": "Drops a MySQL user. System users (root, mysql.sys, mysql.session, mysql.infoschema) and users with the SUPER privilege are refused. Credentials resolved from the deploy job.",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/users",
               "protocol": "http",
@@ -996,9 +997,9 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"primary_ip\": \"{{PRIMARY_IP}}\",\n  \"port\": 3306,\n  \"admin_user\": \"{{MYSQL_DB_USER}}\",\n  \"admin_password\": \"{{MYSQL_DB_PASSWORD}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\"\n}"
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\"\n}"
             },
-            "description": "Creates a database and grants all existing non-system app users access to it.\n\n- `dbname` must match ^[a-zA-Z0-9_]{1,64}$",
+            "description": "Creates a database and grants all existing non-system app users access to it. Credentials resolved from the deploy job.\n\n- `dbname` must match ^[a-zA-Z0-9_]{1,64}$",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/databases",
               "protocol": "http",
@@ -1031,9 +1032,9 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"primary_ip\": \"{{PRIMARY_IP}}\",\n  \"port\": 3306,\n  \"admin_user\": \"{{MYSQL_DB_USER}}\",\n  \"admin_password\": \"{{MYSQL_DB_PASSWORD}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\"\n}"
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\"\n}"
             },
-            "description": "Terminates all active connections to the database, then drops it. System databases (information_schema, mysql, performance_schema, sys) are refused.",
+            "description": "Terminates all active connections to the database, then drops it. System databases (information_schema, mysql, performance_schema, sys) are refused. Credentials resolved from the deploy job.",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/databases",
               "protocol": "http",
@@ -1072,9 +1073,9 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"primary_ip\": \"{{PGSQL_PRIMARY_IP}}\",\n  \"port\": 5432,\n  \"admin_user\": \"{{PGSQL_DB_USER}}\",\n  \"admin_password\": \"{{PGSQL_DB_PASSWORD}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"password\": \"{{DBMGR_PASSWORD}}\"\n}"
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"password\": \"{{DBMGR_PASSWORD}}\"\n}"
             },
-            "description": "Creates (or updates) a PostgreSQL role with full DML + DDL privileges on every app database. Idempotent — re-running refreshes the password and re-applies grants.\n\n- `port` defaults to 5432 when omitted\n- `username` must match ^[a-zA-Z_][a-zA-Z0-9_-]{1,31}$",
+            "description": "Creates (or updates) a PostgreSQL role with full DML + DDL privileges on every app database. Credentials and primary IP are resolved from the deploy job. Idempotent — re-running refreshes the password and re-applies grants.\n\n- `username` must match ^[a-zA-Z_][a-zA-Z0-9_-]{1,31}$",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/users",
               "protocol": "http",
@@ -1107,9 +1108,9 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"primary_ip\": \"{{PGSQL_PRIMARY_IP}}\",\n  \"port\": 5432,\n  \"admin_user\": \"{{PGSQL_DB_USER}}\",\n  \"admin_password\": \"{{PGSQL_DB_PASSWORD}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\"\n}"
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\"\n}"
             },
-            "description": "Drops a PostgreSQL role. Superuser roles, replication roles, built-in pg_* roles, and the postgres user are refused. Objects owned by the role are reassigned to the admin user before dropping.",
+            "description": "Drops a PostgreSQL role. Superuser roles, replication roles, built-in pg_* roles, and the postgres user are refused. Objects are reassigned before dropping. Credentials resolved from the deploy job.",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/users",
               "protocol": "http",
@@ -1142,9 +1143,9 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"primary_ip\": \"{{PGSQL_PRIMARY_IP}}\",\n  \"port\": 5432,\n  \"admin_user\": \"{{PGSQL_DB_USER}}\",\n  \"admin_password\": \"{{PGSQL_DB_PASSWORD}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\",\n  \"owner\": \"\"\n}"
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\"\n}"
             },
-            "description": "Creates a PostgreSQL database and grants all existing non-system app users access to it.\n\n- `owner` (optional) — role to own the database; defaults to the admin user\n- `dbname` must match ^[a-zA-Z0-9_]{1,64}$",
+            "description": "Creates a PostgreSQL database and grants all existing non-system app users access to it. Credentials resolved from the deploy job. Owner defaults to the postgres superuser.\n\n- `dbname` must match ^[a-zA-Z0-9_]{1,64}$",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/databases",
               "protocol": "http",
@@ -1177,9 +1178,9 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"primary_ip\": \"{{PGSQL_PRIMARY_IP}}\",\n  \"port\": 5432,\n  \"admin_user\": \"{{PGSQL_DB_USER}}\",\n  \"admin_password\": \"{{PGSQL_DB_PASSWORD}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\"\n}"
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\"\n}"
             },
-            "description": "Terminates all active connections to the database via pg_terminate_backend(), then drops it. System databases (postgres, template0, template1) are refused.",
+            "description": "Terminates all active connections via pg_terminate_backend(), then drops the database. System databases (postgres, template0, template1) are refused. Credentials resolved from the deploy job.",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/databases",
               "protocol": "http",
