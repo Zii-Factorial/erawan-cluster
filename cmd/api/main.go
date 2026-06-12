@@ -11,7 +11,9 @@ import (
 	"time"
 
 	mysqlcluster "erawan-cluster/internal/cluster/mysql"
+	mysqldbmanager "erawan-cluster/internal/cluster/mysql/dbmanager"
 	pgsqlcluster "erawan-cluster/internal/cluster/pgsql"
+	"erawan-cluster/internal/cluster/pgsql/dbmanager"
 	"erawan-cluster/internal/env"
 	"erawan-cluster/internal/haproxy"
 	"erawan-cluster/internal/security"
@@ -118,6 +120,8 @@ func main() {
 		haproxy:      haproxySvc,
 		mysqlCluster: mysqlSvc,
 		pgsqlCluster: pgsqlSvc,
+		pgsqlDB:      dbmanager.NewService(),
+		mysqlDB:      mysqldbmanager.NewService(),
 		cipher:       cipher,
 		baseDir:      baseDir,
 	}

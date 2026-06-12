@@ -130,6 +130,21 @@
       "key": "MYSQL_DB_PASSWORD",
       "value": "",
       "type": "default"
+    },
+    {
+      "key": "DBMGR_USERNAME",
+      "value": "appuser",
+      "description": "Username to create or delete via DB Manager"
+    },
+    {
+      "key": "DBMGR_PASSWORD",
+      "value": "AppUser#2026",
+      "description": "Password for the DB Manager user"
+    },
+    {
+      "key": "DBMGR_DBNAME",
+      "value": "newdb",
+      "description": "Database name to create or delete via DB Manager"
     }
   ],
   "event": [
@@ -884,6 +899,298 @@
                 "jobs",
                 "{{JOB_ID}}",
                 "resume"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "DB Manager - MySQL",
+      "description": "Create and delete users and databases on a running MySQL cluster.\n\nAdmin credentials: use MYSQL_DB_USER / MYSQL_DB_PASSWORD (clusteradmin) from the deploy response, or any user with the required privileges.\n\nPrivilege model:\n- New users get SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, REFERENCES on *.*\n- Users cannot drop other users (no CREATE USER privilege)\n- All existing databases are accessible to every new user (global ON *.* grant)\n- New databases are granted to all existing app users automatically",
+      "item": [
+        {
+          "name": "Create User",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"primary_ip\": \"{{PRIMARY_IP}}\",\n  \"port\": 3306,\n  \"admin_user\": \"{{MYSQL_DB_USER}}\",\n  \"admin_password\": \"{{MYSQL_DB_PASSWORD}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"password\": \"{{DBMGR_PASSWORD}}\"\n}"
+            },
+            "description": "Creates (or updates) a MySQL user with DML + DDL privileges on every database. Idempotent — re-running refreshes the password and re-applies grants.\n\n- `port` defaults to 3306 when omitted\n- `username` must match ^[a-zA-Z_][a-zA-Z0-9_-]{1,31}$",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/users",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "mysql",
+                "users"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete User",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"primary_ip\": \"{{PRIMARY_IP}}\",\n  \"port\": 3306,\n  \"admin_user\": \"{{MYSQL_DB_USER}}\",\n  \"admin_password\": \"{{MYSQL_DB_PASSWORD}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\"\n}"
+            },
+            "description": "Drops a MySQL user. System users (root, mysql.sys, mysql.session, mysql.infoschema) and users with the SUPER privilege are refused.",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/users",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "mysql",
+                "users"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Database",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"primary_ip\": \"{{PRIMARY_IP}}\",\n  \"port\": 3306,\n  \"admin_user\": \"{{MYSQL_DB_USER}}\",\n  \"admin_password\": \"{{MYSQL_DB_PASSWORD}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\"\n}"
+            },
+            "description": "Creates a database and grants all existing non-system app users access to it.\n\n- `dbname` must match ^[a-zA-Z0-9_]{1,64}$",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/databases",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "mysql",
+                "databases"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Database",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"primary_ip\": \"{{PRIMARY_IP}}\",\n  \"port\": 3306,\n  \"admin_user\": \"{{MYSQL_DB_USER}}\",\n  \"admin_password\": \"{{MYSQL_DB_PASSWORD}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\"\n}"
+            },
+            "description": "Terminates all active connections to the database, then drops it. System databases (information_schema, mysql, performance_schema, sys) are refused.",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/databases",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "mysql",
+                "databases"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "DB Manager - PostgreSQL",
+      "description": "Create and delete users and databases on a running PostgreSQL/Patroni cluster.\n\nAdmin credentials: use PGSQL_DB_USER / PGSQL_DB_PASSWORD (postgres superuser) from the deploy response.\n\nPrivilege model:\n- New roles get LOGIN, CREATEDB, NOSUPERUSER, NOCREATEROLE\n- Granted USAGE + CREATE on schema public; SELECT, INSERT, UPDATE, DELETE, TRUNCATE on all tables; ALTER DEFAULT PRIVILEGES for cross-user future tables\n- Cannot delete other roles (NOCREATEROLE)\n- All existing app databases are accessible to every new user\n- New databases are granted to all existing app users automatically",
+      "item": [
+        {
+          "name": "Create User",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"primary_ip\": \"{{PGSQL_PRIMARY_IP}}\",\n  \"port\": 5432,\n  \"admin_user\": \"{{PGSQL_DB_USER}}\",\n  \"admin_password\": \"{{PGSQL_DB_PASSWORD}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"password\": \"{{DBMGR_PASSWORD}}\"\n}"
+            },
+            "description": "Creates (or updates) a PostgreSQL role with full DML + DDL privileges on every app database. Idempotent — re-running refreshes the password and re-applies grants.\n\n- `port` defaults to 5432 when omitted\n- `username` must match ^[a-zA-Z_][a-zA-Z0-9_-]{1,31}$",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/users",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "pgsql",
+                "users"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete User",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"primary_ip\": \"{{PGSQL_PRIMARY_IP}}\",\n  \"port\": 5432,\n  \"admin_user\": \"{{PGSQL_DB_USER}}\",\n  \"admin_password\": \"{{PGSQL_DB_PASSWORD}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\"\n}"
+            },
+            "description": "Drops a PostgreSQL role. Superuser roles, replication roles, built-in pg_* roles, and the postgres user are refused. Objects owned by the role are reassigned to the admin user before dropping.",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/users",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "pgsql",
+                "users"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Database",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"primary_ip\": \"{{PGSQL_PRIMARY_IP}}\",\n  \"port\": 5432,\n  \"admin_user\": \"{{PGSQL_DB_USER}}\",\n  \"admin_password\": \"{{PGSQL_DB_PASSWORD}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\",\n  \"owner\": \"\"\n}"
+            },
+            "description": "Creates a PostgreSQL database and grants all existing non-system app users access to it.\n\n- `owner` (optional) — role to own the database; defaults to the admin user\n- `dbname` must match ^[a-zA-Z0-9_]{1,64}$",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/databases",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "pgsql",
+                "databases"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete Database",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"primary_ip\": \"{{PGSQL_PRIMARY_IP}}\",\n  \"port\": 5432,\n  \"admin_user\": \"{{PGSQL_DB_USER}}\",\n  \"admin_password\": \"{{PGSQL_DB_PASSWORD}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\"\n}"
+            },
+            "description": "Terminates all active connections to the database via pg_terminate_backend(), then drops it. System databases (postgres, template0, template1) are refused.",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/databases",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "pgsql",
+                "databases"
               ]
             }
           }
