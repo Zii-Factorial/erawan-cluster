@@ -46,14 +46,14 @@ bootstrap:
     - local all postgres peer
     - local all all peer
     - local replication all peer
-{%- if (new_user | default('')) | length > 0 and (new_db | default('')) | length > 0 %}
-{%- if new_user_ssl_required | default(true) | bool %}
+{% if (new_user | default('')) | length > 0 and (new_db | default('')) | length > 0 %}
+{% if new_user_ssl_required | default(true) | bool %}
     - hostssl {{ new_db }} {{ new_user }} 0.0.0.0/0 scram-sha-256
     - hostnossl {{ new_db }} {{ new_user }} 0.0.0.0/0 reject
-{%- else %}
+{% else %}
     - host {{ new_db }} {{ new_user }} 0.0.0.0/0 scram-sha-256
-{%- endif %}
-{%- endif %}
+{% endif %}
+{% endif %}
     - host replication {{ replication_user }} 0.0.0.0/0 scram-sha-256
     - host all all 0.0.0.0/0 scram-sha-256
     - host all all ::/0 scram-sha-256
