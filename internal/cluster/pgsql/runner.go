@@ -117,7 +117,6 @@ func (r *Runner) run(ctx context.Context, cfg runConfig) (result StepResult) {
 		"postgres_port":               cfg.spec.PostgresPort,
 		"erawan_pg_major_version":     cfg.spec.PostgresVersion,
 		"postgresql_cluster_name":     defaultPostgreSQLCluster,
-		"patroni_scope":               cfg.spec.ClusterName,
 		"patroni_namespace":           "/db/",
 		"patroni_rest_port":           8008,
 		"patroni_config_path":         "/etc/patroni/patroni.yml",

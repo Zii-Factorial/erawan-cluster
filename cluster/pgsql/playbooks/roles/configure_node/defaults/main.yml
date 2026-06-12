@@ -1,12 +1,12 @@
 ---
 patroni_ssl_cert_file: /etc/patroni/server.crt
 patroni_ssl_key_file: /etc/patroni/server.key
-patroni_remove_data_on_rewind_failure: false
-patroni_remove_data_on_diverged_timelines: false
+patroni_remove_data_on_rewind_failure: true
+patroni_remove_data_on_diverged_timelines: true
 patroni_namespace: /db/
 patroni_rest_port: 8008
 patroni_config_path: /etc/patroni/patroni.yml
-patroni_pgpass_path: /var/run/postgresql/.pgpass
+patroni_pgpass_path: /etc/patroni/patroni.pgpass
 etcd_client_port: 2379
 postgres_port: 5432
 postgres_superuser: postgres

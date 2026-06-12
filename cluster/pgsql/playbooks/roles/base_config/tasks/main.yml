@@ -99,38 +99,14 @@
   failed_when: false
   tags: ["base_config"]
 
-- name: Allow etcd client port through UFW
-  community.general.ufw:
-    rule: allow
-    port: "{{ etcd_client_port | string }}"
-    proto: tcp
-    comment: etcd client
+- name: Allow required ports through UFW
+  ansible.builtin.command:
+    argv: [ufw, allow, "{{ item }}/tcp"]
+  loop:
+    - "{{ etcd_client_port | string }}"
+    - "{{ etcd_peer_port | string }}"
+    - "{{ patroni_rest_port | string }}"
+    - "{{ postgres_port | string }}"
   when: "_ufw_status.rc == 0 and 'Status: active' in (_ufw_status.stdout | default(''))"
-  tags: ["base_config"]
-
-- name: Allow etcd peer port through UFW
-  community.general.ufw:
-    rule: allow
-    port: "{{ etcd_peer_port | string }}"
-    proto: tcp
-    comment: etcd peer
-  when: "_ufw_status.rc == 0 and 'Status: active' in (_ufw_status.stdout | default(''))"
-  tags: ["base_config"]
-
-- name: Allow Patroni REST API port through UFW
-  community.general.ufw:
-    rule: allow
-    port: "{{ patroni_rest_port | string }}"
-    proto: tcp
-    comment: Patroni REST API
-  when: "_ufw_status.rc == 0 and 'Status: active' in (_ufw_status.stdout | default(''))"
-  tags: ["base_config"]
-
-- name: Allow PostgreSQL port through UFW
-  community.general.ufw:
-    rule: allow
-    port: "{{ postgres_port | string }}"
-    proto: tcp
-    comment: PostgreSQL
-  when: "_ufw_status.rc == 0 and 'Status: active' in (_ufw_status.stdout | default(''))"
+  changed_when: false
   tags: ["base_config"]

@@ -3,7 +3,7 @@ namespace: {{ patroni_namespace }}
 name: {{ erawan_pg_node_name }}
 
 restapi:
-  listen: 0.0.0.0:{{ patroni_rest_port }}
+  listen: {{ ansible_host }}:{{ patroni_rest_port }}
   connect_address: {{ ansible_host }}:{{ patroni_rest_port }}
 
 etcd:
