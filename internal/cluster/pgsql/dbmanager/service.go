@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/http"
 	"strings"
+	"time"
 
 	pgsql "erawan-cluster/internal/cluster/pgsql"
 	"github.com/lib/pq"
@@ -16,8 +18,10 @@ type Service struct {
 
 func NewService(store *pgsql.Store) *Service { return &Service{store: store} }
 
-// resolve loads primary IP, port, and postgres superuser credentials from the stored job.
-func (s *Service) resolve(jobID string) (host string, port int, user, password string, err error) {
+// resolve loads the current primary IP, port, and postgres superuser credentials.
+// It probes each node's Patroni /master endpoint so the result is correct even
+// after a failover since the original deploy.
+func (s *Service) resolve(ctx context.Context, jobID string) (host string, port int, user, password string, err error) {
 	job, err := s.store.Load(jobID)
 	if err != nil {
 		return "", 0, "", "", fmt.Errorf("load job %q: %w", jobID, err)
@@ -30,14 +34,41 @@ func (s *Service) resolve(jobID string) (host string, port int, user, password s
 	if p == 0 {
 		p = 5432
 	}
-	return job.Request.PrimaryIP, p, secret.PostgresUser, secret.PostgresPassword, nil
+	candidates := append([]string{job.Request.PrimaryIP}, job.Request.StandbyIPs...)
+	primary, err := findPrimary(ctx, candidates)
+	if err != nil {
+		return "", 0, "", "", fmt.Errorf("discover primary: %w", err)
+	}
+	return primary, p, secret.PostgresUser, secret.PostgresPassword, nil
+}
+
+// findPrimary probes each node's Patroni /master endpoint (port 8008) and
+// returns the first node that responds 200 — that is the current read-write leader.
+func findPrimary(ctx context.Context, candidates []string) (string, error) {
+	client := &http.Client{Timeout: 4 * time.Second}
+	for _, ip := range candidates {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+			fmt.Sprintf("http://%s:8008/master", ip), nil)
+		if err != nil {
+			continue
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			return ip, nil
+		}
+	}
+	return "", fmt.Errorf("no primary found among nodes %v", candidates)
 }
 
 func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) error {
 	if err := req.validate(); err != nil {
 		return err
 	}
-	host, port, adminUser, adminPass, err := s.resolve(req.JobID)
+	host, port, adminUser, adminPass, err := s.resolve(ctx, req.JobID)
 	if err != nil {
 		return err
 	}
@@ -96,7 +127,7 @@ func (s *Service) DeleteUser(ctx context.Context, req DeleteUserRequest) error {
 	if err := req.validate(); err != nil {
 		return err
 	}
-	host, port, adminUser, adminPass, err := s.resolve(req.JobID)
+	host, port, adminUser, adminPass, err := s.resolve(ctx, req.JobID)
 	if err != nil {
 		return err
 	}
@@ -143,7 +174,7 @@ func (s *Service) CreateDatabase(ctx context.Context, req CreateDatabaseRequest)
 	if err := req.validate(); err != nil {
 		return err
 	}
-	host, port, adminUser, adminPass, err := s.resolve(req.JobID)
+	host, port, adminUser, adminPass, err := s.resolve(ctx, req.JobID)
 	if err != nil {
 		return err
 	}
@@ -189,7 +220,7 @@ func (s *Service) DeleteDatabase(ctx context.Context, req DeleteDatabaseRequest)
 		return fmt.Errorf("database %q is a system database and cannot be deleted", req.DBName)
 	}
 
-	host, port, adminUser, adminPass, err := s.resolve(req.JobID)
+	host, port, adminUser, adminPass, err := s.resolve(ctx, req.JobID)
 	if err != nil {
 		return err
 	}

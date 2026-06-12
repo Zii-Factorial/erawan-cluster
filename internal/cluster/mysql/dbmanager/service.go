@@ -50,15 +50,14 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) error {
 	defer db.Close()
 
 	uid := mysqlID(req.Username)
+	passLit := mysqlLit(req.Password)
 	if _, err := db.ExecContext(ctx,
-		fmt.Sprintf("CREATE USER IF NOT EXISTS %s@'%%' IDENTIFIED WITH caching_sha2_password BY ?", uid),
-		req.Password,
+		fmt.Sprintf("CREATE USER IF NOT EXISTS %s@'%%' IDENTIFIED WITH caching_sha2_password BY %s", uid, passLit),
 	); err != nil {
 		return fmt.Errorf("create user: %w", err)
 	}
 	if _, err := db.ExecContext(ctx,
-		fmt.Sprintf("ALTER USER %s@'%%' IDENTIFIED WITH caching_sha2_password BY ?", uid),
-		req.Password,
+		fmt.Sprintf("ALTER USER %s@'%%' IDENTIFIED WITH caching_sha2_password BY %s", uid, passLit),
 	); err != nil {
 		return fmt.Errorf("update password: %w", err)
 	}
@@ -233,6 +232,12 @@ func (s *Service) connect(ctx context.Context, host string, port int, dbname, us
 
 func mysqlID(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+}
+
+func mysqlLit(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `'`, `\'`)
+	return "'" + s + "'"
 }
 
 var systemDatabases = map[string]bool{
