@@ -98,10 +98,28 @@ type MetricResponse struct {
 	Host          string            `json:"host"`
 	Port          int               `json:"port"`
 	DatabaseCount int               `json:"database_count"` // total user databases on this server
+	Users         []UserInfo        `json:"users"`
+	Databases     []DatabaseInfo    `json:"databases"`
 	From          *time.Time        `json:"from,omitempty"`
 	To            *time.Time        `json:"to,omitempty"`
 	Categories    map[string]any    `json:"categories"`
 	Errors        map[string]string `json:"errors,omitempty"`
+}
+
+// UserInfo describes one PostgreSQL role that can log in.
+type UserInfo struct {
+	Name        string `json:"name"`
+	IsSuperuser bool   `json:"is_superuser"`
+	CanCreateDB bool   `json:"can_create_db"`
+	CanLogin    bool   `json:"can_login"`
+}
+
+// DatabaseInfo describes one PostgreSQL database with its owner, size, and encoding.
+type DatabaseInfo struct {
+	Name      string `json:"name"`
+	Owner     string `json:"owner"`
+	SizeBytes int64  `json:"size_bytes"`
+	Encoding  string `json:"encoding"`
 }
 
 // ---------------------------------------------------------------------------
