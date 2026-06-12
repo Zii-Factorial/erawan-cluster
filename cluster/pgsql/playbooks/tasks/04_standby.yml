@@ -1,7 +1,0 @@
-- name: Rediscover PostgreSQL runtime facts for this step
-  ansible.builtin.import_tasks: runtime_facts.yml
-  tags: ["standby_config"]
-
-- name: Configure PostgreSQL standby node
-  ansible.builtin.import_tasks: configure_pg_node.yml
-  tags: ["standby_config"]

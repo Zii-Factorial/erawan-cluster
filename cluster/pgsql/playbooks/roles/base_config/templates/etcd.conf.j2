@@ -1,0 +1,10 @@
+name: {{ ('etcd' ~ erawan_pg_node_id) | to_json }}
+data-dir: /var/lib/etcd
+listen-client-urls: {{ ('http://' ~ ansible_host ~ ':' ~ (etcd_client_port | string) ~ ',http://127.0.0.1:' ~ (etcd_client_port | string)) | to_json }}
+advertise-client-urls: {{ ('http://' ~ ansible_host ~ ':' ~ (etcd_client_port | string)) | to_json }}
+listen-peer-urls: {{ ('http://' ~ ansible_host ~ ':' ~ (etcd_peer_port | string)) | to_json }}
+initial-advertise-peer-urls: {{ ('http://' ~ ansible_host ~ ':' ~ (etcd_peer_port | string)) | to_json }}
+initial-cluster: "{% for host_name in groups['all'] %}{{ 'etcd' ~ ((groups['all'] | list).index(host_name) + 1) }}=http://{{ hostvars[host_name].ansible_host }}:{{ etcd_peer_port }}{% if not loop.last %},{% endif %}{% endfor %}"
+initial-cluster-token: {{ etcd_cluster_token | to_json }}
+initial-cluster-state: {{ etcd_initial_cluster_state }}
+enable-v2: true

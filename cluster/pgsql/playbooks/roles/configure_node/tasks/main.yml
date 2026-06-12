@@ -1,0 +1,61 @@
+---
+- name: Rediscover PostgreSQL runtime facts
+  ansible.builtin.import_role:
+    name: runtime_facts
+
+- name: Ensure openssl is installed for certificate generation
+  ansible.builtin.apt:
+    name: openssl
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Generate self-signed SSL certificate for PostgreSQL
+  ansible.builtin.shell: |
+    set -euo pipefail
+    openssl req -new -x509 -days 3650 -nodes \
+      -out "{{ patroni_ssl_cert_file }}" \
+      -keyout "{{ patroni_ssl_key_file }}" \
+      -subj "/CN={{ ansible_host }}/O=Patroni"
+  args:
+    executable: /bin/bash
+    creates: "{{ patroni_ssl_key_file }}"
+
+# Run unconditionally so a partial previous deploy (key written, chown skipped)
+# does not leave the key unreadable by the postgres user.
+- name: Ensure SSL certificate files have correct ownership and permissions
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: postgres
+    group: postgres
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ patroni_ssl_cert_file }}", mode: "0644" }
+    - { path: "{{ patroni_ssl_key_file }}", mode: "0600" }
+
+- name: Check whether PostgreSQL data reset already ran for this job
+  ansible.builtin.stat:
+    path: "{{ erawan_pg_reset_marker }}"
+  register: erawan_pg_reset_marker_stat
+
+- name: Reset PostgreSQL data directory once per deployment job
+  ansible.builtin.shell: |
+    set -euo pipefail
+    mkdir -p "{{ erawan_pg_data_directory }}"
+    find "{{ erawan_pg_data_directory }}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+    chown -R postgres:postgres "{{ erawan_pg_data_directory }}"
+    chmod 700 "{{ erawan_pg_data_directory }}"
+    install -o postgres -g postgres -m 0600 /dev/null "{{ erawan_pg_reset_marker }}"
+  args:
+    executable: /bin/bash
+  when: not erawan_pg_reset_marker_stat.stat.exists
+
+- name: Write Patroni configuration
+  ansible.builtin.template:
+    src: patroni.yml.j2
+    dest: "{{ patroni_config_path }}"
+    owner: postgres
+    group: postgres
+    mode: "0600"
+  vars:
+    patroni_scope: "{{ cluster_name }}"

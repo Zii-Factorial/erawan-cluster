@@ -6,86 +6,18 @@
   hosts: all
   gather_facts: false
   become: true
-  tasks:
-    - name: Stop and disable mysqlrouter service
-      ansible.builtin.systemd:
-        name: "{{ router_service_name }}"
-        state: stopped
-        enabled: false
-      failed_when: false
-      tags: ["rollback"]
-
-    - name: Remove mysqlrouter systemd service file
-      ansible.builtin.file:
-        path: "/etc/systemd/system/{{ router_service_name }}.service"
-        state: absent
-      notify: reload systemd
-      tags: ["rollback"]
-
-    - name: Remove mysqlrouter config directory
-      ansible.builtin.file:
-        path: "/etc/mysqlrouter/{{ cluster_name }}"
-        state: absent
-      tags: ["rollback"]
-
-  handlers:
-    - name: reload systemd
-      ansible.builtin.systemd:
-        daemon_reload: true
+  roles:
+    - rollback
 
 # ---------------------------------------------------------------------------
-# PLAY 2 — Dissolve InnoDB cluster from primary
+# PLAY 2 — Dissolve InnoDB cluster from primary, then reset GR on all nodes
 # ---------------------------------------------------------------------------
 - name: Dissolve cluster from primary
   hosts: mysql_primary
   gather_facts: false
   become: true
-  tasks:
-    - name: Dissolve InnoDB cluster if exists
-      ansible.builtin.shell: |
-        set -euo pipefail
-        _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
-        trap 'rm -f "$_tmp"' EXIT
-        cat >"$_tmp" <<'PY'
-        import os
-
-        shell.options["useWizards"] = False
-        cluster_name = {{ cluster_name | to_json }}
-
-        last_error = None
-        for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
-          if not os.path.exists(sock):
-            continue
-          try:
-            shell.connect({"user": "root", "scheme": "mysql", "host": "localhost", "socket": sock})
-            break
-          except Exception as exc:
-            last_error = exc
-        else:
-          if last_error is not None:
-            raise last_error
-          raise RuntimeError("unable to find a usable MySQL local socket for root")
-
-        try:
-          dba.get_cluster(cluster_name).dissolve({"force": True})
-          print("cluster dissolved")
-        except Exception as e:
-          msg = str(e).lower()
-          if any(t in msg for t in ("does not exist", "unknown cluster", "standalone instance", "no metadata schema")):
-            print("cluster already absent")
-          else:
-            raise
-        PY
-        timeout {{ mysqlsh_rollback_timeout_seconds | default(180) | int }} \
-          mysqlsh --no-wizard --py --file "$_tmp"
-      args:
-        executable: /bin/bash
-      register: rollback_cluster
-      retries: "{{ rollback_dissolve_retries | default(3) | int }}"
-      delay: "{{ rollback_dissolve_retry_delay_seconds | default(15) | int }}"
-      until: rollback_cluster.rc == 0
-      changed_when: "'cluster dissolved' in rollback_cluster.stdout"
-      tags: ["rollback"]
+  roles:
+    - dissolve_cluster
 
 # ---------------------------------------------------------------------------
 # PLAY 3 — Reset GR state on every node so they stop trying to rejoin
@@ -96,67 +28,5 @@
   hosts: all
   gather_facts: false
   become: true
-  tasks:
-    - name: Stop GR and disable auto-start on node
-      ansible.builtin.shell: |
-        set -euo pipefail
-        _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
-        trap 'rm -f "$_tmp"' EXIT
-        cat >"$_tmp" <<'PY'
-        import os
-
-        shell.options["useWizards"] = False
-
-        last_error = None
-        for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
-          if not os.path.exists(sock):
-            continue
-          try:
-            shell.connect({"user": "root", "scheme": "mysql", "host": "localhost", "socket": sock})
-            break
-          except Exception as exc:
-            last_error = exc
-        else:
-          if last_error is not None:
-            raise last_error
-          raise RuntimeError("unable to find a usable MySQL local socket for root")
-
-        session = shell.get_session()
-
-        ignored = (
-          "group replication is not running",
-          "not configured properly to be an active member of the group",
-          "plugin group_replication is not loaded",
-          "unknown system variable",
-          "read only variable",
-          "doesn't exist",
-        )
-
-        def run_relaxed(stmt):
-          try:
-            session.run_sql(stmt)
-          except Exception as e:
-            if any(t in str(e).lower() for t in ignored):
-              return
-            raise
-
-        run_relaxed("STOP GROUP_REPLICATION")
-        run_relaxed("SET GLOBAL super_read_only = OFF")
-        run_relaxed("SET GLOBAL read_only = OFF")
-        run_relaxed("SET GLOBAL group_replication_start_on_boot = OFF")
-        run_relaxed("SET PERSIST group_replication_start_on_boot = OFF")
-        run_relaxed("RESET PERSIST IF EXISTS group_replication_group_seeds")
-        run_relaxed("RESET PERSIST IF EXISTS group_replication_local_address")
-        print("GR state reset")
-        PY
-        timeout {{ mysqlsh_rollback_timeout_seconds | default(180) | int }} \
-          mysqlsh --no-wizard --py --file "$_tmp"
-      args:
-        executable: /bin/bash
-      register: gr_reset
-      retries: "{{ rollback_gr_reset_retries | default(3) | int }}"
-      delay: "{{ rollback_gr_reset_retry_delay_seconds | default(10) | int }}"
-      until: gr_reset.rc == 0
-      changed_when: false
-      failed_when: gr_reset.rc != 0
-      tags: ["rollback"]
+  roles:
+    - reset_gr_state

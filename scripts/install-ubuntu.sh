@@ -73,27 +73,60 @@ if [[ -z "${CLUSTER_SRC:-}" ]]; then
 fi
 
 required_cluster_files=(
+  "requirements.yml"
   "mysql/playbooks/deploy.yml"
   "mysql/playbooks/rollback.yml"
-  "mysql/playbooks/tasks/01_preflight.yml"
-  "mysql/playbooks/tasks/02_configure_instances.yml"
-  "mysql/playbooks/tasks/03_create_cluster.yml"
-  "mysql/playbooks/tasks/04_add_instances.yml"
-  "mysql/playbooks/tasks/05_enable_auto_rejoin.yml"
-  "mysql/playbooks/tasks/06_verify_cluster.yml"
-  "mysql/playbooks/tasks/07_init_app_db.yml"
-  "mysql/playbooks/tasks/08_boot_recovery.yml"
-  "mysql/playbooks/tasks/09_bootstrap_router.yml"
+  "mysql/playbooks/group_vars/all.yml"
+  "mysql/playbooks/roles/preflight/tasks/main.yml"
+  "mysql/playbooks/roles/configure_instances/tasks/main.yml"
+  "mysql/playbooks/roles/configure_instances/defaults/main.yml"
+  "mysql/playbooks/roles/configure_instances/handlers/main.yml"
+  "mysql/playbooks/roles/configure_instances/templates/innodb_cluster.cnf.j2"
+  "mysql/playbooks/roles/create_cluster/tasks/main.yml"
+  "mysql/playbooks/roles/create_cluster/defaults/main.yml"
+  "mysql/playbooks/roles/add_instances/tasks/main.yml"
+  "mysql/playbooks/roles/add_instances/defaults/main.yml"
+  "mysql/playbooks/roles/auto_rejoin/tasks/main.yml"
+  "mysql/playbooks/roles/auto_rejoin/defaults/main.yml"
+  "mysql/playbooks/roles/auto_rejoin/templates/gr_watchdog.sh.j2"
+  "mysql/playbooks/roles/auto_rejoin/templates/gr_watchdog.service.j2"
+  "mysql/playbooks/roles/auto_rejoin/templates/gr_watchdog.timer.j2"
+  "mysql/playbooks/roles/verify_cluster/tasks/main.yml"
+  "mysql/playbooks/roles/verify_cluster/defaults/main.yml"
+  "mysql/playbooks/roles/init_app_db/tasks/main.yml"
+  "mysql/playbooks/roles/init_app_db/defaults/main.yml"
+  "mysql/playbooks/roles/boot_recovery/tasks/main.yml"
+  "mysql/playbooks/roles/boot_recovery/defaults/main.yml"
+  "mysql/playbooks/roles/boot_recovery/templates/mysql_boot_recovery.sh.j2"
+  "mysql/playbooks/roles/boot_recovery/templates/mysql_boot_recovery.service.j2"
+  "mysql/playbooks/roles/bootstrap_router/tasks/main.yml"
+  "mysql/playbooks/roles/bootstrap_router/defaults/main.yml"
+  "mysql/playbooks/roles/bootstrap_router/templates/mysqlrouter.service.j2"
+  "mysql/playbooks/roles/dissolve_cluster/tasks/main.yml"
+  "mysql/playbooks/roles/dissolve_cluster/defaults/main.yml"
+  "mysql/playbooks/roles/reset_gr_state/tasks/main.yml"
+  "mysql/playbooks/roles/reset_gr_state/defaults/main.yml"
+  "mysql/playbooks/roles/rollback/tasks/main.yml"
+  "mysql/playbooks/roles/rollback/handlers/main.yml"
   "pgsql/playbooks/deploy.yml"
-  "pgsql/playbooks/tasks/01_preflight.yml"
-  "pgsql/playbooks/tasks/02_base_config.yml"
-  "pgsql/playbooks/tasks/03_primary.yml"
-  "pgsql/playbooks/tasks/04_standby.yml"
-  "pgsql/playbooks/tasks/05_cluster_bootstrap.yml"
-  "pgsql/playbooks/tasks/06_verify_cluster.yml"
-  "pgsql/playbooks/tasks/07_init_app_db.yml"
-  "pgsql/playbooks/tasks/configure_pg_node.yml"
-  "pgsql/playbooks/tasks/runtime_facts.yml"
+  "pgsql/playbooks/group_vars/all.yml"
+  "pgsql/playbooks/roles/preflight/tasks/main.yml"
+  "pgsql/playbooks/roles/runtime_facts/tasks/main.yml"
+  "pgsql/playbooks/roles/base_config/tasks/main.yml"
+  "pgsql/playbooks/roles/base_config/defaults/main.yml"
+  "pgsql/playbooks/roles/base_config/handlers/main.yml"
+  "pgsql/playbooks/roles/base_config/templates/etcd.conf.j2"
+  "pgsql/playbooks/roles/base_config/templates/etcd.service.j2"
+  "pgsql/playbooks/roles/base_config/templates/patroni.service.j2"
+  "pgsql/playbooks/roles/configure_node/tasks/main.yml"
+  "pgsql/playbooks/roles/configure_node/defaults/main.yml"
+  "pgsql/playbooks/roles/configure_node/templates/patroni.yml.j2"
+  "pgsql/playbooks/roles/cluster_bootstrap/tasks/main.yml"
+  "pgsql/playbooks/roles/cluster_bootstrap/defaults/main.yml"
+  "pgsql/playbooks/roles/verify_cluster/tasks/main.yml"
+  "pgsql/playbooks/roles/verify_cluster/defaults/main.yml"
+  "pgsql/playbooks/roles/init_app_db/tasks/main.yml"
+  "pgsql/playbooks/roles/init_app_db/defaults/main.yml"
 )
 
 missing_cluster_files=()
@@ -193,6 +226,13 @@ create_user_and_directories() {
 install_binary() {
   log_step "Installing binary"
   install -m 0755 "${BIN_SRC}" "${APP_BIN}"
+}
+
+install_ansible_collections() {
+  local req="${CLUSTER_INSTALL_DIR}/requirements.yml"
+  [[ -f "${req}" ]] || return 0
+  log_step "Installing Ansible Galaxy collections"
+  ansible-galaxy collection install -r "${req}"
 }
 
 install_cluster_tree() {
@@ -350,6 +390,7 @@ main() {
   create_user_and_directories
   install_binary
   install_cluster_tree
+  install_ansible_collections
   write_env_file
   configure_haproxy
   write_sudoers_rule

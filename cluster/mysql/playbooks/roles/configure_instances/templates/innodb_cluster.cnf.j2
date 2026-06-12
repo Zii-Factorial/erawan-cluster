@@ -1,0 +1,21 @@
+[mysqld]
+bind-address = 0.0.0.0
+report_host = {{ erawan_node_ip }}
+mysqlx = OFF
+loose-group_replication_start_on_boot = OFF
+loose-group_replication_autorejoin_tries = {{ mysql_gr_autorejoin_tries }}
+loose-group_replication_member_expel_timeout = {{ mysql_gr_member_expel_timeout }}
+loose-group_replication_unreachable_majority_timeout = {{ mysql_gr_unreachable_majority_timeout }}
+loose-group_replication_exit_state_action = {{ mysql_gr_exit_state_action }}
+loose-group_replication_communication_stack = MYSQL
+loose-group_replication_consistency = BEFORE_ON_PRIMARY_FAILOVER
+relay_log_recovery = ON
+server_id = {{ erawan_server_id }}
+enforce_gtid_consistency = ON
+gtid_mode = ON
+binlog_transaction_dependency_tracking = WRITESET
+log_bin = mysql-bin
+binlog_format = ROW
+ssl_ca = /var/lib/mysql/ca.pem
+ssl_cert = /var/lib/mysql/server-cert.pem
+ssl_key = /var/lib/mysql/server-key.pem

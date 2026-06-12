@@ -109,20 +109,21 @@ func (r *Runner) run(ctx context.Context, cfg runConfig, playbook string) (resul
 		stepTimeout = 900
 	}
 	extraVars := map[string]any{
-		"cluster_name":           cfg.spec.ClusterName,
-		"cluster_admin_username": cfg.spec.AdminUsername,
-		"cluster_admin_password": cfg.secret.AdminPassword,
-		"primary_ip":             cfg.spec.PrimaryIP,
-		"standby_ips":            cfg.spec.StandbyIPs,
-		"new_user":               cfg.spec.NewUser,
-		"new_user_password":      cfg.secret.NewUserPassword,
-		"new_user_ssl_required":  cfg.spec.NewUserSSLRequired,
-		"new_db":                 cfg.spec.NewDB,
-		"mysql_port":                  cfg.spec.MySQLPort,
+		"cluster_name":               cfg.spec.ClusterName,
+		"cluster_admin_username":     cfg.spec.AdminUsername,
+		"cluster_admin_password":     cfg.secret.AdminPassword,
+		"primary_ip":                 cfg.spec.PrimaryIP,
+		"standby_ips":                cfg.spec.StandbyIPs,
+		"new_user":                   cfg.spec.NewUser,
+		"new_user_password":          cfg.secret.NewUserPassword,
+		"new_user_ssl_required":      cfg.spec.NewUserSSLRequired,
+		"new_db":                     cfg.spec.NewDB,
+		"mysql_port":                 cfg.spec.MySQLPort,
 		"erawan_mysql_major_version": cfg.spec.MySQLVersion,
-		"bootstrap_router":            cfg.spec.BootstrapRouter,
-		"router_service_name":    "mysqlrouter-" + cfg.spec.ClusterName,
-		"step_timeout_seconds":   stepTimeout,
+		"assume_prepared":            cfg.spec.AssumePrepared,
+		"bootstrap_router":           cfg.spec.BootstrapRouter,
+		"router_service_name":        "mysqlrouter-" + cfg.spec.ClusterName,
+		"step_timeout_seconds":       stepTimeout,
 	}
 
 	sanitized, err := json.Marshal(extraVars)

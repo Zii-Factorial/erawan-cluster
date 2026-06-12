@@ -1,0 +1,6 @@
+---
+new_user: ""
+new_db: ""
+new_user_password: ""
+new_user_ssl_required: false
+mysqlsh_init_app_db_timeout_seconds: 180

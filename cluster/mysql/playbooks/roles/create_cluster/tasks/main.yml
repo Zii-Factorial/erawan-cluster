@@ -1,0 +1,156 @@
+---
+- name: Derive node IP (fallback when configure_instances step was skipped)
+  ansible.builtin.set_fact:
+    erawan_node_ip: "{{ ansible_host }}"
+  when: erawan_node_ip is not defined
+  tags: ["create_cluster"]
+
+- name: Wait for MySQL to accept connections on primary IP before cluster creation
+  ansible.builtin.wait_for:
+    host: "{{ erawan_node_ip }}"
+    port: "{{ mysql_port }}"
+    state: started
+    delay: 2
+    timeout: "{{ mysql_start_timeout_seconds }}"
+  tags: ["create_cluster"]
+
+- name: Ensure cluster exists
+  no_log: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    _cleanup=$(mktemp /tmp/erawan-cleanup-XXXXXX.py)
+    _cluster=$(mktemp /tmp/erawan-cluster-XXXXXX.py)
+    trap 'rm -f "$_cleanup" "$_cluster"' EXIT
+
+    cat >"$_cleanup" <<'PY'
+    import os
+
+    shell.options["useWizards"] = False
+    assume_prepared = {{ (assume_prepared | bool) | ternary('True', 'False') }}
+
+    last_error = None
+    for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
+      if not os.path.exists(sock):
+        continue
+      try:
+        shell.connect({"user": "root", "scheme": "mysql", "host": "localhost", "socket": sock})
+        break
+      except Exception as exc:
+        last_error = exc
+    else:
+      if last_error is not None:
+        raise last_error
+      raise RuntimeError("unable to find a usable MySQL local socket for root")
+
+    session = shell.get_session()
+
+    ignored = (
+      "unknown system variable",
+      "read only variable",
+      "group replication is not running",
+      "not configured properly to be an active member of the group",
+      "mysql error (3092)",
+      "plugin group_replication is not loaded",
+      "doesn't exist",
+    )
+
+    def run_relaxed(stmt):
+      try:
+        session.run_sql(stmt)
+      except Exception as e:
+        if any(t in str(e).lower() for t in ignored):
+          return
+        raise
+
+    run_relaxed("STOP GROUP_REPLICATION")
+    run_relaxed("SET GLOBAL group_replication_bootstrap_group = OFF")
+    run_relaxed("SET GLOBAL group_replication_start_on_boot = OFF")
+    run_relaxed("SET PERSIST group_replication_start_on_boot = OFF")
+    run_relaxed("RESET PERSIST IF EXISTS group_replication_group_seeds")
+    run_relaxed("RESET PERSIST IF EXISTS group_replication_local_address")
+    run_relaxed("SET PERSIST group_replication_communication_stack = 'MYSQL'")
+    run_relaxed("SET GLOBAL super_read_only = OFF")
+    run_relaxed("SET GLOBAL read_only = OFF")
+
+    if not assume_prepared:
+      try:
+        dba.drop_metadata_schema({"force": True})
+        print("metadata dropped")
+      except Exception as e:
+        msg = str(e).lower()
+        if not any(t in msg for t in ("does not exist", "standalone instance", "no metadata schema")):
+          raise
+    PY
+
+    timeout {{ mysqlsh_create_cluster_timeout_seconds }} \
+      mysqlsh --no-wizard --py --file "$_cleanup"
+
+    cat >"$_cluster" <<'PY'
+    shell.options["useWizards"] = False
+    shell.options["dba.restartWaitTimeout"] = {{ step_timeout_seconds | int }}
+    cluster_name    = {{ cluster_name | to_json }}
+    primary_host    = {{ erawan_node_ip | to_json }}
+    mysql_port      = {{ mysql_port }}
+    admin_user      = {{ cluster_admin_username | to_json }}
+    admin_pass      = {{ cluster_admin_password | to_json }}
+    assume_prepared = {{ (assume_prepared | bool) | ternary('True', 'False') }}
+
+    import time as _time
+
+    for _attempt in range(20):
+      try:
+        shell.connect(f"mysql://{admin_user}@{primary_host}:{mysql_port}", admin_pass)
+        break
+      except Exception as _e:
+        _msg = str(_e).lower()
+        _transient = (
+          "2013" in _msg or
+          "lost connection" in _msg or
+          "system error: 110" in _msg or
+          "initial communication packet" in _msg
+        )
+        if _attempt < 19 and _transient:
+          _time.sleep(3)
+          continue
+        raise
+
+    _create_opts = {"multiPrimary": False, "communicationStack": "MYSQL"}
+
+    try:
+      dba.get_cluster(cluster_name)
+      print("cluster already exists")
+    except Exception as e:
+      msg = str(e).lower()
+      _is_stale_metadata  = "metadata exists" in msg and "belongs to that metadata" in msg
+      _is_standalone      = "standalone instance" in msg
+      _is_no_metadata     = "no metadata schema" in msg or "doesn't exist" in msg
+      _is_cluster_missing = _is_standalone or _is_no_metadata
+
+      if _is_stale_metadata:
+        if assume_prepared:
+          dba.reboot_cluster_from_complete_outage(cluster_name, {"force": True})
+          print("cluster rebooted from complete outage")
+        else:
+          dba.drop_metadata_schema({"force": True})
+          dba.create_cluster(cluster_name, _create_opts)
+          print("cluster created")
+      elif _is_cluster_missing:
+        if assume_prepared:
+          dba.reboot_cluster_from_complete_outage(cluster_name, {"force": True})
+          print("cluster rebooted from complete outage")
+        else:
+          dba.create_cluster(cluster_name, _create_opts)
+          print("cluster created")
+      else:
+        raise RuntimeError(f"get_cluster failed with unexpected error: {e}")
+    PY
+    timeout {{ mysqlsh_create_cluster_timeout_seconds }} \
+      mysqlsh --no-wizard --py --file "$_cluster"
+  args:
+    executable: /bin/bash
+  register: create_cluster
+  retries: "{{ create_cluster_retries }}"
+  delay: "{{ create_cluster_retry_delay_seconds }}"
+  until: create_cluster.rc == 0
+  changed_when: "'cluster created' in create_cluster.stdout or 'cluster rebooted from complete outage' in create_cluster.stdout"
+  tags: ["create_cluster"]

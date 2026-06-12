@@ -1,0 +1,28 @@
+---
+# ---------------------------------------------------------------------------
+# Router cleanup — runs on all nodes
+# ---------------------------------------------------------------------------
+- name: Stop and disable mysqlrouter service
+  ansible.builtin.systemd:
+    name: "{{ router_service_name }}"
+    state: stopped
+    enabled: false
+  failed_when: false
+  tags: ["rollback"]
+
+- name: Remove mysqlrouter systemd service file
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ router_service_name }}.service"
+    state: absent
+  notify: reload systemd
+  tags: ["rollback"]
+
+- name: Remove mysqlrouter config directory
+  ansible.builtin.file:
+    path: "/etc/mysqlrouter/{{ cluster_name }}"
+    state: absent
+  tags: ["rollback"]
+
+- name: Flush handlers to reload systemd after router removal
+  ansible.builtin.meta: flush_handlers
+  tags: ["rollback"]

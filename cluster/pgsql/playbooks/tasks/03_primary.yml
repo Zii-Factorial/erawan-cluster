@@ -1,7 +1,0 @@
-- name: Rediscover PostgreSQL runtime facts for this step
-  ansible.builtin.import_tasks: runtime_facts.yml
-  tags: ["primary_config"]
-
-- name: Configure PostgreSQL primary node
-  ansible.builtin.import_tasks: configure_pg_node.yml
-  tags: ["primary_config"]

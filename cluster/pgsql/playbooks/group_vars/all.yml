@@ -1,0 +1,27 @@
+---
+# ---------------------------------------------------------------------------
+# Site-wide defaults — override via extra vars (-e) or host_vars as needed.
+# Required vars (cluster_name, primary_ip, postgres_superuser_password,
+# replication_password, patroni_admin_password, deployment_job_id) must be
+# provided at runtime.
+# ---------------------------------------------------------------------------
+
+# PostgreSQL
+# postgres_port: 5432
+# postgres_superuser: postgres
+# postgresql_cluster_name: main
+
+# Patroni
+# patroni_rest_port: 8008
+# patroni_namespace: /db/
+# patroni_admin_user: admin
+
+# etcd
+# etcd_client_port: 2379
+# etcd_peer_port: 2380
+
+# App database (optional)
+# new_user: ""
+# new_db: ""
+# new_user_password: ""
+# new_user_ssl_required: true

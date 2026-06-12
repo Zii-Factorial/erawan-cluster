@@ -1,56 +1,78 @@
 ---
+# ---------------------------------------------------------------------------
+# PLAY 1 — Preflight checks
+# ---------------------------------------------------------------------------
 - name: PostgreSQL cluster preflight
   hosts: all
   gather_facts: false
   become: true
-  tasks:
-    - name: Include preflight tasks
-      ansible.builtin.import_tasks: tasks/01_preflight.yml
+  any_errors_fatal: true
+  roles:
+    - preflight
 
+# ---------------------------------------------------------------------------
+# PLAY 2 — Base configuration (etcd + Patroni units, directories)
+# ---------------------------------------------------------------------------
 - name: PostgreSQL cluster base configuration
   hosts: all
   gather_facts: false
   become: true
-  tasks:
-    - name: Include base configuration tasks
-      ansible.builtin.import_tasks: tasks/02_base_config.yml
+  any_errors_fatal: true
+  roles:
+    - base_config
 
-- name: PostgreSQL primary configuration
+# ---------------------------------------------------------------------------
+# PLAY 3 — Write Patroni config on primary
+# ---------------------------------------------------------------------------
+- name: PostgreSQL primary node configuration
   hosts: pgsql_primary
   gather_facts: false
   become: true
-  tasks:
-    - name: Include primary configuration tasks
-      ansible.builtin.import_tasks: tasks/03_primary.yml
+  any_errors_fatal: true
+  roles:
+    - role: configure_node
+      tags: ["primary_config"]
 
-- name: PostgreSQL standby configuration
+# ---------------------------------------------------------------------------
+# PLAY 4 — Write Patroni config on standbys
+# ---------------------------------------------------------------------------
+- name: PostgreSQL standby node configuration
   hosts: pgsql_standby
   gather_facts: false
   become: true
-  tasks:
-    - name: Include standby configuration tasks
-      ansible.builtin.import_tasks: tasks/04_standby.yml
+  any_errors_fatal: true
+  roles:
+    - role: configure_node
+      tags: ["standby_config"]
 
+# ---------------------------------------------------------------------------
+# PLAY 5 — Bootstrap cluster (etcd + Patroni startup, leader election)
+# ---------------------------------------------------------------------------
 - name: PostgreSQL cluster bootstrap
   hosts: all
   gather_facts: false
   become: true
-  tasks:
-    - name: Include cluster bootstrap tasks
-      ansible.builtin.import_tasks: tasks/05_cluster_bootstrap.yml
+  any_errors_fatal: true
+  roles:
+    - cluster_bootstrap
 
+# ---------------------------------------------------------------------------
+# PLAY 6 — Verify cluster health
+# ---------------------------------------------------------------------------
 - name: PostgreSQL cluster final verification
   hosts: all
   gather_facts: false
   become: true
-  tasks:
-    - name: Include verification tasks
-      ansible.builtin.import_tasks: tasks/06_verify_cluster.yml
+  any_errors_fatal: true
+  roles:
+    - verify_cluster
 
+# ---------------------------------------------------------------------------
+# PLAY 7 — Initialize application database (optional)
+# ---------------------------------------------------------------------------
 - name: PostgreSQL application database initialization
   hosts: pgsql_primary
   gather_facts: false
   become: true
-  tasks:
-    - name: Include app database initialization tasks
-      ansible.builtin.import_tasks: tasks/07_init_app_db.yml
+  roles:
+    - init_app_db

@@ -1,0 +1,7 @@
+---
+assume_prepared: false
+step_timeout_seconds: 900
+mysqlsh_create_cluster_timeout_seconds: 900
+create_cluster_retries: 2
+create_cluster_retry_delay_seconds: 20
+mysql_start_timeout_seconds: 300

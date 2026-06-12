@@ -1,0 +1,12 @@
+---
+assume_prepared: false
+
+mysql_gr_autorejoin_tries: 10
+mysql_gr_member_expel_timeout: 5
+mysql_gr_unreachable_majority_timeout: 60
+mysql_gr_exit_state_action: READ_ONLY
+
+mysql_start_timeout_seconds: 300
+mysqlsh_reset_gr_timeout_seconds: 180
+mysqlsh_configure_timeout_seconds: 600
+mysqlsh_normalize_timeout_seconds: 180

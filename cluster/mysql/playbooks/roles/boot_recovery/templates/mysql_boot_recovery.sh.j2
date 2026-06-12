@@ -1,0 +1,71 @@
+#!/bin/bash
+# Auto-reboots InnoDB Cluster after a complete outage (all nodes down together).
+# Installed on every node. Staggered delay (30 / 60 / 90 s) prevents all nodes
+# racing to bootstrap simultaneously. The first node to run wins; others see GR
+# already ONLINE and exit. The existing GR watchdog rejoins remaining secondaries.
+set -uo pipefail
+
+CONF=/etc/erawan-cluster/mysql-recovery.json
+[ -f "$CONF" ] || { logger -t erawan-boot-recovery "no config found, skipping"; exit 0; }
+
+# Wait up to 120 s for local MySQL to accept connections
+_ready=0
+for i in $(seq 1 60); do
+  if mysql -uroot -e "SELECT 1" >/dev/null 2>&1; then _ready=1; break; fi
+  sleep 2
+done
+if [[ "$_ready" -eq 0 ]]; then
+  logger -t erawan-boot-recovery "MySQL not ready after 120s, skipping"
+  exit 0
+fi
+
+logger -t erawan-boot-recovery "sleeping ${BOOT_RECOVERY_DELAY_SECONDS:-30}s before recovery check"
+sleep "${BOOT_RECOVERY_DELAY_SECONDS:-30}"
+
+# Exit early if ANY cluster member is already ONLINE (another node recovered first)
+ONLINE_COUNT=$(mysql -uroot -Nse \
+  "SELECT COUNT(*) FROM performance_schema.replication_group_members \
+   WHERE member_state = 'ONLINE'" 2>/dev/null || echo "0")
+if [[ "${ONLINE_COUNT}" -gt 0 ]]; then
+  logger -t erawan-boot-recovery "cluster already has ${ONLINE_COUNT} ONLINE member(s), skipping"
+  exit 0
+fi
+
+logger -t erawan-boot-recovery "no ONLINE members found — attempting reboot_cluster_from_complete_outage"
+
+_tmp=""
+trap 'rm -f "$_tmp"' EXIT
+_tmp=$(mktemp /tmp/erawan-boot-XXXXXX.py)
+cat >"$_tmp" <<'PY'
+import json
+shell.options["useWizards"] = False
+with open("/etc/erawan-cluster/mysql-recovery.json") as f:
+    cfg = json.load(f)
+shell.connect({
+    "user":     cfg["admin_user"],
+    "password": cfg["admin_pass"],
+    "host":     "127.0.0.1",
+    "port":     cfg["mysql_port"],
+    "scheme":   "mysql",
+})
+try:
+    # Try without force first — mysqlsh picks the node with the highest GTID
+    # as primary, preserving the most recent transactions.
+    dba.reboot_cluster_from_complete_outage(cfg["cluster_name"])
+    print("cluster rebooted (quorum-safe)")
+except Exception as first_err:
+    msg = str(first_err).lower()
+    if "already active" in msg or "online" in msg:
+        print(f"cluster already active: {first_err}")
+    else:
+        # Fallback: force reboot from this node (e.g. not all members reachable yet).
+        # The GR watchdog will bring remaining secondaries back online.
+        dba.reboot_cluster_from_complete_outage(cfg["cluster_name"], {"force": True})
+        print("cluster rebooted (forced)")
+PY
+
+if mysqlsh --no-wizard --py --file "$_tmp"; then
+  logger -t erawan-boot-recovery "boot recovery succeeded"
+else
+  logger -t erawan-boot-recovery "boot recovery failed — GR watchdog will retry"
+fi

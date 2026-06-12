@@ -1,0 +1,260 @@
+---
+- name: Gather minimal network facts
+  ansible.builtin.setup:
+    gather_subset:
+      - network
+  tags: ["configure_instances", "configure_mysql"]
+
+- name: Derive node IP used for MySQL cluster identity
+  ansible.builtin.set_fact:
+    erawan_node_ip: >-
+      {{
+        ansible_host
+        if (ansible_host | default('')) in (ansible_all_ipv4_addresses | default([]))
+        else (ansible_default_ipv4.address | default(ansible_host))
+      }}
+  tags: ["configure_instances", "configure_mysql"]
+
+- name: Set deployment mode facts
+  ansible.builtin.set_fact:
+    _assume_prepared: "{{ assume_prepared | bool }}"
+    erawan_server_id: "{{ (groups['all'] | list).index(inventory_hostname) + 1 }}"
+  tags: ["configure_instances", "configure_mysql"]
+
+- name: Check UFW availability and status
+  ansible.builtin.command:
+    argv: [ufw, status]
+  register: _ufw_status
+  changed_when: false
+  failed_when: false
+  tags: ["configure_instances", "configure_mysql"]
+
+- name: Allow MySQL port through UFW for cluster communication
+  community.general.ufw:
+    rule: allow
+    port: "{{ mysql_port | string }}"
+    proto: tcp
+    comment: MySQL InnoDB Cluster
+  when: "_ufw_status.rc == 0 and 'Status: active' in _ufw_status.stdout"
+  tags: ["configure_instances", "configure_mysql"]
+
+- name: Ensure minimal MySQL config for InnoDB Cluster
+  ansible.builtin.template:
+    src: innodb_cluster.cnf.j2
+    dest: /etc/mysql/mysql.conf.d/99-erawan-cluster.cnf
+    mode: "0644"
+  notify: restart mysql on config change
+  tags: ["configure_instances", "configure_mysql"]
+
+- name: Flush handlers to apply MySQL config restart before continuing
+  ansible.builtin.meta: flush_handlers
+  tags: ["configure_instances", "configure_mysql"]
+
+- name: Reset stale GR state
+  ansible.builtin.shell: |
+    set -euo pipefail
+    _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
+    trap 'rm -f "$_tmp"' EXIT
+    cat >"$_tmp" <<'PY'
+    import os
+
+    shell.options["useWizards"] = False
+
+    def connect_local_root():
+      last_error = None
+      for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
+        if not os.path.exists(sock):
+          continue
+        try:
+          shell.connect({"user": "root", "scheme": "mysql", "host": "localhost", "socket": sock})
+          return shell.get_session()
+        except Exception as exc:
+          last_error = exc
+      if last_error is not None:
+        raise last_error
+      raise RuntimeError("unable to find a usable MySQL local socket for root")
+
+    session = connect_local_root()
+
+    ignored = (
+      "unknown system variable",
+      "read only variable",
+      "group replication is not running",
+      "not configured properly to be an active member of the group",
+      "this member has more than one applier channel",
+      "plugin group_replication is not loaded",
+      "option prevents statement",
+      "doesn't exist",
+    )
+
+    for stmt in [
+      "STOP GROUP_REPLICATION",
+      "SET GLOBAL super_read_only = OFF",
+      "SET GLOBAL read_only = OFF",
+      "SET GLOBAL group_replication_bootstrap_group = OFF",
+      "SET GLOBAL group_replication_start_on_boot = OFF",
+      "SET PERSIST group_replication_start_on_boot = OFF",
+      "RESET PERSIST IF EXISTS group_replication_group_seeds",
+      "RESET PERSIST IF EXISTS group_replication_local_address",
+      "SET PERSIST group_replication_communication_stack = 'MYSQL'",
+    ]:
+      try:
+        session.run_sql(stmt)
+      except Exception as e:
+        if any(t in str(e).lower() for t in ignored):
+          continue
+        raise
+
+    try:
+      dba.drop_metadata_schema({"force": True})
+    except Exception as e:
+      msg = str(e).lower()
+      if not any(t in msg for t in ("does not exist", "standalone instance", "no metadata schema")):
+        raise
+    PY
+    timeout {{ mysqlsh_reset_gr_timeout_seconds }} \
+      mysqlsh --no-wizard --py --file "$_tmp"
+  args:
+    executable: /bin/bash
+  changed_when: true
+  when: not _assume_prepared
+  tags: ["configure_instances", "configure_mysql", "configure_instances_mysqlsh"]
+
+- name: Remove auto.cnf to force server_uuid regeneration
+  ansible.builtin.file:
+    path: /var/lib/mysql/auto.cnf
+    state: absent
+  when: not _assume_prepared
+  tags: ["configure_instances", "configure_mysql"]
+
+- name: Restart MySQL after stale GR reset
+  ansible.builtin.systemd:
+    name: mysql
+    state: restarted
+  when: not _assume_prepared
+  tags: ["configure_instances", "configure_mysql"]
+
+- name: Wait for MySQL after stale GR reset restart
+  ansible.builtin.wait_for:
+    host: "{{ erawan_node_ip }}"
+    port: "{{ mysql_port }}"
+    state: started
+    delay: 5
+    timeout: "{{ mysql_start_timeout_seconds }}"
+  when: not _assume_prepared
+  tags: ["configure_instances", "configure_mysql"]
+
+- name: Configure instance for InnoDB Cluster
+  no_log: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
+    trap 'rm -f "$_tmp"' EXIT
+    cat >"$_tmp" <<'PY'
+    import os
+
+    shell.options["useWizards"] = False
+
+    def connect_local_root():
+      last_error = None
+      for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
+        if not os.path.exists(sock):
+          continue
+        conn = {"user": "root", "scheme": "mysql", "host": "localhost", "socket": sock}
+        try:
+          shell.connect(conn)
+          return conn
+        except Exception as exc:
+          last_error = exc
+      if last_error is not None:
+        raise last_error
+      raise RuntimeError("unable to find a usable MySQL local socket for root")
+
+    instance = connect_local_root()
+    options = {
+      "clusterAdmin": {{ cluster_admin_username | to_json }},
+      "clusterAdminPassword": {{ cluster_admin_password | to_json }},
+      "restart": True,
+      "interactive": False,
+    }
+    try:
+      dba.configure_instance(instance, options)
+    except Exception as e:
+      msg = str(e).lower()
+      if "belongs to an innodb cluster" in msg and "clusteradmin option is not allowed" in msg:
+        print("instance already belongs to a cluster; skipping configure_instance")
+      elif "clusteradminpassword is not allowed for an existing account" in msg or "account already exists" in msg:
+        options.pop("clusterAdminPassword", None)
+        dba.configure_instance(instance, options)
+      else:
+        raise
+    PY
+    timeout {{ mysqlsh_configure_timeout_seconds }} \
+      mysqlsh --no-wizard --py --file "$_tmp"
+  args:
+    executable: /bin/bash
+  register: configure_instance_result
+  changed_when: "'skipping configure_instance' not in configure_instance_result.stdout"
+  tags: ["configure_instances", "configure_instances_mysqlsh"]
+
+- name: Normalize cluster admin password and grants
+  no_log: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
+    trap 'rm -f "$_tmp"' EXIT
+    cat >"$_tmp" <<'PY'
+    import os
+
+    shell.options["useWizards"] = False
+
+    def connect_local_root():
+      last_error = None
+      for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
+        if not os.path.exists(sock):
+          continue
+        try:
+          shell.connect({"user": "root", "scheme": "mysql", "host": "localhost", "socket": sock})
+          return shell.get_session()
+        except Exception as exc:
+          last_error = exc
+      if last_error is not None:
+        raise last_error
+      raise RuntimeError("unable to find a usable MySQL local socket for root")
+
+    session = connect_local_root()
+    admin_user = {{ cluster_admin_username | to_json }}
+    admin_pass = {{ cluster_admin_password | to_json }}
+    eu = admin_user.replace("`", "``")
+
+    row = session.run_sql("SELECT @@GLOBAL.super_read_only, @@GLOBAL.read_only").fetch_one()
+    if row and (int(row[0] or 0) or int(row[1] or 0)):
+      session.run_sql("SET GLOBAL super_read_only = OFF")
+      session.run_sql("SET GLOBAL read_only = OFF")
+
+    session.run_sql(
+      f"CREATE USER IF NOT EXISTS `{eu}`@'%' IDENTIFIED WITH caching_sha2_password BY ?", [admin_pass]
+    )
+    session.run_sql(
+      f"ALTER USER `{eu}`@'%' IDENTIFIED WITH caching_sha2_password BY ?", [admin_pass]
+    )
+    session.run_sql(f"GRANT ALL PRIVILEGES ON *.* TO `{eu}`@'%' WITH GRANT OPTION")
+
+    for row in session.run_sql("SELECT host FROM mysql.user WHERE user = ?", [admin_user]).fetch_all():
+      h = row[0]
+      if h == "%":
+        continue
+      eh = str(h).replace("\\", "\\\\").replace("'", "''")
+      session.run_sql(
+        f"ALTER USER `{eu}`@'{eh}' IDENTIFIED WITH caching_sha2_password BY ?", [admin_pass]
+      )
+      session.run_sql(f"GRANT ALL PRIVILEGES ON *.* TO `{eu}`@'{eh}' WITH GRANT OPTION")
+
+    session.run_sql("FLUSH PRIVILEGES")
+    PY
+    timeout {{ mysqlsh_normalize_timeout_seconds }} \
+      mysqlsh --no-wizard --py --file "$_tmp"
+  args:
+    executable: /bin/bash
+  changed_when: true
+  tags: ["configure_instances", "configure_instances_mysqlsh"]

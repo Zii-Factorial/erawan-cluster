@@ -1,0 +1,54 @@
+---
+- name: Ensure erawan config directory exists
+  ansible.builtin.file:
+    path: /etc/erawan-cluster
+    state: directory
+    mode: "0700"
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['all'] }}"
+  tags: ["boot_recovery"]
+
+- name: Write cluster recovery credentials
+  no_log: true
+  ansible.builtin.copy:
+    dest: /etc/erawan-cluster/mysql-recovery.json
+    mode: "0600"
+    content: |
+      {{ {
+        'cluster_name': cluster_name,
+        'admin_user':   cluster_admin_username,
+        'admin_pass':   cluster_admin_password,
+        'mysql_port':   mysql_port | int
+      } | to_nice_json }}
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['all'] }}"
+  tags: ["boot_recovery"]
+
+- name: Install boot recovery script
+  ansible.builtin.template:
+    src: mysql_boot_recovery.sh.j2
+    dest: /usr/local/bin/erawan-mysql-boot-recovery
+    mode: "0755"
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['all'] }}"
+  tags: ["boot_recovery"]
+
+- name: Install boot recovery systemd service
+  ansible.builtin.template:
+    src: mysql_boot_recovery.service.j2
+    dest: /etc/systemd/system/erawan-mysql-boot-recovery.service
+    mode: "0644"
+  vars:
+    boot_recovery_delay_seconds: "{{ ((groups['all'] | list).index(item) + 1) * (boot_recovery_delay_step_seconds | int) }}"
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['all'] }}"
+  tags: ["boot_recovery"]
+
+- name: Enable boot recovery service on all nodes
+  ansible.builtin.systemd:
+    name: erawan-mysql-boot-recovery.service
+    daemon_reload: true
+    enabled: true
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['all'] }}"
+  tags: ["boot_recovery"]
