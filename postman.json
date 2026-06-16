@@ -946,6 +946,64 @@
           }
         },
         {
+          "name": "Rename User",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"new_username\": \"newname\"\n}"
+            },
+            "description": "Renames a MySQL user. Existing grants are carried over automatically. System users and users with SUPER privilege are refused.\n\n- `username` — current username\n- `new_username` — desired new username, must match ^[a-zA-Z_][a-zA-Z0-9_-]{1,31}$",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/users",
+              "protocol": "http",
+              "host": ["{{API_HOST}}"],
+              "port": "{{API_PORT}}",
+              "path": ["cluster", "mysql", "users"]
+            }
+          }
+        },
+        {
+          "name": "Reset Password",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"password\": \"{{DBMGR_PASSWORD}}\"\n}"
+            },
+            "description": "Resets the password for an existing MySQL user. System users and users with SUPER privilege are refused.\n\n- `username` — target username\n- `password` — new password",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/users/password",
+              "protocol": "http",
+              "host": ["{{API_HOST}}"],
+              "port": "{{API_PORT}}",
+              "path": ["cluster", "mysql", "users", "password"]
+            }
+          }
+        },
+        {
           "name": "Delete User",
           "request": {
             "method": "DELETE",
@@ -1012,6 +1070,35 @@
                 "mysql",
                 "databases"
               ]
+            }
+          }
+        },
+        {
+          "name": "Rename Database",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\",\n  \"new_dbname\": \"newdb\"\n}"
+            },
+            "description": "Renames a MySQL database by creating the new database, moving all tables, re-applying grants, and dropping the old database. System databases are refused.\n\n- `dbname` — current database name\n- `new_dbname` — desired new name, must match ^[a-zA-Z0-9_]{1,64}$",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/databases",
+              "protocol": "http",
+              "host": ["{{API_HOST}}"],
+              "port": "{{API_PORT}}",
+              "path": ["cluster", "mysql", "databases"]
             }
           }
         },
@@ -1092,6 +1179,64 @@
           }
         },
         {
+          "name": "Rename User",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"new_username\": \"newname\"\n}"
+            },
+            "description": "Renames a PostgreSQL role. Existing grants are carried over automatically. Superuser, replication, and built-in pg_* roles are refused.\n\n- `username` — current username\n- `new_username` — desired new username, must match ^[a-zA-Z_][a-zA-Z0-9_-]{1,31}$",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/users",
+              "protocol": "http",
+              "host": ["{{API_HOST}}"],
+              "port": "{{API_PORT}}",
+              "path": ["cluster", "pgsql", "users"]
+            }
+          }
+        },
+        {
+          "name": "Reset Password",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"password\": \"{{DBMGR_PASSWORD}}\"\n}"
+            },
+            "description": "Resets the password for an existing PostgreSQL role. Superuser, replication, and built-in pg_* roles are refused.\n\n- `username` — target username\n- `password` — new password",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/users/password",
+              "protocol": "http",
+              "host": ["{{API_HOST}}"],
+              "port": "{{API_PORT}}",
+              "path": ["cluster", "pgsql", "users", "password"]
+            }
+          }
+        },
+        {
           "name": "Delete User",
           "request": {
             "method": "DELETE",
@@ -1158,6 +1303,35 @@
                 "pgsql",
                 "databases"
               ]
+            }
+          }
+        },
+        {
+          "name": "Rename Database",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\",\n  \"new_dbname\": \"newdb\"\n}"
+            },
+            "description": "Renames a PostgreSQL database. Active connections are terminated first. Existing grants are preserved automatically by PostgreSQL. System databases (postgres, template0, template1) are refused.\n\n- `dbname` — current database name\n- `new_dbname` — desired new name, must match ^[a-zA-Z0-9_]{1,64}$",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/databases",
+              "protocol": "http",
+              "host": ["{{API_HOST}}"],
+              "port": "{{API_PORT}}",
+              "path": ["cluster", "pgsql", "databases"]
             }
           }
         },

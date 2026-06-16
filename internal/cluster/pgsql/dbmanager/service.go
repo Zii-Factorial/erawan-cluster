@@ -134,6 +134,84 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) error {
 	return nil
 }
 
+func (s *Service) ResetPassword(ctx context.Context, req ResetPasswordRequest) error {
+	if err := req.validate(); err != nil {
+		return err
+	}
+	host, port, adminUser, adminPass, err := s.resolve(ctx, req.JobID)
+	if err != nil {
+		return err
+	}
+
+	root, err := s.connect(ctx, host, port, "postgres", adminUser, adminPass)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
+	var rolName string
+	var rolSuper, rolReplication bool
+	err = root.QueryRowContext(ctx,
+		`SELECT rolname, rolsuper, rolreplication FROM pg_roles WHERE rolname = $1`,
+		req.Username,
+	).Scan(&rolName, &rolSuper, &rolReplication)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("user %q does not exist", req.Username)
+	}
+	if err != nil {
+		return fmt.Errorf("lookup role: %w", err)
+	}
+	if rolSuper || rolReplication || strings.HasPrefix(rolName, "pg_") {
+		return fmt.Errorf("user %q is a protected system role and cannot be modified", req.Username)
+	}
+
+	if _, err := root.ExecContext(ctx,
+		"ALTER ROLE "+pq.QuoteIdentifier(req.Username)+" WITH PASSWORD "+pq.QuoteLiteral(req.Password),
+	); err != nil {
+		return fmt.Errorf("reset password: %w", err)
+	}
+	return nil
+}
+
+func (s *Service) UpdateUser(ctx context.Context, req UpdateUserRequest) error {
+	if err := req.validate(); err != nil {
+		return err
+	}
+	host, port, adminUser, adminPass, err := s.resolve(ctx, req.JobID)
+	if err != nil {
+		return err
+	}
+
+	root, err := s.connect(ctx, host, port, "postgres", adminUser, adminPass)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
+	var rolName string
+	var rolSuper, rolReplication bool
+	err = root.QueryRowContext(ctx,
+		`SELECT rolname, rolsuper, rolreplication FROM pg_roles WHERE rolname = $1`,
+		req.Username,
+	).Scan(&rolName, &rolSuper, &rolReplication)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("user %q does not exist", req.Username)
+	}
+	if err != nil {
+		return fmt.Errorf("lookup role: %w", err)
+	}
+	if rolSuper || rolReplication || strings.HasPrefix(rolName, "pg_") {
+		return fmt.Errorf("user %q is a protected system role and cannot be renamed", req.Username)
+	}
+
+	if _, err := root.ExecContext(ctx,
+		"ALTER ROLE "+pq.QuoteIdentifier(req.Username)+" RENAME TO "+pq.QuoteIdentifier(req.NewUsername),
+	); err != nil {
+		return fmt.Errorf("rename role: %w", err)
+	}
+	return nil
+}
+
 func (s *Service) DeleteUser(ctx context.Context, req DeleteUserRequest) error {
 	if err := req.validate(); err != nil {
 		return err
@@ -218,6 +296,43 @@ func (s *Service) CreateDatabase(ctx context.Context, req CreateDatabaseRequest)
 		if err := s.grantInDatabase(ctx, host, port, req.DBName, adminUser, adminPass, u, without(users, u)); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (s *Service) UpdateDatabase(ctx context.Context, req UpdateDatabaseRequest) error {
+	if err := req.validate(); err != nil {
+		return err
+	}
+	switch req.DBName {
+	case "postgres", "template0", "template1":
+		return fmt.Errorf("database %q is a system database and cannot be renamed", req.DBName)
+	}
+
+	host, port, adminUser, adminPass, err := s.resolve(ctx, req.JobID)
+	if err != nil {
+		return err
+	}
+
+	root, err := s.connect(ctx, host, port, "postgres", adminUser, adminPass)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
+	if _, err := root.ExecContext(ctx,
+		`SELECT pg_terminate_backend(pid)
+		   FROM pg_stat_activity
+		  WHERE datname = $1 AND pid <> pg_backend_pid()`,
+		req.DBName,
+	); err != nil {
+		return fmt.Errorf("terminate connections: %w", err)
+	}
+
+	if _, err := root.ExecContext(ctx,
+		"ALTER DATABASE "+pq.QuoteIdentifier(req.DBName)+" RENAME TO "+pq.QuoteIdentifier(req.NewDBName),
+	); err != nil {
+		return fmt.Errorf("rename database: %w", err)
 	}
 	return nil
 }

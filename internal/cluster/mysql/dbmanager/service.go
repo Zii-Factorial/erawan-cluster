@@ -89,6 +89,97 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) error {
 	return nil
 }
 
+func (s *Service) ResetPassword(ctx context.Context, req ResetPasswordRequest) error {
+	if err := req.validate(); err != nil {
+		return err
+	}
+	host, port, adminUser, adminPass, err := s.resolve(req.JobID)
+	if err != nil {
+		return err
+	}
+
+	db, err := s.connect(ctx, host, port, "mysql", adminUser, adminPass)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	var superPriv string
+	err = db.QueryRowContext(ctx,
+		"SELECT Super_priv FROM mysql.user WHERE User = ? AND Host = '%'",
+		req.Username,
+	).Scan(&superPriv)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("user %q does not exist", req.Username)
+	}
+	if err != nil {
+		return fmt.Errorf("lookup user: %w", err)
+	}
+	if systemUsers[req.Username] {
+		return fmt.Errorf("user %q is a protected system user", req.Username)
+	}
+	if superPriv == "Y" {
+		return fmt.Errorf("user %q has SUPER privilege and cannot be modified through this API", req.Username)
+	}
+
+	uid := mysqlID(req.Username)
+	passLit := mysqlLit(req.Password)
+	if _, err := db.ExecContext(ctx,
+		fmt.Sprintf("ALTER USER %s@'%%' IDENTIFIED WITH caching_sha2_password BY %s", uid, passLit),
+	); err != nil {
+		return fmt.Errorf("reset password: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, "FLUSH PRIVILEGES"); err != nil {
+		return fmt.Errorf("flush privileges: %w", err)
+	}
+	return nil
+}
+
+func (s *Service) UpdateUser(ctx context.Context, req UpdateUserRequest) error {
+	if err := req.validate(); err != nil {
+		return err
+	}
+	host, port, adminUser, adminPass, err := s.resolve(req.JobID)
+	if err != nil {
+		return err
+	}
+
+	db, err := s.connect(ctx, host, port, "mysql", adminUser, adminPass)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	var superPriv string
+	err = db.QueryRowContext(ctx,
+		"SELECT Super_priv FROM mysql.user WHERE User = ? AND Host = '%'",
+		req.Username,
+	).Scan(&superPriv)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("user %q does not exist", req.Username)
+	}
+	if err != nil {
+		return fmt.Errorf("lookup user: %w", err)
+	}
+	if systemUsers[req.Username] {
+		return fmt.Errorf("user %q is a protected system user", req.Username)
+	}
+	if superPriv == "Y" {
+		return fmt.Errorf("user %q has SUPER privilege and cannot be renamed through this API", req.Username)
+	}
+
+	if _, err := db.ExecContext(ctx, fmt.Sprintf(
+		"RENAME USER %s@'%%' TO %s@'%%'",
+		mysqlID(req.Username), mysqlID(req.NewUsername)),
+	); err != nil {
+		return fmt.Errorf("rename user: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, "FLUSH PRIVILEGES"); err != nil {
+		return fmt.Errorf("flush privileges: %w", err)
+	}
+	return nil
+}
+
 func (s *Service) DeleteUser(ctx context.Context, req DeleteUserRequest) error {
 	if err := req.validate(); err != nil {
 		return err
@@ -164,6 +255,111 @@ func (s *Service) CreateDatabase(ctx context.Context, req CreateDatabaseRequest)
 		); err != nil {
 			return fmt.Errorf("grant on %s to %s: %w", req.DBName, u, err)
 		}
+	}
+	if _, err := db.ExecContext(ctx, "FLUSH PRIVILEGES"); err != nil {
+		return fmt.Errorf("flush privileges: %w", err)
+	}
+	return nil
+}
+
+func (s *Service) UpdateDatabase(ctx context.Context, req UpdateDatabaseRequest) error {
+	if err := req.validate(); err != nil {
+		return err
+	}
+	if systemDatabases[req.DBName] {
+		return fmt.Errorf("database %q is a system database and cannot be renamed", req.DBName)
+	}
+
+	host, port, adminUser, adminPass, err := s.resolve(req.JobID)
+	if err != nil {
+		return err
+	}
+
+	db, err := s.connect(ctx, host, port, "", adminUser, adminPass)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	var exists int
+	if err := db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?",
+		req.DBName,
+	).Scan(&exists); err != nil {
+		return fmt.Errorf("check database: %w", err)
+	}
+	if exists == 0 {
+		return fmt.Errorf("database %q does not exist", req.DBName)
+	}
+
+	if _, err := db.ExecContext(ctx, "CREATE DATABASE "+mysqlID(req.NewDBName)); err != nil {
+		return fmt.Errorf("create new database: %w", err)
+	}
+
+	rows, err := db.QueryContext(ctx,
+		"SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE'",
+		req.DBName)
+	if err != nil {
+		return fmt.Errorf("list tables: %w", err)
+	}
+	var tables []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan table: %w", err)
+		}
+		tables = append(tables, t)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("list tables: %w", err)
+	}
+
+	oldID := mysqlID(req.DBName)
+	newID := mysqlID(req.NewDBName)
+	for _, t := range tables {
+		tid := mysqlID(t)
+		if _, err := db.ExecContext(ctx, fmt.Sprintf(
+			"RENAME TABLE %s.%s TO %s.%s", oldID, tid, newID, tid),
+		); err != nil {
+			return fmt.Errorf("move table %s: %w", t, err)
+		}
+	}
+
+	grantRows, err := db.QueryContext(ctx,
+		"SELECT User FROM mysql.db WHERE Db = ? AND Host = '%'", req.DBName)
+	if err != nil {
+		return fmt.Errorf("list grants: %w", err)
+	}
+	var grantedUsers []string
+	for grantRows.Next() {
+		var u string
+		if err := grantRows.Scan(&u); err != nil {
+			grantRows.Close()
+			return fmt.Errorf("scan grant: %w", err)
+		}
+		grantedUsers = append(grantedUsers, u)
+	}
+	grantRows.Close()
+	if err := grantRows.Err(); err != nil {
+		return fmt.Errorf("list grants: %w", err)
+	}
+
+	for _, u := range grantedUsers {
+		uid := mysqlID(u)
+		_, _ = db.ExecContext(ctx, fmt.Sprintf(
+			"REVOKE ALL PRIVILEGES ON %s.* FROM %s@'%%'", oldID, uid))
+		if _, err := db.ExecContext(ctx, fmt.Sprintf(
+			"GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, REFERENCES ON %s.* TO %s@'%%'",
+			newID, uid),
+		); err != nil {
+			return fmt.Errorf("grant on new database to %s: %w", u, err)
+		}
+	}
+
+	if _, err := db.ExecContext(ctx, "DROP DATABASE "+oldID); err != nil {
+		return fmt.Errorf("drop old database: %w", err)
 	}
 	if _, err := db.ExecContext(ctx, "FLUSH PRIVILEGES"); err != nil {
 		return fmt.Errorf("flush privileges: %w", err)
