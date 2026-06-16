@@ -278,23 +278,6 @@ func (s *Service) CreateDatabase(ctx context.Context, req CreateDatabaseRequest)
 	); err != nil {
 		return fmt.Errorf("create database: %w", err)
 	}
-
-	users, err := appUsers(ctx, root)
-	if err != nil {
-		return fmt.Errorf("list users: %w", err)
-	}
-	for _, u := range users {
-		if _, err := root.ExecContext(ctx,
-			"GRANT ALL PRIVILEGES ON DATABASE "+dbid+" TO "+pq.QuoteIdentifier(u),
-		); err != nil {
-			return fmt.Errorf("grant on database %q to %q: %w", req.DBName, u, err)
-		}
-	}
-	for _, u := range users {
-		if err := s.grantInDatabase(ctx, host, port, req.DBName, adminUser, adminPass, u, without(users, u)); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 

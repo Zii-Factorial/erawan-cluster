@@ -239,23 +239,6 @@ func (s *Service) CreateDatabase(ctx context.Context, req CreateDatabaseRequest)
 	if _, err := db.ExecContext(ctx, "CREATE DATABASE "+mysqlID(req.DBName)); err != nil {
 		return fmt.Errorf("create database: %w", err)
 	}
-
-	users, err := appUsers(ctx, db)
-	if err != nil {
-		return fmt.Errorf("list users: %w", err)
-	}
-	dbid := mysqlID(req.DBName)
-	for _, u := range users {
-		if _, err := db.ExecContext(ctx, fmt.Sprintf(
-			"GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, REFERENCES ON %s.* TO %s@'%%'",
-			dbid, mysqlID(u)),
-		); err != nil {
-			return fmt.Errorf("grant on %s to %s: %w", req.DBName, u, err)
-		}
-	}
-	if _, err := db.ExecContext(ctx, "FLUSH PRIVILEGES"); err != nil {
-		return fmt.Errorf("flush privileges: %w", err)
-	}
 	return nil
 }
 
