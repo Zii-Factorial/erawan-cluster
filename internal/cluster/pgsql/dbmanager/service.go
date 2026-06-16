@@ -99,27 +99,38 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) error {
 		return fmt.Errorf("upsert role: %w", err)
 	}
 
-	dbs, err := appDatabases(ctx, root)
-	if err != nil {
-		return fmt.Errorf("list databases: %w", err)
-	}
-	existingUsers, err := appUsers(ctx, root)
-	if err != nil {
-		return fmt.Errorf("list users: %w", err)
-	}
-	peers := without(existingUsers, req.Username)
-
 	uid := pq.QuoteIdentifier(req.Username)
-	for _, dbname := range dbs {
-		if _, err := root.ExecContext(ctx,
-			"GRANT ALL PRIVILEGES ON DATABASE "+pq.QuoteIdentifier(dbname)+" TO "+uid,
-		); err != nil {
-			return fmt.Errorf("grant on database %q: %w", dbname, err)
+
+	if req.DatabaseName != "" {
+		existingUsers, err := appUsers(ctx, root)
+		if err != nil {
+			return fmt.Errorf("list users: %w", err)
 		}
-		if err := s.grantInDatabase(ctx, host, port, dbname, adminUser, adminPass, req.Username, peers); err != nil {
+		peers := without(existingUsers, req.Username)
+
+		var dbExists bool
+		if err := root.QueryRowContext(ctx,
+			"SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)", req.DatabaseName,
+		).Scan(&dbExists); err != nil {
+			return fmt.Errorf("check database: %w", err)
+		}
+		if !dbExists {
+			if _, err := root.ExecContext(ctx,
+				"CREATE DATABASE "+pq.QuoteIdentifier(req.DatabaseName)+" OWNER "+pq.QuoteIdentifier(adminUser),
+			); err != nil {
+				return fmt.Errorf("create database: %w", err)
+			}
+		}
+		if _, err := root.ExecContext(ctx,
+			"GRANT ALL PRIVILEGES ON DATABASE "+pq.QuoteIdentifier(req.DatabaseName)+" TO "+uid,
+		); err != nil {
+			return fmt.Errorf("grant on database %q: %w", req.DatabaseName, err)
+		}
+		if err := s.grantInDatabase(ctx, host, port, req.DatabaseName, adminUser, adminPass, req.Username, peers); err != nil {
 			return err
 		}
 	}
+
 	return nil
 }
 

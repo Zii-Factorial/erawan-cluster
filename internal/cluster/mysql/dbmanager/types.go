@@ -1,9 +1,10 @@
 package dbmanager
 
 type CreateUserRequest struct {
-	JobID    string `json:"job_id"`
-	Username string `json:"username"`
-	Password string `json:"password"`
+	JobID        string `json:"job_id"`
+	Username     string `json:"username"`
+	Password     string `json:"password"`
+	DatabaseName string `json:"database,omitempty"`
 }
 
 type DeleteUserRequest struct {

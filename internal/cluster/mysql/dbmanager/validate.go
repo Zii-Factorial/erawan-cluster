@@ -13,6 +13,7 @@ var (
 
 func (req *CreateUserRequest) validate() error {
 	req.Username = strings.TrimSpace(req.Username)
+	req.DatabaseName = strings.TrimSpace(req.DatabaseName)
 	if strings.TrimSpace(req.JobID) == "" {
 		return fmt.Errorf("job_id is required")
 	}
@@ -21,6 +22,9 @@ func (req *CreateUserRequest) validate() error {
 	}
 	if strings.TrimSpace(req.Password) == "" {
 		return fmt.Errorf("password is required")
+	}
+	if req.DatabaseName != "" && !dbPattern.MatchString(req.DatabaseName) {
+		return fmt.Errorf("database must match %s", dbPattern)
 	}
 	return nil
 }

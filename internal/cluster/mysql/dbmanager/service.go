@@ -61,11 +61,28 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) error {
 	); err != nil {
 		return fmt.Errorf("update password: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, fmt.Sprintf(
-		"GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, REFERENCES ON *.* TO %s@'%%'", uid),
-	); err != nil {
-		return fmt.Errorf("grant privileges: %w", err)
+
+	if req.DatabaseName != "" {
+		var exists int
+		if err := db.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?",
+			req.DatabaseName,
+		).Scan(&exists); err != nil {
+			return fmt.Errorf("check database: %w", err)
+		}
+		if exists == 0 {
+			if _, err := db.ExecContext(ctx, "CREATE DATABASE "+mysqlID(req.DatabaseName)); err != nil {
+				return fmt.Errorf("create database: %w", err)
+			}
+		}
+		if _, err := db.ExecContext(ctx, fmt.Sprintf(
+			"GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, REFERENCES ON %s.* TO %s@'%%'",
+			mysqlID(req.DatabaseName), uid),
+		); err != nil {
+			return fmt.Errorf("grant on database: %w", err)
+		}
 	}
+
 	if _, err := db.ExecContext(ctx, "FLUSH PRIVILEGES"); err != nil {
 		return fmt.Errorf("flush privileges: %w", err)
 	}
