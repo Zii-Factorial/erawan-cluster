@@ -130,7 +130,23 @@
       "key": "MYSQL_DB_PASSWORD",
       "value": "",
       "type": "default"
+    },
+    {
+      "key": "DBMGR_USERNAME",
+      "value": "appuser",
+      "description": "Username to create or delete via DB Manager"
+    },
+    {
+      "key": "DBMGR_PASSWORD",
+      "value": "AppUser#2026",
+      "description": "Password for the new DB Manager user"
+    },
+    {
+      "key": "DBMGR_DBNAME",
+      "value": "newdb",
+      "description": "Database name to create or delete via DB Manager"
     }
+
   ],
   "event": [
     {
@@ -540,7 +556,7 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"port\": {{MYSQL_PROXY_PORT}},\n  \"user\": \"{{MYSQL_DB_USER}}\",\n  \"password\": \"{{MYSQL_DB_PASSWORD}}\",\n  \"ssl_mode\": \"disable\",\n  \"connect_timeout\": 10,\n  \"categories\": [],\n  \"databases\": [],\n  \"limit\": 20\n}"
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"ssl_mode\": \"disable\",\n  \"connect_timeout\": 10,\n  \"categories\": [],\n  \"databases\": [],\n  \"limit\": 20\n}"
             },
             "url": {
               "raw": "{{API_HOST}}:{{API_PORT}}/cluster/mysql/metrics",
@@ -786,7 +802,7 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"port\": {{PGSQL_PROXY_PORT}},\n  \"node_ips\": [\"{{PGSQL_PRIMARY_IP}}\", \"{{PGSQL_STANDBY_IP_1}}\", \"{{PGSQL_STANDBY_IP_2}}\"],\n  \"user\": \"{{PGSQL_DB_USER}}\",\n  \"password\": \"{{PGSQL_DB_PASSWORD}}\",\n  \"database\": \"postgres\",\n  \"ssl_mode\": \"require\",\n  \"connect_timeout\": 10,\n  \"patroni_port\": 8008,\n  \"categories\": [],\n  \"databases\": [],\n  \"limit\": 20\n}"
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"database\": \"postgres\",\n  \"ssl_mode\": \"require\",\n  \"connect_timeout\": 10,\n  \"patroni_port\": 8008,\n  \"categories\": [],\n  \"databases\": [],\n  \"limit\": 20\n}"
             },
             "description": "Collects live metrics from a running PostgreSQL/Patroni cluster.\n\n**Required:** `user`\n\n**Connection routing:**\n- `host` (optional) — HAProxy address; defaults to `PROXY_HOST` env var on the server (usually `127.0.0.1`)\n- `port` — HAProxy listen port for PostgreSQL traffic (e.g. 25432)\n- `node_ips` — list of all cluster member IPs; the collector calls `GET /leader` on each and auto-discovers the current primary for Patroni REST (`cluster`, `failover` categories). Required only when collecting those categories.\n\n**Optional:** `host`, `port` (default 5432), `password`, `database` (default `postgres`), `ssl_mode` (`disable`|`require`, default `disable`), `connect_timeout` (seconds, default 10), `patroni_port` (default 8008), `limit` (top-N for slow queries/latency, default 20), `from`/`to` (ISO 8601, filter failover events and slow queries)\n\n**`databases`** — optional list of database names to filter per-database results (connections by_database, slow queries, autovacuum workers, logical slot lag). Empty array = all databases. Response always includes `database_count` (total user databases, excluding templates).\n\n**`categories`** — empty array returns all; pick any subset:\n- `cluster` — Patroni HA state, DCS health, node roles, TTL/loop_wait\n- `uptime` — PostgreSQL process uptime\n- `failover` — Patroni timeline/failover history (supports `from`/`to` filter)\n- `connections` — active, idle, idle-in-transaction, lock-waiters, wait-event breakdown\n- `replication` — streaming lag (LSN pipeline), standby count, WAL config, slot lag\n- `performance` — TPS, cache hit ratio, temp files, checkpoint pressure, bgwriter stats\n- `query` — avg/p95/p99 latency, slow queries, lock/deadlock counts, scan efficiency\n- `maintenance` — autovacuum workers, XID wraparound age, logical slot lag, pg_locks",
             "url": {
@@ -884,6 +900,472 @@
                 "jobs",
                 "{{JOB_ID}}",
                 "resume"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "DB Manager - MySQL",
+      "description": "Create and delete users and databases on a running MySQL cluster.\n\nAdmin credentials: use MYSQL_DB_USER / MYSQL_DB_PASSWORD (clusteradmin) from the deploy response, or any user with the required privileges.\n\nPrivilege model:\n- New users get SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, REFERENCES on the specified database only\n- If no `database` is provided, the user is created with no database access\n- Users cannot drop other users (no CREATE USER privilege)\n- New databases are granted to all existing app users automatically",
+      "item": [
+        {
+          "name": "Create User",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"password\": \"{{DBMGR_PASSWORD}}\",\n  \"database\": \"{{DBMGR_DBNAME}}\"\n}"
+            },
+            "description": "Creates (or updates) a MySQL user. Credentials and primary IP are resolved from the deploy job. Idempotent — re-running refreshes the password and re-applies grants.\n\n- `username` must match ^[a-zA-Z_][a-zA-Z0-9_-]{1,31}$\n- `database` (optional) — if provided, the user is granted access to this database only; the database will be created if it does not exist. If omitted, the user is created with no database access. Must match ^[a-zA-Z0-9_]{1,64}$",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/users",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "mysql",
+                "users"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Rename User",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"new_username\": \"newname\"\n}"
+            },
+            "description": "Renames a MySQL user. Existing grants are carried over automatically. System users and users with SUPER privilege are refused.\n\n- `username` — current username\n- `new_username` — desired new username, must match ^[a-zA-Z_][a-zA-Z0-9_-]{1,31}$",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/users",
+              "protocol": "http",
+              "host": ["{{API_HOST}}"],
+              "port": "{{API_PORT}}",
+              "path": ["cluster", "mysql", "users"]
+            }
+          }
+        },
+        {
+          "name": "Reset Password",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"password\": \"{{DBMGR_PASSWORD}}\"\n}"
+            },
+            "description": "Resets the password for an existing MySQL user. System users and users with SUPER privilege are refused.\n\n- `username` — target username\n- `password` — new password",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/users/password",
+              "protocol": "http",
+              "host": ["{{API_HOST}}"],
+              "port": "{{API_PORT}}",
+              "path": ["cluster", "mysql", "users", "password"]
+            }
+          }
+        },
+        {
+          "name": "Delete User",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\"\n}"
+            },
+            "description": "Drops a MySQL user. System users (root, mysql.sys, mysql.session, mysql.infoschema) and users with the SUPER privilege are refused. Credentials resolved from the deploy job.",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/users",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "mysql",
+                "users"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Database",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\"\n}"
+            },
+            "description": "Creates a database and grants all existing non-system app users access to it. Credentials resolved from the deploy job.\n\n- `dbname` must match ^[a-zA-Z0-9_]{1,64}$",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/databases",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "mysql",
+                "databases"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Rename Database",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\",\n  \"new_dbname\": \"newdb\"\n}"
+            },
+            "description": "Renames a MySQL database by creating the new database, moving all tables, re-applying grants, and dropping the old database. System databases are refused.\n\n- `dbname` — current database name\n- `new_dbname` — desired new name, must match ^[a-zA-Z0-9_]{1,64}$",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/databases",
+              "protocol": "http",
+              "host": ["{{API_HOST}}"],
+              "port": "{{API_PORT}}",
+              "path": ["cluster", "mysql", "databases"]
+            }
+          }
+        },
+        {
+          "name": "Delete Database",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\"\n}"
+            },
+            "description": "Terminates all active connections to the database, then drops it. System databases (information_schema, mysql, performance_schema, sys) are refused. Credentials resolved from the deploy job.",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/databases",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "mysql",
+                "databases"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "DB Manager - PostgreSQL",
+      "description": "Create and delete users and databases on a running PostgreSQL/Patroni cluster.\n\nAdmin credentials: use PGSQL_DB_USER / PGSQL_DB_PASSWORD (postgres superuser) from the deploy response.\n\nPrivilege model:\n- New roles get LOGIN, CREATEDB, NOSUPERUSER, NOCREATEROLE\n- Granted USAGE + CREATE on schema public; SELECT, INSERT, UPDATE, DELETE, TRUNCATE on all tables of the specified database only; ALTER DEFAULT PRIVILEGES for cross-user future tables\n- If no `database` is provided, the role is created with no database access\n- Cannot delete other roles (NOCREATEROLE)\n- New databases are granted to all existing app users automatically",
+      "item": [
+        {
+          "name": "Create User",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"password\": \"{{DBMGR_PASSWORD}}\",\n  \"database\": \"{{DBMGR_DBNAME}}\"\n}"
+            },
+            "description": "Creates (or updates) a PostgreSQL role. Credentials and primary IP are resolved from the deploy job. Idempotent — re-running refreshes the password and re-applies grants.\n\n- `username` must match ^[a-zA-Z_][a-zA-Z0-9_-]{1,31}$\n- `database` (optional) — if provided, the role is granted access to this database only; the database will be created if it does not exist. If omitted, the role is created with no database access. Must match ^[a-zA-Z0-9_]{1,64}$",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/users",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "pgsql",
+                "users"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Rename User",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"new_username\": \"newname\"\n}"
+            },
+            "description": "Renames a PostgreSQL role. Existing grants are carried over automatically. Superuser, replication, and built-in pg_* roles are refused.\n\n- `username` — current username\n- `new_username` — desired new username, must match ^[a-zA-Z_][a-zA-Z0-9_-]{1,31}$",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/users",
+              "protocol": "http",
+              "host": ["{{API_HOST}}"],
+              "port": "{{API_PORT}}",
+              "path": ["cluster", "pgsql", "users"]
+            }
+          }
+        },
+        {
+          "name": "Reset Password",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"password\": \"{{DBMGR_PASSWORD}}\"\n}"
+            },
+            "description": "Resets the password for an existing PostgreSQL role. Superuser, replication, and built-in pg_* roles are refused.\n\n- `username` — target username\n- `password` — new password",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/users/password",
+              "protocol": "http",
+              "host": ["{{API_HOST}}"],
+              "port": "{{API_PORT}}",
+              "path": ["cluster", "pgsql", "users", "password"]
+            }
+          }
+        },
+        {
+          "name": "Delete User",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\"\n}"
+            },
+            "description": "Drops a PostgreSQL role. Superuser roles, replication roles, built-in pg_* roles, and the postgres user are refused. Objects are reassigned before dropping. Credentials resolved from the deploy job.",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/users",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "pgsql",
+                "users"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Database",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\"\n}"
+            },
+            "description": "Creates a PostgreSQL database and grants all existing non-system app users access to it. Credentials resolved from the deploy job. Owner defaults to the postgres superuser.\n\n- `dbname` must match ^[a-zA-Z0-9_]{1,64}$",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/databases",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "pgsql",
+                "databases"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Rename Database",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\",\n  \"new_dbname\": \"newdb\"\n}"
+            },
+            "description": "Renames a PostgreSQL database. Active connections are terminated first. Existing grants are preserved automatically by PostgreSQL. System databases (postgres, template0, template1) are refused.\n\n- `dbname` — current database name\n- `new_dbname` — desired new name, must match ^[a-zA-Z0-9_]{1,64}$",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/databases",
+              "protocol": "http",
+              "host": ["{{API_HOST}}"],
+              "port": "{{API_PORT}}",
+              "path": ["cluster", "pgsql", "databases"]
+            }
+          }
+        },
+        {
+          "name": "Delete Database",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\"\n}"
+            },
+            "description": "Terminates all active connections via pg_terminate_backend(), then drops the database. System databases (postgres, template0, template1) are refused. Credentials resolved from the deploy job.",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/databases",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "pgsql",
+                "databases"
               ]
             }
           }

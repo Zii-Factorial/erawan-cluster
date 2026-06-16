@@ -335,6 +335,23 @@ func (s *Service) CollectMetrics(ctx context.Context, req MetricRequest) MetricR
 	return s.collector.Collect(ctx, req)
 }
 
+func (s *Service) ConnectionInfo(ctx context.Context, jobID string) (host string, port int, user, password string, nodeIPs []string, err error) {
+	job, err := s.store.Load(jobID)
+	if err != nil {
+		return "", 0, "", "", nil, fmt.Errorf("load job %q: %w", jobID, err)
+	}
+	secret, err := s.store.LoadSecret(jobID)
+	if err != nil {
+		return "", 0, "", "", nil, fmt.Errorf("load job secret %q: %w", jobID, err)
+	}
+	p := job.Request.PostgresPort
+	if p == 0 {
+		p = 5432
+	}
+	ips := append([]string{job.Request.PrimaryIP}, job.Request.StandbyIPs...)
+	return job.Request.PrimaryIP, p, secret.PostgresUser, secret.PostgresPassword, ips, nil
+}
+
 func (s *Service) updateJobProgress(job *Job) {
 	job.TotalSteps = s.totalStepsFor(job.Request)
 	job.CompletedSteps = completedSteps(job)

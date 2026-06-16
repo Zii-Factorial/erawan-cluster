@@ -402,6 +402,22 @@ func (s *Service) CollectMetrics(ctx context.Context, req MetricRequest) MetricR
 	return s.collector.Collect(ctx, req)
 }
 
+func (s *Service) ConnectionInfo(jobID string) (host string, port int, user, password string, err error) {
+	job, err := s.store.Load(jobID)
+	if err != nil {
+		return "", 0, "", "", fmt.Errorf("load job %q: %w", jobID, err)
+	}
+	secret, err := s.store.LoadSecret(jobID)
+	if err != nil {
+		return "", 0, "", "", fmt.Errorf("load job secret %q: %w", jobID, err)
+	}
+	p := job.Request.MySQLPort
+	if p == 0 {
+		p = 3306
+	}
+	return job.Request.PrimaryIP, p, secret.AdminUser, secret.AdminPassword, nil
+}
+
 func shouldSkipStep(st step, spec StoredSpec) (string, bool) {
 	if st.Name == "add_instances" && len(spec.StandbyIPs) == 0 {
 		return "standby_ips is empty", true

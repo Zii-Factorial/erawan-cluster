@@ -416,21 +416,31 @@ POST   /haproxy/reload</pre>
 
           <div class="reveal rounded-[30px] border border-slate-200 bg-white p-6 shadow-card transition-colors duration-300 dark:border-white/10 dark:bg-white/5">
             <h3 class="text-xl font-bold text-ink dark:text-white">MySQL Cluster</h3>
-            <pre class="mt-5 overflow-x-auto rounded-2xl bg-slate-950 p-4 font-mono text-xs leading-7 text-slate-100">POST /cluster/mysql/deploy
-POST /cluster/mysql/metrics
-GET  /cluster/mysql/jobs
-GET  /cluster/mysql/jobs/{jobID}
-POST /cluster/mysql/jobs/{jobID}/resume
-POST /cluster/mysql/jobs/{jobID}/rollback</pre>
+            <pre class="mt-5 overflow-x-auto rounded-2xl bg-slate-950 p-4 font-mono text-xs leading-7 text-slate-100">POST   /cluster/mysql/deploy
+POST   /cluster/mysql/metrics
+GET    /cluster/mysql/jobs
+GET    /cluster/mysql/jobs/{jobID}
+POST   /cluster/mysql/jobs/{jobID}/resume
+POST   /cluster/mysql/jobs/{jobID}/rollback</pre>
+            <h3 class="mt-6 text-xl font-bold text-ink dark:text-white">MySQL DB Manager</h3>
+            <pre class="mt-5 overflow-x-auto rounded-2xl bg-slate-950 p-4 font-mono text-xs leading-7 text-slate-100">POST   /cluster/mysql/users
+DELETE /cluster/mysql/users
+POST   /cluster/mysql/databases
+DELETE /cluster/mysql/databases</pre>
           </div>
 
           <div class="reveal rounded-[30px] border border-slate-200 bg-white p-6 shadow-card transition-colors duration-300 dark:border-white/10 dark:bg-white/5">
             <h3 class="text-xl font-bold text-ink dark:text-white">PostgreSQL Cluster</h3>
-            <pre class="mt-5 overflow-x-auto rounded-2xl bg-slate-950 p-4 font-mono text-xs leading-7 text-slate-100">POST /cluster/pgsql/deploy
-POST /cluster/pgsql/metrics
-GET  /cluster/pgsql/jobs
-GET  /cluster/pgsql/jobs/{jobID}
-POST /cluster/pgsql/jobs/{jobID}/resume</pre>
+            <pre class="mt-5 overflow-x-auto rounded-2xl bg-slate-950 p-4 font-mono text-xs leading-7 text-slate-100">POST   /cluster/pgsql/deploy
+POST   /cluster/pgsql/metrics
+GET    /cluster/pgsql/jobs
+GET    /cluster/pgsql/jobs/{jobID}
+POST   /cluster/pgsql/jobs/{jobID}/resume</pre>
+            <h3 class="mt-6 text-xl font-bold text-ink dark:text-white">PostgreSQL DB Manager</h3>
+            <pre class="mt-5 overflow-x-auto rounded-2xl bg-slate-950 p-4 font-mono text-xs leading-7 text-slate-100">POST   /cluster/pgsql/users
+DELETE /cluster/pgsql/users
+POST   /cluster/pgsql/databases
+DELETE /cluster/pgsql/databases</pre>
           </div>
         </div>
       </section>
@@ -469,6 +479,13 @@ POST /cluster/pgsql/jobs/{jobID}/resume</pre>
               type="button"
             >
               Metrics
+            </button>
+            <button
+              class="payload-tab rounded-full px-4 py-2 text-sm font-medium text-slate-600 transition dark:text-slate-300"
+              data-tab="dbmanager"
+              type="button"
+            >
+              DB Manager
             </button>
           </div>
         </div>
@@ -569,6 +586,53 @@ POST /cluster/pgsql/jobs/{jobID}/resume</pre>
 <span class="text-slate-400">// connections | replication | performance | query | maintenance</span>
 <span class="text-slate-400">// Response always includes database_count (non-template DBs)</span>
 <span class="text-slate-400">// databases: [] = all; ["appdb"] = filter per-DB fields</span></pre>
+              <pre id="dbmanager-payload" class="payload-panel hidden overflow-x-auto p-6 font-mono text-sm leading-7 text-slate-100"><span class="text-slate-400">// POST /cluster/mysql/users  or  POST /cluster/pgsql/users</span>
+<span class="text-slate-400">// Creates user (idempotent — refreshes password on re-run)</span>
+{
+  "primary_ip": "10.0.0.1",
+  "port": 3306,
+  "admin_user": "root",
+  "admin_password": "&lt;admin password&gt;",
+  "username": "appuser",
+  "password": "AppUser#2026"
+}
+
+<span class="text-slate-400">// DELETE /cluster/mysql/users  or  DELETE /cluster/pgsql/users</span>
+{
+  "primary_ip": "10.0.0.1",
+  "port": 3306,
+  "admin_user": "root",
+  "admin_password": "&lt;admin password&gt;",
+  "username": "appuser"
+}
+
+<span class="text-slate-400">// POST /cluster/mysql/databases  or  POST /cluster/pgsql/databases</span>
+<span class="text-slate-400">// Creates database; grants access to every existing app user</span>
+{
+  "primary_ip": "10.0.0.1",
+  "port": 3306,
+  "admin_user": "root",
+  "admin_password": "&lt;admin password&gt;",
+  "dbname": "newdb"
+}
+
+<span class="text-slate-400">// DELETE /cluster/mysql/databases  or  DELETE /cluster/pgsql/databases</span>
+<span class="text-slate-400">// Terminates connections then drops the database</span>
+{
+  "primary_ip": "10.0.0.1",
+  "port": 3306,
+  "admin_user": "root",
+  "admin_password": "&lt;admin password&gt;",
+  "dbname": "newdb"
+}
+
+<span class="text-slate-400">// Notes</span>
+<span class="text-slate-400">// port: defaults to 3306 (MySQL) or 5432 (PostgreSQL) if omitted</span>
+<span class="text-slate-400">// Users get DML+DDL (SELECT,INSERT,UPDATE,DELETE,CREATE,DROP,ALTER)</span>
+<span class="text-slate-400">// Users cannot delete other users (no CREATE USER / CREATEROLE)</span>
+<span class="text-slate-400">// New database is shared: all existing app users get access</span>
+<span class="text-slate-400">// New user gets access to all existing databases</span>
+<span class="text-slate-400">// For PostgreSQL pgsql/databases also accepts "owner" (optional)</span></pre>
             </div>
           </div>
 
@@ -667,7 +731,8 @@ POST /cluster/pgsql/jobs/{jobID}/resume</pre>
         mysql: document.getElementById("mysql-payload"),
         pgsql: document.getElementById("pgsql-payload"),
         haproxy: document.getElementById("haproxy-payload"),
-        metrics: document.getElementById("metrics-payload")
+        metrics: document.getElementById("metrics-payload"),
+        dbmanager: document.getElementById("dbmanager-payload")
       };
       const payloadLabel = document.getElementById("payload-label");
 
@@ -711,7 +776,7 @@ POST /cluster/pgsql/jobs/{jobID}/resume</pre>
           }
         });
 
-        const labels = { mysql: "MySQL Deploy", pgsql: "PostgreSQL Deploy", haproxy: "HAProxy Config", metrics: "Collect Metrics" };
+        const labels = { mysql: "MySQL Deploy", pgsql: "PostgreSQL Deploy", haproxy: "HAProxy Config", metrics: "Collect Metrics", dbmanager: "DB Manager" };
         payloadLabel.textContent = labels[name] || name;
       }
 

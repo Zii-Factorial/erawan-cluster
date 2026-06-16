@@ -43,6 +43,8 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 	defer db.Close()
 
 	resp.DatabaseCount, _ = collectDatabaseCount(ctx, db)
+	resp.Users, _ = collectUsers(ctx, db)
+	resp.Databases, _ = collectDatabases(ctx, db)
 
 	limit := req.Limit
 	if limit <= 0 {
@@ -218,6 +220,64 @@ func collectDatabaseCount(ctx context.Context, db *sql.DB) (int, error) {
 		SELECT COUNT(*) FROM information_schema.schemata
 		WHERE schema_name NOT IN ('information_schema','mysql','performance_schema','sys')`).Scan(&count)
 	return count, err
+}
+
+// collectUsers returns all non-system MySQL user accounts.
+func collectUsers(ctx context.Context, db *sql.DB) ([]UserInfo, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT User, Host, Super_priv
+		FROM mysql.user
+		WHERE User NOT IN ('root','mysql.sys','mysql.session','mysql.infoschema','')
+		ORDER BY User, Host`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UserInfo
+	for rows.Next() {
+		var u UserInfo
+		var superPriv string
+		if err := rows.Scan(&u.User, &u.Host, &superPriv); err != nil {
+			return nil, err
+		}
+		u.HasSuper = superPriv == "Y"
+		out = append(out, u)
+	}
+	if out == nil {
+		out = []UserInfo{}
+	}
+	return out, rows.Err()
+}
+
+// collectDatabases returns all non-system MySQL databases with size and charset info.
+func collectDatabases(ctx context.Context, db *sql.DB) ([]DatabaseInfo, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT
+			s.SCHEMA_NAME,
+			COALESCE(SUM(t.DATA_LENGTH + t.INDEX_LENGTH), 0),
+			s.DEFAULT_CHARACTER_SET_NAME,
+			s.DEFAULT_COLLATION_NAME
+		FROM information_schema.SCHEMATA s
+		LEFT JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = s.SCHEMA_NAME
+		WHERE s.SCHEMA_NAME NOT IN ('information_schema','mysql','performance_schema','sys')
+		GROUP BY s.SCHEMA_NAME, s.DEFAULT_CHARACTER_SET_NAME, s.DEFAULT_COLLATION_NAME
+		ORDER BY s.SCHEMA_NAME`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DatabaseInfo
+	for rows.Next() {
+		var d DatabaseInfo
+		if err := rows.Scan(&d.Name, &d.SizeBytes, &d.Charset, &d.Collation); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	if out == nil {
+		out = []DatabaseInfo{}
+	}
+	return out, rows.Err()
 }
 
 // dbSet builds a lookup set from a list of database names.

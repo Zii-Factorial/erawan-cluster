@@ -57,6 +57,8 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 		} else {
 			defer db.Close()
 			resp.DatabaseCount, _ = collectDatabaseCount(ctx, db)
+			resp.Users, _ = collectUsers(ctx, db)
+			resp.Databases, _ = collectDatabases(ctx, db)
 		}
 	}
 
@@ -288,6 +290,60 @@ func collectDatabaseCount(ctx context.Context, db *sql.DB) (int, error) {
 		SELECT count(*) FROM pg_database
 		WHERE datistemplate = false`).Scan(&count)
 	return count, err
+}
+
+// collectUsers returns all PostgreSQL roles (excluding internal pg_* system roles).
+func collectUsers(ctx context.Context, db *sql.DB) ([]UserInfo, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT rolname, rolsuper, rolcreatedb, rolcanlogin
+		FROM pg_roles
+		WHERE rolname NOT LIKE 'pg_%'
+		ORDER BY rolname`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UserInfo
+	for rows.Next() {
+		var u UserInfo
+		if err := rows.Scan(&u.Name, &u.IsSuperuser, &u.CanCreateDB, &u.CanLogin); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	if out == nil {
+		out = []UserInfo{}
+	}
+	return out, rows.Err()
+}
+
+// collectDatabases returns all non-template PostgreSQL databases with owner, size, and encoding.
+func collectDatabases(ctx context.Context, db *sql.DB) ([]DatabaseInfo, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT
+			d.datname,
+			pg_catalog.pg_get_userbyid(d.datdba),
+			pg_database_size(d.datname),
+			pg_encoding_to_char(d.encoding)
+		FROM pg_database d
+		WHERE d.datistemplate = false
+		ORDER BY d.datname`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DatabaseInfo
+	for rows.Next() {
+		var d DatabaseInfo
+		if err := rows.Scan(&d.Name, &d.Owner, &d.SizeBytes, &d.Encoding); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	if out == nil {
+		out = []DatabaseInfo{}
+	}
+	return out, rows.Err()
 }
 
 // dbSet builds a lookup set from a list of database names.

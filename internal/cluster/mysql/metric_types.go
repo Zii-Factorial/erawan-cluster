@@ -47,6 +47,10 @@ var allMetricCategories = []string{
 //
 // All snapshot categories return the current point-in-time value.
 type MetricRequest struct {
+	// JobID resolves host, port, user, and password from the stored deploy job.
+	// When set, explicit host/port/user/password fields are ignored.
+	JobID string `json:"job_id"`
+
 	// MySQL connection — point this at HAProxy/MySQL Router when a proxy is in use.
 	Host           string `json:"host"`
 	Port           int    `json:"port"`            // default 3306
@@ -70,8 +74,25 @@ type MetricResponse struct {
 	Host          string            `json:"host"`
 	Port          int               `json:"port"`
 	DatabaseCount int               `json:"database_count"` // total user databases on this server
+	Users         []UserInfo        `json:"users"`
+	Databases     []DatabaseInfo    `json:"databases"`
 	Categories    map[string]any    `json:"categories"`
 	Errors        map[string]string `json:"errors,omitempty"`
+}
+
+// UserInfo describes one MySQL user account.
+type UserInfo struct {
+	User     string `json:"user"`
+	Host     string `json:"host"`
+	HasSuper bool   `json:"has_super"`
+}
+
+// DatabaseInfo describes one MySQL database with its size and character set.
+type DatabaseInfo struct {
+	Name      string `json:"name"`
+	SizeBytes int64  `json:"size_bytes"`
+	Charset   string `json:"charset"`
+	Collation string `json:"collation"`
 }
 
 // ---------------------------------------------------------------------------

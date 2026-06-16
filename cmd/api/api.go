@@ -9,7 +9,9 @@ import (
 	"time"
 
 	mysqlcluster "erawan-cluster/internal/cluster/mysql"
+	mysqldbmanager "erawan-cluster/internal/cluster/mysql/dbmanager"
 	pgsqlcluster "erawan-cluster/internal/cluster/pgsql"
+	"erawan-cluster/internal/cluster/pgsql/dbmanager"
 	"erawan-cluster/internal/haproxy"
 	"erawan-cluster/internal/security"
 	"github.com/go-chi/chi/v5"
@@ -21,6 +23,8 @@ type application struct {
 	haproxy      *haproxy.Service
 	mysqlCluster *mysqlcluster.Service
 	pgsqlCluster *pgsqlcluster.Service
+	pgsqlDB      *dbmanager.Service
+	mysqlDB      *mysqldbmanager.Service
 	cipher       *security.Cipher
 	baseDir      string
 }
@@ -64,6 +68,14 @@ func (app *application) mount() *chi.Mux {
 		r.Get("/jobs/{jobID}", app.getMySQLClusterJobHandler)
 		r.Post("/jobs/{jobID}/resume", app.resumeMySQLClusterJobHandler)
 		r.Post("/jobs/{jobID}/rollback", app.rollbackMySQLClusterJobHandler)
+
+		r.Post("/users", app.createMySQLUserHandler)
+		r.Patch("/users", app.updateMySQLUserHandler)
+		r.Put("/users/password", app.resetMySQLPasswordHandler)
+		r.Delete("/users", app.deleteMySQLUserHandler)
+		r.Post("/databases", app.createMySQLDatabaseHandler)
+		r.Patch("/databases", app.updateMySQLDatabaseHandler)
+		r.Delete("/databases", app.deleteMySQLDatabaseHandler)
 	})
 
 	r.Route("/cluster/pgsql", func(r chi.Router) {
@@ -72,6 +84,14 @@ func (app *application) mount() *chi.Mux {
 		r.Get("/jobs", app.listPGSQLClusterJobsHandler)
 		r.Get("/jobs/{jobID}", app.getPGSQLClusterJobHandler)
 		r.Post("/jobs/{jobID}/resume", app.resumePGSQLClusterJobHandler)
+
+		r.Post("/users", app.createPGSQLUserHandler)
+		r.Patch("/users", app.updatePGSQLUserHandler)
+		r.Put("/users/password", app.resetPGSQLPasswordHandler)
+		r.Delete("/users", app.deletePGSQLUserHandler)
+		r.Post("/databases", app.createPGSQLDatabaseHandler)
+		r.Patch("/databases", app.updatePGSQLDatabaseHandler)
+		r.Delete("/databases", app.deletePGSQLDatabaseHandler)
 	})
 
 	return r
