@@ -25,6 +25,19 @@ func (app *application) pgsqlMetricsHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	if req.JobID != "" {
+		host, port, user, password, nodeIPs, err := app.pgsqlCluster.ConnectionInfo(r.Context(), req.JobID)
+		if err != nil {
+			errJSON(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		req.Host = host
+		req.Port = port
+		req.User = user
+		req.Password = password
+		req.NodeIPs = nodeIPs
+	}
+
 	if req.Host == "" {
 		req.Host = app.config.proxyHost
 	}

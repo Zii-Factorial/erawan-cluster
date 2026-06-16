@@ -47,6 +47,10 @@ var allMetricCategories = []string{
 //
 // All snapshot categories return the current point-in-time value.
 type MetricRequest struct {
+	// JobID resolves host, port, user, and password from the stored deploy job.
+	// When set, explicit host/port/user/password fields are ignored.
+	JobID string `json:"job_id"`
+
 	// MySQL connection — point this at HAProxy/MySQL Router when a proxy is in use.
 	Host           string `json:"host"`
 	Port           int    `json:"port"`            // default 3306
