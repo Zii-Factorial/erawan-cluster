@@ -188,18 +188,17 @@ func (s *Service) UpdateUser(ctx context.Context, req UpdateUserRequest) error {
 	defer root.Close()
 
 	var rolName string
-	var rolSuper, rolReplication bool
 	err = root.QueryRowContext(ctx,
-		`SELECT rolname, rolsuper, rolreplication FROM pg_roles WHERE rolname = $1`,
+		`SELECT rolname FROM pg_roles WHERE rolname = $1`,
 		req.Username,
-	).Scan(&rolName, &rolSuper, &rolReplication)
+	).Scan(&rolName)
 	if err == sql.ErrNoRows {
 		return fmt.Errorf("user %q does not exist", req.Username)
 	}
 	if err != nil {
 		return fmt.Errorf("lookup role: %w", err)
 	}
-	if rolSuper || rolReplication || strings.HasPrefix(rolName, "pg_") {
+	if rolName == "postgres" || strings.HasPrefix(rolName, "pg_") {
 		return fmt.Errorf("user %q is a protected system role and cannot be renamed", req.Username)
 	}
 
