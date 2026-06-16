@@ -104,22 +104,19 @@ func (s *Service) ResetPassword(ctx context.Context, req ResetPasswordRequest) e
 	}
 	defer db.Close()
 
-	var superPriv string
+	var count int
 	err = db.QueryRowContext(ctx,
-		"SELECT Super_priv FROM mysql.user WHERE User = ? AND Host = '%'",
+		"SELECT COUNT(*) FROM mysql.user WHERE User = ? AND Host = '%'",
 		req.Username,
-	).Scan(&superPriv)
-	if err == sql.ErrNoRows {
-		return fmt.Errorf("user %q does not exist", req.Username)
-	}
+	).Scan(&count)
 	if err != nil {
 		return fmt.Errorf("lookup user: %w", err)
 	}
+	if count == 0 {
+		return fmt.Errorf("user %q does not exist", req.Username)
+	}
 	if systemUsers[req.Username] {
 		return fmt.Errorf("user %q is a protected system user", req.Username)
-	}
-	if superPriv == "Y" {
-		return fmt.Errorf("user %q has SUPER privilege and cannot be modified through this API", req.Username)
 	}
 
 	uid := mysqlID(req.Username)
