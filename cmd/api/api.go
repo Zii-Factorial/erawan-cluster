@@ -69,7 +69,7 @@ func (app *application) mount() *chi.Mux {
 		r.Post("/jobs/{jobID}/resume", app.resumeMySQLClusterJobHandler)
 		r.Post("/jobs/{jobID}/rollback", app.rollbackMySQLClusterJobHandler)
 		r.Post("/members", app.addMySQLMemberHandler)
-		r.Delete("/jobs/{jobID}/members", app.removeMySQLMemberHandler)
+		r.Delete("/members", app.removeMySQLMemberHandler)
 
 		r.Post("/users", app.createMySQLUserHandler)
 		r.Patch("/users", app.updateMySQLUserHandler)
@@ -87,7 +87,7 @@ func (app *application) mount() *chi.Mux {
 		r.Get("/jobs/{jobID}", app.getPGSQLClusterJobHandler)
 		r.Post("/jobs/{jobID}/resume", app.resumePGSQLClusterJobHandler)
 		r.Post("/members", app.addPGSQLMemberHandler)
-		r.Delete("/jobs/{jobID}/members", app.removePGSQLMemberHandler)
+		r.Delete("/members", app.removePGSQLMemberHandler)
 
 		r.Post("/users", app.createPGSQLUserHandler)
 		r.Patch("/users", app.updatePGSQLUserHandler)

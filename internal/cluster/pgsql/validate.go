@@ -131,6 +131,10 @@ func ValidateAddMemberRequest(req *AddMemberRequest) error {
 }
 
 func ValidateRemoveMemberRequest(req *RemoveMemberRequest) error {
+	req.JobID = strings.TrimSpace(req.JobID)
+	if req.JobID == "" {
+		return fmt.Errorf("job_id is required")
+	}
 	req.MemberIP = strings.TrimSpace(req.MemberIP)
 	if net.ParseIP(req.MemberIP) == nil {
 		return fmt.Errorf("member_ip must be a valid IP address")

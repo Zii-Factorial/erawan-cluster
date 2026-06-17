@@ -100,6 +100,7 @@ type AddMemberRequest struct {
 }
 
 type RemoveMemberRequest struct {
+	JobID    string `json:"job_id"`
 	MemberIP string `json:"member_ip"`
 	Force    bool   `json:"force,omitempty"`
 }

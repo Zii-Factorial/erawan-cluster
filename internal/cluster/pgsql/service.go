@@ -275,13 +275,13 @@ func (s *Service) AddMember(ctx context.Context, req AddMemberRequest) (*MemberO
 	return out, nil
 }
 
-func (s *Service) RemoveMember(ctx context.Context, jobID string, req RemoveMemberRequest) (*MemberOperationResult, error) {
+func (s *Service) RemoveMember(ctx context.Context, req RemoveMemberRequest) (*MemberOperationResult, error) {
 	if err := ValidateRemoveMemberRequest(&req); err != nil {
 		return nil, err
 	}
-	job, err := s.store.Load(jobID)
+	job, err := s.store.Load(req.JobID)
 	if err != nil {
-		return nil, fmt.Errorf("load job %q: %w", jobID, err)
+		return nil, fmt.Errorf("load job %q: %w", req.JobID, err)
 	}
 	if err := s.hydrateStoredSSHConfig(job); err != nil {
 		return nil, err
@@ -301,9 +301,9 @@ func (s *Service) RemoveMember(ctx context.Context, jobID string, req RemoveMemb
 		return nil, fmt.Errorf("member_ip %s is not in the cluster", req.MemberIP)
 	}
 
-	storedSecret, err := s.store.LoadSecret(jobID)
+	storedSecret, err := s.store.LoadSecret(req.JobID)
 	if err != nil {
-		return nil, fmt.Errorf("load job secret %q: %w", jobID, err)
+		return nil, fmt.Errorf("load job secret %q: %w", req.JobID, err)
 	}
 	secret := SecretInput{
 		PostgresPassword:   storedSecret.PostgresPassword,
@@ -313,7 +313,7 @@ func (s *Service) RemoveMember(ctx context.Context, jobID string, req RemoveMemb
 
 	timeout := time.Duration(job.Request.StepTimeoutSeconds) * time.Second
 	result := s.doRemoveMember(ctx, memberRunConfig{
-		jobID:    jobID,
+		jobID:    req.JobID,
 		spec:     job.Request,
 		secret:   secret,
 		memberIP: req.MemberIP,

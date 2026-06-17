@@ -772,11 +772,11 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"member_ip\": \"{{MEMBER_IP}}\",\n  \"force\": false\n}"
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"member_ip\": \"{{MEMBER_IP}}\",\n  \"force\": false\n}"
             },
-            "description": "Removes a standby node from the MySQL InnoDB Cluster. Blocks until the Ansible playbook completes (remove via mysqlsh → verify). The primary node cannot be removed.\n\nOn success, the job's stored spec is updated to remove the IP from `standby_ips`.\n\n- `member_ip` — IP of the standby node to remove\n- `force` — set `true` to force-remove a node that is unreachable or in an error state\n\nPasswords are always taken from the stored job secret — no password fields needed.",
+            "description": "Removes a standby node from the MySQL InnoDB Cluster. Blocks until the Ansible playbook completes (remove via mysqlsh → verify). The primary node cannot be removed.\n\nOn success, the job's stored spec is updated to remove the IP from `standby_ips`.\n\n- `job_id` — ID of the cluster deployment job\n- `member_ip` — IP of the standby node to remove\n- `force` — set `true` to force-remove a node that is unreachable or in an error state\n\nPasswords are always taken from the stored job secret — no password fields needed.",
             "url": {
-              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/jobs/{{JOB_ID}}/members",
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/members",
               "protocol": "http",
               "host": [
                 "{{API_HOST}}"
@@ -785,8 +785,6 @@
               "path": [
                 "cluster",
                 "mysql",
-                "jobs",
-                "{{JOB_ID}}",
                 "members"
               ]
             }
@@ -1033,11 +1031,11 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"member_ip\": \"{{MEMBER_IP}}\",\n  \"force\": false\n}"
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"member_ip\": \"{{MEMBER_IP}}\",\n  \"force\": false\n}"
             },
-            "description": "Removes a standby node from the PostgreSQL/Patroni cluster. Blocks until the Ansible playbook completes (stop Patroni/etcd on removed node → remove etcd membership → verify remaining nodes). The primary node cannot be removed.\n\nOn success, the job's stored spec is updated to remove the IP from `standby_ips`, and the DB manager's primary discovery is automatically corrected.\n\n- `member_ip` — IP of the standby node to remove\n- `force` — set `true` to proceed even if the node is unreachable (skips graceful stop)\n\nPasswords are always taken from the stored job secret — no password fields needed.",
+            "description": "Removes a standby node from the PostgreSQL/Patroni cluster. Blocks until the Ansible playbook completes (stop Patroni/etcd on removed node → remove etcd membership → verify remaining nodes). The primary node cannot be removed.\n\nOn success, the job's stored spec is updated to remove the IP from `standby_ips`, and the DB manager's primary discovery is automatically corrected.\n\n- `job_id` — ID of the cluster deployment job\n- `member_ip` — IP of the standby node to remove\n- `force` — set `true` to proceed even if the node is unreachable (skips graceful stop)\n\nPasswords are always taken from the stored job secret — no password fields needed.",
             "url": {
-              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/jobs/{{JOB_ID}}/members",
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/members",
               "protocol": "http",
               "host": [
                 "{{API_HOST}}"
@@ -1046,8 +1044,6 @@
               "path": [
                 "cluster",
                 "pgsql",
-                "jobs",
-                "{{JOB_ID}}",
                 "members"
               ]
             }

@@ -120,14 +120,13 @@ func (app *application) addPGSQLMemberHandler(w http.ResponseWriter, r *http.Req
 }
 
 func (app *application) removePGSQLMemberHandler(w http.ResponseWriter, r *http.Request) {
-	jobID := chi.URLParam(r, "jobID")
 	var req pgsqlcluster.RemoveMemberRequest
 	if err := decodeJSON(r, &req); err != nil {
 		errJSON(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
 
-	result, err := app.pgsqlCluster.RemoveMember(r.Context(), jobID, req)
+	result, err := app.pgsqlCluster.RemoveMember(r.Context(), req)
 	if err != nil {
 		if result != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, envelope{

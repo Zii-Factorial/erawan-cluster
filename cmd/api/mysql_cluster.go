@@ -135,14 +135,13 @@ func (app *application) addMySQLMemberHandler(w http.ResponseWriter, r *http.Req
 }
 
 func (app *application) removeMySQLMemberHandler(w http.ResponseWriter, r *http.Request) {
-	jobID := chi.URLParam(r, "jobID")
 	var req mysqlcluster.RemoveMemberRequest
 	if err := decodeJSON(r, &req); err != nil {
 		errJSON(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
 
-	result, err := app.mysqlCluster.RemoveMember(r.Context(), jobID, req)
+	result, err := app.mysqlCluster.RemoveMember(r.Context(), req)
 	if err != nil {
 		if result != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, envelope{
