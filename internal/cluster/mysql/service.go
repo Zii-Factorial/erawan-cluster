@@ -263,7 +263,7 @@ func (s *Service) AddMember(ctx context.Context, jobID string, req AddMemberRequ
 	result := s.doAddMember(ctx, memberRunConfig{
 		jobID:    jobID,
 		spec:     job.Request,
-		secret:   SecretInput{RootPassword: req.RootPassword, AdminPassword: adminPassword},
+		secret:   SecretInput{AdminPassword: adminPassword},
 		memberIP: req.MemberIP,
 		timeout:  timeout,
 	})

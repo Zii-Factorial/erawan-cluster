@@ -146,7 +146,6 @@ func (s *StoredSecret) UnmarshalJSON(data []byte) error {
 
 type AddMemberRequest struct {
 	MemberIP       string `json:"member_ip"`
-	RootPassword   string `json:"root_password,omitempty"`
 	AdminPassword  string `json:"admin_password,omitempty"`
 	AssumePrepared bool   `json:"assume_prepared"`
 }
