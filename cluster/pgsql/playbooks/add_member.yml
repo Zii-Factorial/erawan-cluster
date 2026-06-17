@@ -11,7 +11,18 @@
     - add_member_register
 
 # ---------------------------------------------------------------------------
-# PLAY 2 — Install, configure, and start etcd + Patroni on the new node
+# PLAY 2 — Preflight: wait for SSH and verify binaries on the new node
+# ---------------------------------------------------------------------------
+- name: New member preflight
+  hosts: pgsql_new_member
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  roles:
+    - preflight
+
+# ---------------------------------------------------------------------------
+# PLAY 3 — Install, configure, and start etcd + Patroni on the new node
 #           Uses base_config and configure_node with etcd "existing" state.
 # ---------------------------------------------------------------------------
 - name: Set up new PostgreSQL standby
@@ -28,7 +39,7 @@
     - add_member_join
 
 # ---------------------------------------------------------------------------
-# PLAY 3 — Verify cluster health on all nodes
+# PLAY 4 — Verify cluster health on all nodes
 # ---------------------------------------------------------------------------
 - name: Verify cluster after member addition
   hosts: all
