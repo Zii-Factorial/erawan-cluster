@@ -10,21 +10,13 @@
   register: etcd_members_json
   changed_when: false
 
-- name: Find member ID (decimal) for removed node
+- name: Find member ID and convert to hex string
   ansible.builtin.set_fact:
-    _etcd_id_decimal: >-
-      {{
-        (etcd_members_json.stdout | from_json).members
-        | selectattr('peerURLs', 'contains', 'http://' + remove_member_ip + ':' + etcd_peer_port | string)
-        | map(attribute='ID')
-        | first
-        | default(0)
-        | int
-      }}
-
-- name: Convert member ID to hex string
-  ansible.builtin.set_fact:
-    etcd_remove_member_id: "{{ '%x' % _etcd_id_decimal if _etcd_id_decimal != 0 else '' }}"
+    etcd_remove_member_id: >-
+      {%- set mid = (etcd_members_json.stdout | from_json).members
+          | selectattr('peerURLs', 'contains', 'http://' + remove_member_ip + ':' + (etcd_peer_port | string))
+          | map(attribute='ID') | first | default(0) | int -%}
+      {{ '%x' % mid if mid != 0 else '' }}
 
 - name: Remove etcd member
   ansible.builtin.shell: |
