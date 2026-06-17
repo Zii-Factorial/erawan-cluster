@@ -29,12 +29,51 @@
         | list | length > 0
       }}
 
-- name: Register new member in etcd cluster
+# Unstarted members (name == "") from prior failed attempts cause
+# "etcdserver: unhealthy cluster" on the next member add. Remove them first.
+- name: Remove orphaned unstarted etcd members from prior failed attempts
+  ansible.builtin.shell: |
+    set -euo pipefail
+    etcdctl \
+      --endpoints="http://{{ ansible_host }}:{{ etcd_client_port }}" \
+      member list --write-out=json \
+    | python3 -c "
+    import json, sys, subprocess
+    data = json.load(sys.stdin)
+    removed = 0
+    for m in data.get('members', []):
+        if m.get('name', '').strip():
+            continue  # started — leave it alone
+        peer_urls = m.get('peerURLs', [])
+        if any('{{ new_member_ip }}' in url for url in peer_urls):
+            continue  # this is our intended new member
+        mid = format(m['ID'], 'x')
+        print('removing orphaned member id=' + mid, flush=True)
+        subprocess.run([
+            'etcdctl',
+            '--endpoints=http://{{ ansible_host }}:{{ etcd_client_port }}',
+            'member', 'remove', mid,
+        ], check=True)
+        removed += 1
+    print('removed=' + str(removed), flush=True)
+    "
+  args:
+    executable: /bin/bash
+  register: _etcd_orphan_cleanup
+  changed_when: "'removed=0' not in _etcd_orphan_cleanup.stdout"
+  when: not etcd_member_already_registered
+
+# Use --learner so this works even on single-node clusters.
+# Direct member add requires post-add quorum (e.g. 2 of 2) but a 1-node cluster
+# only has 1 started member, so it always returns "unhealthy cluster".
+# Learner registration skips the quorum gate, then we promote after the node syncs.
+- name: Register new member in etcd cluster as learner
   ansible.builtin.shell: |
     set -euo pipefail
     etcdctl \
       --endpoints="http://{{ ansible_host }}:{{ etcd_client_port }}" \
       member add new_member \
+      --learner \
       --peer-urls="http://{{ new_member_ip }}:{{ etcd_peer_port }}"
   args:
     executable: /bin/bash

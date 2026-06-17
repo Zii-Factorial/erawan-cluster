@@ -1,5 +1,5 @@
 ---
-- name: Start etcd and join existing cluster
+- name: Start etcd and join existing cluster as learner
   ansible.builtin.systemd:
     name: etcd
     enabled: true
@@ -14,6 +14,70 @@
   retries: 30
   delay: 5
   changed_when: false
+
+# Query the primary's etcd (which is always a voter) to find our own member ID.
+# This is needed to promote ourselves from learner to voting member.
+- name: Find own etcd member ID from primary
+  ansible.builtin.shell: |
+    set -euo pipefail
+    etcdctl \
+      --endpoints="http://{{ primary_ip }}:{{ etcd_client_port }}" \
+      member list --write-out=json \
+    | python3 -c "
+    import json, sys
+    data = json.load(sys.stdin)
+    my_ip = '{{ ansible_host }}'
+    for m in data.get('members', []):
+        if any(my_ip in url for url in m.get('peerURLs', [])):
+            print(format(m['ID'], 'x'))
+            sys.exit(0)
+    print('', end='')
+    "
+  args:
+    executable: /bin/bash
+  register: _etcd_own_id
+  changed_when: false
+
+- name: Check if this member is still a learner
+  ansible.builtin.shell: |
+    set -euo pipefail
+    etcdctl \
+      --endpoints="http://{{ primary_ip }}:{{ etcd_client_port }}" \
+      member list --write-out=json \
+    | python3 -c "
+    import json, sys
+    data = json.load(sys.stdin)
+    my_ip = '{{ ansible_host }}'
+    for m in data.get('members', []):
+        if any(my_ip in url for url in m.get('peerURLs', [])):
+            print('true' if m.get('isLearner', False) else 'false')
+            sys.exit(0)
+    print('false')
+    "
+  args:
+    executable: /bin/bash
+  register: _etcd_is_learner
+  changed_when: false
+  when: _etcd_own_id.stdout | trim != ''
+
+# etcd refuses promotion until the learner has caught up to the leader's raft log.
+# Retry up to 3 min — etcd itself enforces the sync check so there is no data-loss risk.
+- name: Promote learner to voting member
+  ansible.builtin.shell: |
+    set -euo pipefail
+    etcdctl \
+      --endpoints="http://{{ primary_ip }}:{{ etcd_client_port }}" \
+      member promote {{ _etcd_own_id.stdout | trim }}
+  args:
+    executable: /bin/bash
+  register: _etcd_promote
+  until: _etcd_promote.rc == 0
+  retries: 18
+  delay: 10
+  changed_when: _etcd_promote.rc == 0
+  when:
+    - _etcd_own_id.stdout | trim != ''
+    - _etcd_is_learner.stdout | trim == 'true'
 
 - name: Start Patroni and join cluster as standby
   ansible.builtin.systemd:
