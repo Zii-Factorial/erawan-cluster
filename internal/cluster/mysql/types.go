@@ -145,9 +145,9 @@ func (s *StoredSecret) UnmarshalJSON(data []byte) error {
 }
 
 type AddMemberRequest struct {
-	MemberIP       string `json:"member_ip"`
-	AdminPassword  string `json:"admin_password,omitempty"`
-	AssumePrepared bool   `json:"assume_prepared"`
+	JobID          string   `json:"job_id"`
+	MemberIPs      []string `json:"member_ips"`
+	AssumePrepared bool     `json:"assume_prepared,omitempty"`
 }
 
 type RemoveMemberRequest struct {
@@ -157,8 +157,8 @@ type RemoveMemberRequest struct {
 }
 
 type MemberOperationResult struct {
-	Action   string     `json:"action"`
-	MemberIP string     `json:"member_ip"`
-	Spec     StoredSpec `json:"spec"`
-	Step     StepResult `json:"step"`
+	Action    string       `json:"action"`
+	MemberIPs []string     `json:"member_ips"`
+	Spec      StoredSpec   `json:"spec"`
+	Steps     []StepResult `json:"steps"`
 }

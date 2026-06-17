@@ -122,9 +122,24 @@ func ValidateRollbackSecrets(req RollbackRequest) (SecretInput, error) {
 }
 
 func ValidateAddMemberRequest(req *AddMemberRequest) error {
-	req.MemberIP = strings.TrimSpace(req.MemberIP)
-	if net.ParseIP(req.MemberIP) == nil {
-		return fmt.Errorf("member_ip must be a valid IP address")
+	req.JobID = strings.TrimSpace(req.JobID)
+	if req.JobID == "" {
+		return fmt.Errorf("job_id is required")
+	}
+	if len(req.MemberIPs) == 0 {
+		return fmt.Errorf("member_ips must contain at least one IP address")
+	}
+	seen := make(map[string]struct{})
+	for i, ip := range req.MemberIPs {
+		ip = strings.TrimSpace(ip)
+		if net.ParseIP(ip) == nil {
+			return fmt.Errorf("member_ips[%d] must be a valid IP address", i)
+		}
+		if _, ok := seen[ip]; ok {
+			return fmt.Errorf("duplicate IP in member_ips: %s", ip)
+		}
+		seen[ip] = struct{}{}
+		req.MemberIPs[i] = ip
 	}
 	return nil
 }

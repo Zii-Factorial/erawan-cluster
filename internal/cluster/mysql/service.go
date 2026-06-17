@@ -229,56 +229,62 @@ func (s *Service) Rollback(ctx context.Context, jobID string, req RollbackReques
 	return job, nil
 }
 
-func (s *Service) AddMember(ctx context.Context, jobID string, req AddMemberRequest) (*MemberOperationResult, error) {
+func (s *Service) AddMember(ctx context.Context, req AddMemberRequest) (*MemberOperationResult, error) {
 	if err := ValidateAddMemberRequest(&req); err != nil {
 		return nil, err
 	}
-	job, err := s.store.Load(jobID)
+	job, err := s.store.Load(req.JobID)
 	if err != nil {
-		return nil, fmt.Errorf("load job %q: %w", jobID, err)
+		return nil, fmt.Errorf("load job %q: %w", req.JobID, err)
 	}
 	if err := s.hydrateStoredSSHConfig(job); err != nil {
 		return nil, err
 	}
 
-	if job.Request.PrimaryIP == req.MemberIP {
-		return nil, fmt.Errorf("member_ip %s is already the primary", req.MemberIP)
-	}
+	existing := make(map[string]struct{}, len(job.Request.StandbyIPs)+1)
+	existing[job.Request.PrimaryIP] = struct{}{}
 	for _, ip := range job.Request.StandbyIPs {
-		if ip == req.MemberIP {
-			return nil, fmt.Errorf("member_ip %s is already in the cluster", req.MemberIP)
+		existing[ip] = struct{}{}
+	}
+	for _, ip := range req.MemberIPs {
+		if _, ok := existing[ip]; ok {
+			return nil, fmt.Errorf("member_ip %s is already in the cluster", ip)
 		}
 	}
 
-	storedSecret, err := s.store.LoadSecret(jobID)
+	storedSecret, err := s.store.LoadSecret(req.JobID)
 	if err != nil {
-		return nil, fmt.Errorf("load job secret %q: %w", jobID, err)
-	}
-	adminPassword := strings.TrimSpace(req.AdminPassword)
-	if adminPassword == "" {
-		adminPassword = storedSecret.AdminPassword
+		return nil, fmt.Errorf("load job secret %q: %w", req.JobID, err)
 	}
 
 	timeout := time.Duration(job.Request.StepTimeoutSeconds) * time.Second
-	result := s.doAddMember(ctx, memberRunConfig{
-		jobID:    jobID,
-		spec:     job.Request,
-		secret:   SecretInput{AdminPassword: adminPassword},
-		memberIP: req.MemberIP,
-		timeout:  timeout,
-	})
-
-	if result.Status == JobStatusCompleted {
-		job.Request.StandbyIPs = append(job.Request.StandbyIPs, req.MemberIP)
-		_ = s.store.Save(job)
+	out := &MemberOperationResult{
+		Action:    "add",
+		MemberIPs: req.MemberIPs,
+		Spec:      job.Request,
+		Steps:     make([]StepResult, 0, len(req.MemberIPs)),
 	}
 
-	return &MemberOperationResult{
-		Action:   "add",
-		MemberIP: req.MemberIP,
-		Spec:     job.Request,
-		Step:     result,
-	}, stepError(result)
+	for _, ip := range req.MemberIPs {
+		result := s.doAddMember(ctx, memberRunConfig{
+			jobID:    req.JobID,
+			spec:     job.Request,
+			secret:   SecretInput{AdminPassword: storedSecret.AdminPassword},
+			memberIP: ip,
+			timeout:  timeout,
+		})
+		out.Steps = append(out.Steps, result)
+		if result.Status == JobStatusCompleted {
+			job.Request.StandbyIPs = append(job.Request.StandbyIPs, ip)
+			_ = s.store.Save(job)
+		} else {
+			out.Spec = job.Request
+			return out, stepError(result)
+		}
+	}
+
+	out.Spec = job.Request
+	return out, nil
 }
 
 func (s *Service) RemoveMember(ctx context.Context, jobID string, req RemoveMemberRequest) (*MemberOperationResult, error) {
@@ -338,10 +344,10 @@ func (s *Service) RemoveMember(ctx context.Context, jobID string, req RemoveMemb
 	}
 
 	return &MemberOperationResult{
-		Action:   "remove",
-		MemberIP: req.MemberIP,
-		Spec:     job.Request,
-		Step:     result,
+		Action:    "remove",
+		MemberIPs: []string{req.MemberIP},
+		Spec:      job.Request,
+		Steps:     []StepResult{result},
 	}, stepError(result)
 }
 

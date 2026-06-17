@@ -95,21 +95,20 @@ type StoredSecret struct {
 }
 
 type AddMemberRequest struct {
-	MemberIP  string `json:"member_ip"`
-	AdminPassword string `json:"admin_password,omitempty"`
+	JobID     string   `json:"job_id"`
+	MemberIPs []string `json:"member_ips"`
 }
 
 type RemoveMemberRequest struct {
-	MemberIP      string `json:"member_ip"`
-	AdminPassword string `json:"admin_password,omitempty"`
-	Force         bool   `json:"force,omitempty"`
+	MemberIP string `json:"member_ip"`
+	Force    bool   `json:"force,omitempty"`
 }
 
 type MemberOperationResult struct {
-	Action   string     `json:"action"`
-	MemberIP string     `json:"member_ip"`
-	Spec     StoredSpec `json:"spec"`
-	Step     StepResult `json:"step"`
+	Action    string       `json:"action"`
+	MemberIPs []string     `json:"member_ips"`
+	Spec      StoredSpec   `json:"spec"`
+	Steps     []StepResult `json:"steps"`
 }
 
 func (r DeployRequest) NewUserSSLRequiredEnabled() bool {

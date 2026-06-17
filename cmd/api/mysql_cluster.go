@@ -112,14 +112,13 @@ func (app *application) rollbackMySQLClusterJobHandler(w http.ResponseWriter, r 
 }
 
 func (app *application) addMySQLMemberHandler(w http.ResponseWriter, r *http.Request) {
-	jobID := chi.URLParam(r, "jobID")
 	var req mysqlcluster.AddMemberRequest
 	if err := decodeJSON(r, &req); err != nil {
 		errJSON(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
 
-	result, err := app.mysqlCluster.AddMember(r.Context(), jobID, req)
+	result, err := app.mysqlCluster.AddMember(r.Context(), req)
 	if err != nil {
 		if result != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, envelope{
