@@ -73,7 +73,7 @@
   register: pgsql_replication_count
   changed_when: false
   until: pgsql_replication_count.stdout | int >= (standby_ips | length)
-  retries: 18
+  retries: "{{ ((step_timeout_seconds | default(900) | int) / 10) | int }}"
   delay: 10
   run_once: true
   delegate_to: "{{ groups['pgsql_primary'][0] }}"
