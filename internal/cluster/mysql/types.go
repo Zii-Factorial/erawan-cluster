@@ -143,3 +143,23 @@ func (s *StoredSecret) UnmarshalJSON(data []byte) error {
 	}
 	return nil
 }
+
+type AddMemberRequest struct {
+	MemberIP       string `json:"member_ip"`
+	RootPassword   string `json:"root_password,omitempty"`
+	AdminPassword  string `json:"admin_password,omitempty"`
+	AssumePrepared bool   `json:"assume_prepared"`
+}
+
+type RemoveMemberRequest struct {
+	MemberIP      string `json:"member_ip"`
+	AdminPassword string `json:"admin_password,omitempty"`
+	Force         bool   `json:"force,omitempty"`
+}
+
+type MemberOperationResult struct {
+	Action   string     `json:"action"`
+	MemberIP string     `json:"member_ip"`
+	Spec     StoredSpec `json:"spec"`
+	Step     StepResult `json:"step"`
+}

@@ -1,0 +1,39 @@
+---
+- name: Start etcd and join existing cluster
+  ansible.builtin.systemd:
+    name: etcd
+    enabled: true
+    state: started
+
+- name: Wait for local etcd to become healthy
+  ansible.builtin.uri:
+    url: "http://{{ ansible_host }}:{{ etcd_client_port }}/health"
+    return_content: true
+  register: etcd_health
+  until: etcd_health.status == 200 and ('true' in (etcd_health.content | lower))
+  retries: 30
+  delay: 5
+  changed_when: false
+
+- name: Start Patroni and join cluster as standby
+  ansible.builtin.systemd:
+    name: patroni
+    enabled: true
+    state: started
+
+- name: Wait for Patroni REST port to open
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: "{{ patroni_rest_port }}"
+    state: started
+    timeout: 300
+
+- name: Wait for node to reach replica state
+  ansible.builtin.uri:
+    url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/replica"
+    return_content: true
+  register: _patroni_replica
+  until: _patroni_replica.status == 200
+  retries: 60
+  delay: 10
+  changed_when: false

@@ -110,3 +110,51 @@ func (app *application) rollbackMySQLClusterJobHandler(w http.ResponseWriter, r 
 	}
 	ok(w, "MySQL cluster rollback executed", job)
 }
+
+func (app *application) addMySQLMemberHandler(w http.ResponseWriter, r *http.Request) {
+	jobID := chi.URLParam(r, "jobID")
+	var req mysqlcluster.AddMemberRequest
+	if err := decodeJSON(r, &req); err != nil {
+		errJSON(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	result, err := app.mysqlCluster.AddMember(r.Context(), jobID, req)
+	if err != nil {
+		if result != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, envelope{
+				"status":  "error",
+				"message": err.Error(),
+				"data":    result,
+			})
+			return
+		}
+		errJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(w, "MySQL cluster member added", result)
+}
+
+func (app *application) removeMySQLMemberHandler(w http.ResponseWriter, r *http.Request) {
+	jobID := chi.URLParam(r, "jobID")
+	var req mysqlcluster.RemoveMemberRequest
+	if err := decodeJSON(r, &req); err != nil {
+		errJSON(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	result, err := app.mysqlCluster.RemoveMember(r.Context(), jobID, req)
+	if err != nil {
+		if result != nil {
+			writeJSON(w, http.StatusUnprocessableEntity, envelope{
+				"status":  "error",
+				"message": err.Error(),
+				"data":    result,
+			})
+			return
+		}
+		errJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ok(w, "MySQL cluster member removed", result)
+}

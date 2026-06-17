@@ -1,0 +1,33 @@
+---
+# ---------------------------------------------------------------------------
+# PLAY 1 — Configure new MySQL instance (skipped if assume_prepared=true)
+# ---------------------------------------------------------------------------
+- name: Configure new MySQL member
+  hosts: mysql_new_member
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  roles:
+    - configure_instances
+
+# ---------------------------------------------------------------------------
+# PLAY 2 — Add new instance to InnoDB Cluster from primary
+# ---------------------------------------------------------------------------
+- name: Add new member to InnoDB Cluster
+  hosts: mysql_primary
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  roles:
+    - add_member
+
+# ---------------------------------------------------------------------------
+# PLAY 3 — Verify cluster health
+# ---------------------------------------------------------------------------
+- name: Verify cluster after member addition
+  hosts: mysql_primary
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  roles:
+    - verify_cluster

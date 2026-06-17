@@ -94,6 +94,24 @@ type StoredSecret struct {
 	AdminPassword      string `json:"admin_password"`
 }
 
+type AddMemberRequest struct {
+	MemberIP  string `json:"member_ip"`
+	AdminPassword string `json:"admin_password,omitempty"`
+}
+
+type RemoveMemberRequest struct {
+	MemberIP      string `json:"member_ip"`
+	AdminPassword string `json:"admin_password,omitempty"`
+	Force         bool   `json:"force,omitempty"`
+}
+
+type MemberOperationResult struct {
+	Action   string     `json:"action"`
+	MemberIP string     `json:"member_ip"`
+	Spec     StoredSpec `json:"spec"`
+	Step     StepResult `json:"step"`
+}
+
 func (r DeployRequest) NewUserSSLRequiredEnabled() bool {
 	if r.NewUserSSLRequired == nil {
 		return true

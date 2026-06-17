@@ -1,0 +1,59 @@
+---
+- name: Retrieve current etcd member list
+  ansible.builtin.shell: |
+    set -euo pipefail
+    etcdctl \
+      --endpoints="http://{{ ansible_host }}:{{ etcd_client_port }}" \
+      member list --write-out=json
+  args:
+    executable: /bin/bash
+  register: etcd_members_json
+  changed_when: false
+
+- name: Parse existing etcd cluster peers
+  ansible.builtin.set_fact:
+    etcd_existing_peers: >-
+      {{
+        (etcd_members_json.stdout | from_json).members
+        | map(attribute='peerURLs')
+        | flatten
+        | join(',')
+      }}
+
+- name: Check whether new member is already registered
+  ansible.builtin.set_fact:
+    etcd_member_already_registered: >-
+      {{
+        (etcd_members_json.stdout | from_json).members
+        | selectattr('peerURLs', 'contains', 'http://' + new_member_ip + ':' + etcd_peer_port | string)
+        | list | length > 0
+      }}
+
+- name: Register new member in etcd cluster
+  ansible.builtin.shell: |
+    set -euo pipefail
+    etcdctl \
+      --endpoints="http://{{ ansible_host }}:{{ etcd_client_port }}" \
+      member add new_member \
+      --peer-urls="http://{{ new_member_ip }}:{{ etcd_peer_port }}"
+  args:
+    executable: /bin/bash
+  when: not etcd_member_already_registered
+  register: etcd_member_add
+
+- name: Build initial cluster string for new member
+  ansible.builtin.set_fact:
+    etcd_initial_cluster_for_new_member: >-
+      {{
+        etcd_existing_peers + ',new_member=http://' + new_member_ip + ':' + etcd_peer_port | string
+      }}
+  when: not etcd_member_already_registered
+
+- name: Use existing cluster peers when member already registered
+  ansible.builtin.set_fact:
+    etcd_initial_cluster_for_new_member: "{{ etcd_existing_peers }}"
+  when: etcd_member_already_registered
+
+- name: Export initial cluster string for new member
+  ansible.builtin.set_fact:
+    hostvars_etcd_initial_cluster: "{{ etcd_initial_cluster_for_new_member }}"

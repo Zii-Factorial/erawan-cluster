@@ -60,6 +60,8 @@ func main() {
 	clusterSSHPrivateKeyPath := env.GetString("CLUSTER_SSH_PRIVATE_KEY_PATH", "")
 	deployPlaybook := env.GetString("MYSQL_DEPLOY_PLAYBOOK", filepath.Join(baseDir, "cluster/mysql/playbooks/deploy.yml"))
 	rollbackPlaybook := env.GetString("MYSQL_ROLLBACK_PLAYBOOK", filepath.Join(baseDir, "cluster/mysql/playbooks/rollback.yml"))
+	mysqlAddMemberPlaybook := env.GetString("MYSQL_ADD_MEMBER_PLAYBOOK", filepath.Join(baseDir, "cluster/mysql/playbooks/add_member.yml"))
+	mysqlRemoveMemberPlaybook := env.GetString("MYSQL_REMOVE_MEMBER_PLAYBOOK", filepath.Join(baseDir, "cluster/mysql/playbooks/remove_member.yml"))
 	mysqlAnsibleDebug := env.GetBoolAny([]string{"CLUSTER_ANSIBLE_DEBUG", "MYSQL_ANSIBLE_DEBUG"}, false)
 	mysqlAnsibleVerbosity := env.GetIntAny([]string{"CLUSTER_ANSIBLE_VERBOSITY", "MYSQL_ANSIBLE_VERBOSITY"}, 0)
 	mysqlStepOutputMaxChars := env.GetIntAny([]string{"CLUSTER_STEP_OUTPUT_MAX_CHARS", "MYSQL_STEP_OUTPUT_MAX_CHARS"}, 8000)
@@ -70,6 +72,8 @@ func main() {
 		mysqlStepOutputMaxChars = 200000
 	}
 	runner := mysqlcluster.NewRunner(ansibleBin, deployPlaybook, rollbackPlaybook)
+	runner.SetAddMemberPlaybook(mysqlAddMemberPlaybook)
+	runner.SetRemoveMemberPlaybook(mysqlRemoveMemberPlaybook)
 	runner.SetDebug(mysqlAnsibleVerbosity, mysqlAnsibleDebug, mysqlStepOutputMaxChars)
 	mysqlSvc := mysqlcluster.NewService(store, runner)
 	mysqlSvc.SetContext(ctx)
@@ -80,6 +84,8 @@ func main() {
 	}
 
 	pgsqlDeployPlaybook := env.GetString("PGSQL_DEPLOY_PLAYBOOK", filepath.Join(baseDir, "cluster/pgsql/playbooks/deploy.yml"))
+	pgsqlAddMemberPlaybook := env.GetString("PGSQL_ADD_MEMBER_PLAYBOOK", filepath.Join(baseDir, "cluster/pgsql/playbooks/add_member.yml"))
+	pgsqlRemoveMemberPlaybook := env.GetString("PGSQL_REMOVE_MEMBER_PLAYBOOK", filepath.Join(baseDir, "cluster/pgsql/playbooks/remove_member.yml"))
 	pgsqlAnsibleDebug := env.GetBoolAny([]string{"CLUSTER_ANSIBLE_DEBUG", "PGSQL_ANSIBLE_DEBUG"}, false)
 	pgsqlAnsibleVerbosity := env.GetIntAny([]string{"CLUSTER_ANSIBLE_VERBOSITY", "PGSQL_ANSIBLE_VERBOSITY"}, 0)
 	pgsqlStepOutputMaxChars := env.GetIntAny([]string{"CLUSTER_STEP_OUTPUT_MAX_CHARS", "PGSQL_STEP_OUTPUT_MAX_CHARS"}, 8000)
@@ -90,6 +96,8 @@ func main() {
 		pgsqlStepOutputMaxChars = 200000
 	}
 	pgsqlRunner := pgsqlcluster.NewRunner(ansibleBin, pgsqlDeployPlaybook)
+	pgsqlRunner.SetAddMemberPlaybook(pgsqlAddMemberPlaybook)
+	pgsqlRunner.SetRemoveMemberPlaybook(pgsqlRemoveMemberPlaybook)
 	pgsqlRunner.SetDebug(pgsqlAnsibleVerbosity, pgsqlAnsibleDebug, pgsqlStepOutputMaxChars)
 	pgsqlSvc := pgsqlcluster.NewService(pgsqlStore, pgsqlRunner)
 	pgsqlSvc.SetContext(ctx)

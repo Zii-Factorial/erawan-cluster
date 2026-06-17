@@ -145,6 +145,11 @@
       "key": "DBMGR_DBNAME",
       "value": "newdb",
       "description": "Database name to create or delete via DB Manager"
+    },
+    {
+      "key": "MEMBER_IP",
+      "value": "10.0.0.4",
+      "description": "IP of the node to add or remove from the cluster"
     }
 
   ],
@@ -714,6 +719,80 @@
               ]
             }
           }
+        },
+        {
+          "name": "Add Member",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"member_ip\": \"{{MEMBER_IP}}\",\n  \"assume_prepared\": false,\n  \"root_password\": \"\",\n  \"admin_password\": \"\"\n}"
+            },
+            "description": "Adds a new standby node to an existing MySQL InnoDB Cluster. Blocks until the Ansible playbook completes (configure → add via mysqlsh → verify).\n\nOn success, the job's stored spec is updated with the new `standby_ips`, so all subsequent operations (metrics, DB manager) automatically include the new node.\n\n- `member_ip` — IP of the new node to add\n- `assume_prepared` — set `true` to skip the `configure_instances` step (node already has MySQL installed and configured)\n- `root_password` — required when `assume_prepared` is `false`\n- `admin_password` — leave empty to reuse the password stored from the original deploy",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/jobs/{{JOB_ID}}/members",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "mysql",
+                "jobs",
+                "{{JOB_ID}}",
+                "members"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Remove Member",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"member_ip\": \"{{MEMBER_IP}}\",\n  \"force\": false,\n  \"admin_password\": \"\"\n}"
+            },
+            "description": "Removes a standby node from the MySQL InnoDB Cluster. Blocks until the Ansible playbook completes (remove via mysqlsh → verify). The primary node cannot be removed.\n\nOn success, the job's stored spec is updated to remove the IP from `standby_ips`.\n\n- `member_ip` — IP of the standby node to remove\n- `force` — set `true` to force-remove a node that is unreachable or in an error state\n- `admin_password` — leave empty to reuse the password stored from the original deploy",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/jobs/{{JOB_ID}}/members",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "mysql",
+                "jobs",
+                "{{JOB_ID}}",
+                "members"
+              ]
+            }
+          }
         }
       ]
     },
@@ -900,6 +979,80 @@
                 "jobs",
                 "{{JOB_ID}}",
                 "resume"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Add Member",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"member_ip\": \"{{MEMBER_IP}}\",\n  \"admin_password\": \"\"\n}"
+            },
+            "description": "Adds a new standby node to an existing PostgreSQL/Patroni cluster. Blocks until the Ansible playbook completes (register in etcd → base_config + configure_node on new node → start etcd + Patroni → verify).\n\nOn success, the job's stored spec is updated with the new `standby_ips`, so the DB manager's primary discovery and all metrics calls automatically include the new node.\n\n- `member_ip` — IP of the new standby node to add\n- `admin_password` — leave empty to reuse the Patroni admin password stored from the original deploy",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/jobs/{{JOB_ID}}/members",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "pgsql",
+                "jobs",
+                "{{JOB_ID}}",
+                "members"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Remove Member",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"member_ip\": \"{{MEMBER_IP}}\",\n  \"force\": false,\n  \"admin_password\": \"\"\n}"
+            },
+            "description": "Removes a standby node from the PostgreSQL/Patroni cluster. Blocks until the Ansible playbook completes (stop Patroni/etcd on removed node → remove etcd membership → verify remaining nodes). The primary node cannot be removed.\n\nOn success, the job's stored spec is updated to remove the IP from `standby_ips`, and the DB manager's primary discovery is automatically corrected.\n\n- `member_ip` — IP of the standby node to remove\n- `force` — set `true` to proceed even if the node is unreachable (skips graceful stop)\n- `admin_password` — leave empty to reuse the Patroni admin password stored from the original deploy",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/jobs/{{JOB_ID}}/members",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "pgsql",
+                "jobs",
+                "{{JOB_ID}}",
+                "members"
               ]
             }
           }

@@ -121,6 +121,22 @@ func ValidateRollbackSecrets(req RollbackRequest) (SecretInput, error) {
 	return secret, nil
 }
 
+func ValidateAddMemberRequest(req *AddMemberRequest) error {
+	req.MemberIP = strings.TrimSpace(req.MemberIP)
+	if net.ParseIP(req.MemberIP) == nil {
+		return fmt.Errorf("member_ip must be a valid IP address")
+	}
+	return nil
+}
+
+func ValidateRemoveMemberRequest(req *RemoveMemberRequest) error {
+	req.MemberIP = strings.TrimSpace(req.MemberIP)
+	if net.ParseIP(req.MemberIP) == nil {
+		return fmt.Errorf("member_ip must be a valid IP address")
+	}
+	return nil
+}
+
 func ValidateServiceSSHConfig(user, privateKeyPath string) (string, string, error) {
 	normalizedUser := strings.TrimSpace(user)
 	if !userPattern.MatchString(normalizedUser) {

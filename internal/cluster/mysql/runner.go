@@ -15,12 +15,14 @@ import (
 )
 
 type Runner struct {
-	ansibleBin       string
-	deployPlaybook   string
-	rollbackPlaybook string
-	ansibleVerbosity int
-	streamLogs       bool
-	maxOutputChars   int
+	ansibleBin           string
+	deployPlaybook       string
+	rollbackPlaybook     string
+	addMemberPlaybook    string
+	removeMemberPlaybook string
+	ansibleVerbosity     int
+	streamLogs           bool
+	maxOutputChars       int
 }
 
 func NewRunner(ansibleBin, deployPlaybook, rollbackPlaybook string) *Runner {
@@ -34,6 +36,9 @@ func NewRunner(ansibleBin, deployPlaybook, rollbackPlaybook string) *Runner {
 		maxOutputChars:   8000,
 	}
 }
+
+func (r *Runner) SetAddMemberPlaybook(path string)    { r.addMemberPlaybook = path }
+func (r *Runner) SetRemoveMemberPlaybook(path string) { r.removeMemberPlaybook = path }
 
 func (r *Runner) SetDebug(verbosity int, streamLogs bool, maxOutputChars int) {
 	if verbosity < 0 {
@@ -54,6 +59,15 @@ type runConfig struct {
 	timeout time.Duration
 }
 
+type memberRunConfig struct {
+	jobID    string
+	spec     StoredSpec
+	secret   SecretInput
+	memberIP string
+	force    bool
+	timeout  time.Duration
+}
+
 func (r *Runner) RunDeployStep(ctx context.Context, cfg runConfig) StepResult {
 	return r.run(ctx, cfg, r.deployPlaybook)
 }
@@ -70,6 +84,183 @@ func (r *Runner) RunRollback(ctx context.Context, jobID string, spec StoredSpec,
 		timeout: timeout,
 	}
 	return r.run(ctx, cfg, r.rollbackPlaybook)
+}
+
+func (r *Runner) RunAddMember(ctx context.Context, cfg memberRunConfig) StepResult {
+	return r.runMember(ctx, cfg, r.addMemberPlaybook, "add_member")
+}
+
+func (r *Runner) RunRemoveMember(ctx context.Context, cfg memberRunConfig) StepResult {
+	return r.runMember(ctx, cfg, r.removeMemberPlaybook, "remove_member")
+}
+
+func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, stepName string) (result StepResult) {
+	result = StepResult{
+		Name:      stepName,
+		Status:    JobStatusRunning,
+		StartedAt: time.Now().UTC(),
+		ExitCode:  -1,
+	}
+	defer func() { result.EndedAt = time.Now().UTC() }()
+
+	if strings.TrimSpace(playbook) == "" {
+		result.Status = JobStatusFailed
+		result.Message = "playbook path is not configured"
+		return
+	}
+
+	workspace, err := os.MkdirTemp("", "mysql-member-job-")
+	if err != nil {
+		result.Status = JobStatusFailed
+		result.Message = fmt.Sprintf("create temp dir: %v", err)
+		return
+	}
+	defer os.RemoveAll(workspace)
+
+	inventoryPath := filepath.Join(workspace, "inventory.yml")
+	varsPath := filepath.Join(workspace, "vars.json")
+
+	var inventory string
+	if stepName == "add_member" {
+		inventory = buildAddMemberInventoryYAML(cfg.spec, cfg.memberIP)
+	} else {
+		inventory = buildInventoryYAML(cfg.spec)
+	}
+	if err := os.WriteFile(inventoryPath, []byte(inventory), 0o600); err != nil {
+		result.Status = JobStatusFailed
+		result.Message = fmt.Sprintf("write inventory: %v", err)
+		return
+	}
+
+	stepTimeout := cfg.spec.StepTimeoutSeconds
+	if stepTimeout <= 0 {
+		stepTimeout = 900
+	}
+	allIPs := append([]string{cfg.spec.PrimaryIP}, cfg.spec.StandbyIPs...)
+	if stepName == "add_member" {
+		allIPs = append(allIPs, cfg.memberIP)
+	}
+	extraVars := map[string]any{
+		"cluster_name":               cfg.spec.ClusterName,
+		"cluster_admin_username":     cfg.spec.AdminUsername,
+		"cluster_admin_password":     cfg.secret.AdminPassword,
+		"primary_ip":                 cfg.spec.PrimaryIP,
+		"standby_ips":                cfg.spec.StandbyIPs,
+		"new_member_ip":              cfg.memberIP,
+		"remove_member_ip":           cfg.memberIP,
+		"force_remove":               cfg.force,
+		"mysql_port":                 cfg.spec.MySQLPort,
+		"erawan_mysql_major_version": cfg.spec.MySQLVersion,
+		"assume_prepared":            cfg.spec.AssumePrepared,
+		"bootstrap_router":           cfg.spec.BootstrapRouter,
+		"router_service_name":        "mysqlrouter-" + cfg.spec.ClusterName,
+		"step_timeout_seconds":       stepTimeout,
+		"expected_cluster_nodes":     len(allIPs),
+	}
+
+	sanitized, err := json.Marshal(extraVars)
+	if err != nil {
+		result.Status = JobStatusFailed
+		result.Message = fmt.Sprintf("marshal vars: %v", err)
+		return
+	}
+	if err := os.WriteFile(varsPath, sanitized, 0o600); err != nil {
+		result.Status = JobStatusFailed
+		result.Message = fmt.Sprintf("write vars: %v", err)
+		return
+	}
+
+	runTimeout := cfg.timeout
+	if runTimeout <= 0 {
+		runTimeout = 15 * time.Minute
+	}
+	stepCtx, cancel := context.WithTimeout(ctx, runTimeout)
+	defer cancel()
+
+	args := []string{
+		"-i", inventoryPath,
+		playbook,
+		"--extra-vars", "@" + varsPath,
+	}
+	if r.ansibleVerbosity > 0 {
+		args = append(args, "-"+strings.Repeat("v", r.ansibleVerbosity))
+	}
+
+	cmd := exec.CommandContext(stepCtx, r.ansibleBin, args...)
+	cmd.Env = append(os.Environ(), "ANSIBLE_HOST_KEY_CHECKING=False")
+
+	var stdout cappedBuffer
+	var stderr cappedBuffer
+	stdout.limit = r.maxOutputChars
+	stderr.limit = r.maxOutputChars
+	if r.streamLogs {
+		cmd.Stdout = io.MultiWriter(&stdout, os.Stdout)
+		cmd.Stderr = io.MultiWriter(&stderr, os.Stderr)
+	} else {
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+	}
+
+	err = cmd.Run()
+	result.Stdout = stdout.String()
+	result.Stderr = stderr.String()
+
+	if err == nil {
+		result.Status = JobStatusCompleted
+		result.ExitCode = 0
+		return
+	}
+
+	result.Status = JobStatusFailed
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		result.ExitCode = exitErr.ExitCode()
+	} else {
+		result.ExitCode = 1
+	}
+	if stepCtx.Err() == context.DeadlineExceeded {
+		result.Message = "step execution timed out"
+		return
+	}
+	result.Message = fmt.Sprintf("ansible step failed: %v", err)
+	return
+}
+
+func buildAddMemberInventoryYAML(spec StoredSpec, newMemberIP string) string {
+	var b strings.Builder
+	b.WriteString("all:\n")
+	b.WriteString("  hosts:\n")
+	writeHost := func(name, ip string) {
+		b.WriteString("    " + name + ":\n")
+		b.WriteString("      ansible_host: " + strconv.Quote(ip) + "\n")
+		b.WriteString("      ansible_user: " + strconv.Quote(spec.SSHUser) + "\n")
+		b.WriteString(fmt.Sprintf("      ansible_port: %d\n", spec.SSHPort))
+		b.WriteString("      ansible_become: true\n")
+		b.WriteString("      ansible_become_method: sudo\n")
+		b.WriteString("      ansible_become_user: root\n")
+		b.WriteString("      ansible_become_flags: " + strconv.Quote("-n") + "\n")
+		b.WriteString("      ansible_ssh_private_key_file: " + strconv.Quote(spec.SSHPrivateKeyPath) + "\n")
+		b.WriteString("      ansible_ssh_common_args: " + strconv.Quote("-o IdentitiesOnly=yes -o StrictHostKeyChecking=no") + "\n")
+	}
+
+	writeHost("primary", spec.PrimaryIP)
+	for i, ip := range spec.StandbyIPs {
+		writeHost(fmt.Sprintf("standby_%d", i+1), ip)
+	}
+	writeHost("new_member", newMemberIP)
+
+	b.WriteString("  children:\n")
+	b.WriteString("    mysql_primary:\n")
+	b.WriteString("      hosts:\n")
+	b.WriteString("        primary: {}\n")
+	b.WriteString("    mysql_standby:\n")
+	b.WriteString("      hosts:\n")
+	for i := range spec.StandbyIPs {
+		b.WriteString(fmt.Sprintf("        standby_%d: {}\n", i+1))
+	}
+	b.WriteString("    mysql_new_member:\n")
+	b.WriteString("      hosts:\n")
+	b.WriteString("        new_member: {}\n")
+	return b.String()
 }
 
 func (r *Runner) run(ctx context.Context, cfg runConfig, playbook string) (result StepResult) {

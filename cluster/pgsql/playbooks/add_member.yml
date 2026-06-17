@@ -1,0 +1,39 @@
+---
+# ---------------------------------------------------------------------------
+# PLAY 1 — Register new node in the etcd cluster (runs on existing primary)
+# ---------------------------------------------------------------------------
+- name: Register new etcd member
+  hosts: pgsql_primary
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  roles:
+    - add_member_register
+
+# ---------------------------------------------------------------------------
+# PLAY 2 — Install, configure, and start etcd + Patroni on the new node
+#           Uses base_config and configure_node with etcd "existing" state.
+# ---------------------------------------------------------------------------
+- name: Set up new PostgreSQL standby
+  hosts: pgsql_new_member
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  vars:
+    etcd_initial_cluster_state: "existing"
+  roles:
+    - base_config
+    - role: configure_node
+      tags: ["standby_config"]
+    - add_member_join
+
+# ---------------------------------------------------------------------------
+# PLAY 3 — Verify cluster health on all nodes
+# ---------------------------------------------------------------------------
+- name: Verify cluster after member addition
+  hosts: all
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  roles:
+    - verify_cluster
