@@ -772,9 +772,9 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"member_ip\": \"{{MEMBER_IP}}\",\n  \"force\": false,\n  \"admin_password\": \"\"\n}"
+              "raw": "{\n  \"member_ip\": \"{{MEMBER_IP}}\",\n  \"force\": false\n}"
             },
-            "description": "Removes a standby node from the MySQL InnoDB Cluster. Blocks until the Ansible playbook completes (remove via mysqlsh → verify). The primary node cannot be removed.\n\nOn success, the job's stored spec is updated to remove the IP from `standby_ips`.\n\n- `member_ip` — IP of the standby node to remove\n- `force` — set `true` to force-remove a node that is unreachable or in an error state\n- `admin_password` — leave empty to reuse the password stored from the original deploy",
+            "description": "Removes a standby node from the MySQL InnoDB Cluster. Blocks until the Ansible playbook completes (remove via mysqlsh → verify). The primary node cannot be removed.\n\nOn success, the job's stored spec is updated to remove the IP from `standby_ips`.\n\n- `member_ip` — IP of the standby node to remove\n- `force` — set `true` to force-remove a node that is unreachable or in an error state\n\nPasswords are always taken from the stored job secret — no password fields needed.",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/jobs/{{JOB_ID}}/members",
               "protocol": "http",

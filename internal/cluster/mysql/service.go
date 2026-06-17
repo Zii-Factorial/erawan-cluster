@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -317,16 +316,11 @@ func (s *Service) RemoveMember(ctx context.Context, jobID string, req RemoveMemb
 	if err != nil {
 		return nil, fmt.Errorf("load job secret %q: %w", jobID, err)
 	}
-	adminPassword := strings.TrimSpace(req.AdminPassword)
-	if adminPassword == "" {
-		adminPassword = storedSecret.AdminPassword
-	}
-
 	timeout := time.Duration(job.Request.StepTimeoutSeconds) * time.Second
 	result := s.doRemoveMember(ctx, memberRunConfig{
 		jobID:    jobID,
 		spec:     job.Request,
-		secret:   SecretInput{AdminPassword: adminPassword},
+		secret:   SecretInput{AdminPassword: storedSecret.AdminPassword},
 		memberIP: req.MemberIP,
 		force:    req.Force,
 		timeout:  timeout,

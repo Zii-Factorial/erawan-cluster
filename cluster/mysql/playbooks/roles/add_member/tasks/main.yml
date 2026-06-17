@@ -5,6 +5,15 @@
   when: erawan_node_ip is not defined
   tags: ["add_member"]
 
+- name: Wait for new member MySQL port to be reachable
+  ansible.builtin.wait_for:
+    host: "{{ new_member_ip }}"
+    port: "{{ mysql_port }}"
+    state: started
+    delay: 5
+    timeout: 120
+  tags: ["add_member"]
+
 - name: Add new member to InnoDB Cluster
   no_log: true
   ansible.builtin.shell: |

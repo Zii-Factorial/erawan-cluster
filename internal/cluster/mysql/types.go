@@ -151,9 +151,8 @@ type AddMemberRequest struct {
 }
 
 type RemoveMemberRequest struct {
-	MemberIP      string `json:"member_ip"`
-	AdminPassword string `json:"admin_password,omitempty"`
-	Force         bool   `json:"force,omitempty"`
+	MemberIP string `json:"member_ip"`
+	Force    bool   `json:"force,omitempty"`
 }
 
 type MemberOperationResult struct {
