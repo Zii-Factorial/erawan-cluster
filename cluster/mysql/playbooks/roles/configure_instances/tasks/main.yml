@@ -50,6 +50,23 @@
   ansible.builtin.meta: flush_handlers
   tags: ["configure_instances", "configure_mysql"]
 
+- name: Ensure MySQL is running before GR state reset
+  ansible.builtin.systemd:
+    name: mysql
+    state: started
+  when: not _assume_prepared
+  tags: ["configure_instances", "configure_mysql"]
+
+- name: Wait for MySQL port before GR state reset
+  ansible.builtin.wait_for:
+    host: "{{ erawan_node_ip }}"
+    port: "{{ mysql_port }}"
+    state: started
+    delay: 3
+    timeout: "{{ mysql_start_timeout_seconds }}"
+  when: not _assume_prepared
+  tags: ["configure_instances", "configure_mysql"]
+
 - name: Reset stale GR state
   ansible.builtin.shell: |
     set -euo pipefail
