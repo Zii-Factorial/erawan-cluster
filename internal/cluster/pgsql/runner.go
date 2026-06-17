@@ -115,7 +115,10 @@ func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, s
 	if stepName == "add_member" {
 		inventory = buildAddMemberInventoryYAML(cfg.spec, cfg.memberIP)
 	} else {
-		inventory = buildInventoryYAML(cfg.spec)
+		// Removed node must NOT appear in pgsql_standby so the verify play
+		// (hosts: pgsql_primary:pgsql_standby) does not try to SSH to a stopped node.
+		// It is still present in the `all` group so Play 1 can attempt a graceful stop.
+		inventory = buildRemoveMemberInventoryYAML(cfg.spec, cfg.memberIP)
 	}
 	if err := os.WriteFile(inventoryPath, []byte(inventory), 0o600); err != nil {
 		result.Status = JobStatusFailed
@@ -127,15 +130,26 @@ func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, s
 	if stepTimeout <= 0 {
 		stepTimeout = 900
 	}
-	allIPs := append([]string{cfg.spec.PrimaryIP}, cfg.spec.StandbyIPs...)
+	// effectiveStandbys reflects the expected post-operation standby list so that
+	// verify_cluster's member count assertions are correct for both add and remove.
+	effectiveStandbys := make([]string, len(cfg.spec.StandbyIPs))
+	copy(effectiveStandbys, cfg.spec.StandbyIPs)
 	if stepName == "add_member" {
-		allIPs = append(allIPs, cfg.memberIP)
+		effectiveStandbys = append(effectiveStandbys, cfg.memberIP)
+	} else {
+		filtered := effectiveStandbys[:0]
+		for _, ip := range effectiveStandbys {
+			if ip != cfg.memberIP {
+				filtered = append(filtered, ip)
+			}
+		}
+		effectiveStandbys = filtered
 	}
 	extraVars := map[string]any{
 		"deployment_job_id":           cfg.jobID,
 		"cluster_name":                cfg.spec.ClusterName,
 		"primary_ip":                  cfg.spec.PrimaryIP,
-		"standby_ips":                 cfg.spec.StandbyIPs,
+		"standby_ips":                 effectiveStandbys,
 		"new_member_ip":               cfg.memberIP,
 		"remove_member_ip":            cfg.memberIP,
 		"force_remove":                cfg.force,
@@ -156,7 +170,7 @@ func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, s
 		"etcd_cluster_token":          cfg.spec.ClusterName + "-etcd-cluster-token",
 		"etcd_client_port":            2379,
 		"etcd_peer_port":              2380,
-		"expected_cluster_nodes":      len(allIPs),
+		"expected_cluster_nodes":      len(effectiveStandbys) + 1,
 		"step_timeout_seconds":        stepTimeout,
 	}
 
@@ -262,6 +276,52 @@ func buildAddMemberInventoryYAML(spec StoredSpec, newMemberIP string) string {
 	b.WriteString("    pgsql_new_member:\n")
 	b.WriteString("      hosts:\n")
 	b.WriteString("        new_member: {}\n")
+	return b.String()
+}
+
+// buildRemoveMemberInventoryYAML builds an inventory for the remove_member playbook.
+// The removed node appears in `all` (so Play 1 can stop its services) but NOT in
+// `pgsql_standby`, so the verify play (hosts: pgsql_primary:pgsql_standby) never
+// tries to SSH to a node that has already been stopped.
+func buildRemoveMemberInventoryYAML(spec StoredSpec, removedIP string) string {
+	var b strings.Builder
+	b.WriteString("all:\n")
+	b.WriteString("  hosts:\n")
+	writeHost := func(name, ip string) {
+		b.WriteString("    " + name + ":\n")
+		b.WriteString("      ansible_host: " + strconv.Quote(ip) + "\n")
+		b.WriteString("      ansible_user: " + strconv.Quote(spec.SSHUser) + "\n")
+		b.WriteString(fmt.Sprintf("      ansible_port: %d\n", spec.SSHPort))
+		b.WriteString("      ansible_become: true\n")
+		b.WriteString("      ansible_become_method: sudo\n")
+		b.WriteString("      ansible_become_user: root\n")
+		b.WriteString("      ansible_become_flags: " + strconv.Quote("-n") + "\n")
+		b.WriteString("      ansible_ssh_private_key_file: " + strconv.Quote(spec.SSHPrivateKeyPath) + "\n")
+		b.WriteString("      ansible_ssh_common_args: " + strconv.Quote("-o IdentitiesOnly=yes -o StrictHostKeyChecking=no") + "\n")
+	}
+
+	writeHost("primary", spec.PrimaryIP)
+	standbyIdx := 1
+	for _, ip := range spec.StandbyIPs {
+		if ip != removedIP {
+			writeHost(fmt.Sprintf("standby_%d", standbyIdx), ip)
+			standbyIdx++
+		}
+	}
+	writeHost("removed_node", removedIP)
+
+	b.WriteString("  children:\n")
+	b.WriteString("    pgsql_primary:\n")
+	b.WriteString("      hosts:\n")
+	b.WriteString("        primary: {}\n")
+	b.WriteString("    pgsql_standby:\n")
+	b.WriteString("      hosts:\n")
+	for i := 1; i < standbyIdx; i++ {
+		b.WriteString(fmt.Sprintf("        standby_%d: {}\n", i))
+	}
+	b.WriteString("    pgsql_removed:\n")
+	b.WriteString("      hosts:\n")
+	b.WriteString("        removed_node: {}\n")
 	return b.String()
 }
 

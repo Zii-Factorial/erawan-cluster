@@ -136,16 +136,27 @@ func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, s
 	if stepTimeout <= 0 {
 		stepTimeout = 900
 	}
-	allIPs := append([]string{cfg.spec.PrimaryIP}, cfg.spec.StandbyIPs...)
+	// effectiveStandbys reflects the expected post-operation standby list so that
+	// verify_cluster's EXPECTED_CLUSTER_NODES count is correct for both add and remove.
+	effectiveStandbys := make([]string, len(cfg.spec.StandbyIPs))
+	copy(effectiveStandbys, cfg.spec.StandbyIPs)
 	if stepName == "add_member" {
-		allIPs = append(allIPs, cfg.memberIP)
+		effectiveStandbys = append(effectiveStandbys, cfg.memberIP)
+	} else {
+		filtered := effectiveStandbys[:0]
+		for _, ip := range effectiveStandbys {
+			if ip != cfg.memberIP {
+				filtered = append(filtered, ip)
+			}
+		}
+		effectiveStandbys = filtered
 	}
 	extraVars := map[string]any{
 		"cluster_name":               cfg.spec.ClusterName,
 		"cluster_admin_username":     cfg.spec.AdminUsername,
 		"cluster_admin_password":     cfg.secret.AdminPassword,
 		"primary_ip":                 cfg.spec.PrimaryIP,
-		"standby_ips":                cfg.spec.StandbyIPs,
+		"standby_ips":                effectiveStandbys,
 		"new_member_ip":              cfg.memberIP,
 		"remove_member_ip":           cfg.memberIP,
 		"force_remove":               cfg.force,
@@ -155,7 +166,7 @@ func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, s
 		"bootstrap_router":           cfg.spec.BootstrapRouter,
 		"router_service_name":        "mysqlrouter-" + cfg.spec.ClusterName,
 		"step_timeout_seconds":       stepTimeout,
-		"expected_cluster_nodes":     len(allIPs),
+		"expected_cluster_nodes":     len(effectiveStandbys) + 1,
 	}
 
 	sanitized, err := json.Marshal(extraVars)
