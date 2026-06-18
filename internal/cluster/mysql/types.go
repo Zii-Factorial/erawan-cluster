@@ -63,18 +63,19 @@ type StepResult struct {
 }
 
 type Job struct {
-	ID                string       `json:"id"`
-	Status            string       `json:"status"`
-	CreatedAt         time.Time    `json:"created_at"`
-	UpdatedAt         time.Time    `json:"updated_at"`
-	CurrentStep       string       `json:"current_step,omitempty"`
-	LastCompletedStep int          `json:"last_completed_step"`
-	CompletedSteps    int          `json:"completed_steps"`
-	TotalSteps        int          `json:"total_steps"`
-	ProgressPercent   int          `json:"progress_percent"`
-	Error             string       `json:"error,omitempty"`
-	Request           StoredSpec   `json:"request"`
-	Steps             []StepResult `json:"steps"`
+	ID                string           `json:"id"`
+	Status            string           `json:"status"`
+	CreatedAt         time.Time        `json:"created_at"`
+	UpdatedAt         time.Time        `json:"updated_at"`
+	CurrentStep       string           `json:"current_step,omitempty"`
+	LastCompletedStep int              `json:"last_completed_step"`
+	CompletedSteps    int              `json:"completed_steps"`
+	TotalSteps        int              `json:"total_steps"`
+	ProgressPercent   int              `json:"progress_percent"`
+	Error             string           `json:"error,omitempty"`
+	Request           StoredSpec       `json:"request"`
+	Steps             []StepResult     `json:"steps"`
+	MemberOp          *MemberOperation `json:"member_op,omitempty"`
 }
 
 type StoredSpec struct {
@@ -156,9 +157,8 @@ type RemoveMemberRequest struct {
 	Force    bool   `json:"force,omitempty"`
 }
 
-type MemberOperationResult struct {
-	Action    string       `json:"action"`
-	MemberIPs []string     `json:"member_ips"`
-	Spec      StoredSpec   `json:"spec"`
-	Steps     []StepResult `json:"steps"`
+type MemberOperation struct {
+	Type        string   `json:"type"`         // "add" or "remove"
+	MemberIPs   []string `json:"member_ips"`
+	SourceJobID string   `json:"source_job_id"`
 }

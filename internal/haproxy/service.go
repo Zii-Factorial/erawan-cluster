@@ -76,7 +76,9 @@ defaults
 // validateConfigSyntax runs haproxy -c against the new content combined with all
 // existing tenant configs. Returns an error if haproxy reports a config problem,
 // preventing the broken config from ever reaching disk or causing a reload failure.
-func (s *Service) validateConfigSyntax(content string) error {
+// excludeFile is the path of an existing tenant config to skip during validation
+// (used when replacing an existing port config to avoid duplicate-bind errors).
+func (s *Service) validateConfigSyntax(content string, excludeFile string) error {
 	stubFile, err := os.CreateTemp("", "haproxy-stub-*.cfg")
 	if err != nil {
 		return fmt.Errorf("create validation stub: %w", err)
@@ -115,7 +117,11 @@ func (s *Service) validateConfigSyntax(content string) error {
 	}
 	for _, e := range entries {
 		if !e.IsDir() && strings.HasSuffix(e.Name(), ".cfg") && !strings.HasSuffix(e.Name(), ".bak") {
-			args = append(args, "-f", filepath.Join(s.tenantsDir, e.Name()))
+			p := filepath.Join(s.tenantsDir, e.Name())
+			if excludeFile != "" && p == excludeFile {
+				continue
+			}
+			args = append(args, "-f", p)
 		}
 	}
 	args = append(args, "-f", newFile.Name())
@@ -247,7 +253,11 @@ func (s *Service) CreatePGSQLConfig(ctx context.Context, in CreatePGSQLConfigInp
 }
 
 func (s *Service) applyConfig(ctx context.Context, port int, content string) error {
-	if err := s.validateConfigSyntax(content); err != nil {
+	excludeFile := ""
+	if existing := s.filename(port); fileExists(existing) {
+		excludeFile = existing
+	}
+	if err := s.validateConfigSyntax(content, excludeFile); err != nil {
 		return err
 	}
 
@@ -605,6 +615,142 @@ func buildPGSQLConfig(port int, nodeIPs []string, dbPort int, patroniPort int) s
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// AddMemberConfigInput is the input for adding a new member to an existing HAProxy config.
+type AddMemberConfigInput struct {
+	Port   int    `json:"port"`
+	NodeIP string `json:"node_ip"`
+}
+
+// AddMySQLMember reads the existing MySQL config for the given port, appends the new
+// node IP, rebuilds the config, and applies it (validates + writes + reloads HAProxy).
+func (s *Service) AddMySQLMember(ctx context.Context, in AddMemberConfigInput) error {
+	if err := ValidatePort(in.Port, "port"); err != nil {
+		return err
+	}
+	nodeIP := strings.TrimSpace(in.NodeIP)
+	if !isValidBackendHost(nodeIP) {
+		return fmt.Errorf("node_ip must be a valid IP address or hostname")
+	}
+
+	filename := s.filename(in.Port)
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("no config found for port %d", in.Port)
+		}
+		return fmt.Errorf("read config: %w", err)
+	}
+
+	ips, dbPort := parseConfigServers(string(data))
+	if dbPort == 0 {
+		return fmt.Errorf("could not determine db_port from existing config for port %d", in.Port)
+	}
+	for _, ip := range ips {
+		if ip == nodeIP {
+			return fmt.Errorf("node_ip %s is already in the config", nodeIP)
+		}
+	}
+
+	ips = append(ips, nodeIP)
+	return s.applyConfig(ctx, in.Port, buildMySQLConfig(in.Port, ips, dbPort))
+}
+
+// AddPGSQLMember reads the existing PostgreSQL config for the given port, appends the new
+// node IP, rebuilds the config, and applies it (validates + writes + reloads HAProxy).
+func (s *Service) AddPGSQLMember(ctx context.Context, in AddMemberConfigInput) error {
+	if err := ValidatePort(in.Port, "port"); err != nil {
+		return err
+	}
+	nodeIP := strings.TrimSpace(in.NodeIP)
+	if !isValidBackendHost(nodeIP) {
+		return fmt.Errorf("node_ip must be a valid IP address or hostname")
+	}
+
+	filename := s.filename(in.Port)
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("no config found for port %d", in.Port)
+		}
+		return fmt.Errorf("read config: %w", err)
+	}
+
+	content := string(data)
+	ips, dbPort := parseConfigServers(content)
+	if dbPort == 0 {
+		return fmt.Errorf("could not determine db_port from existing config for port %d", in.Port)
+	}
+	for _, ip := range ips {
+		if ip == nodeIP {
+			return fmt.Errorf("node_ip %s is already in the config", nodeIP)
+		}
+	}
+
+	patroniPort := parsePatroniPort(content)
+	if patroniPort == 0 {
+		patroniPort = defaultPatroniPort
+	}
+
+	ips = append(ips, nodeIP)
+	return s.applyConfig(ctx, in.Port, buildPGSQLConfig(in.Port, ips, dbPort, patroniPort))
+}
+
+// parseConfigServers extracts backend server IPs and the db port from a rendered config.
+// It reads lines of the form: `    server dbN {ip}:{port} check [backup]`
+func parseConfigServers(content string) (ips []string, dbPort int) {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "server ") {
+			continue
+		}
+		parts := strings.Fields(trimmed)
+		if len(parts) < 3 {
+			continue
+		}
+		hostPort := parts[2]
+		lastColon := strings.LastIndex(hostPort, ":")
+		if lastColon < 0 {
+			continue
+		}
+		ip := hostPort[:lastColon]
+		p, err := strconv.Atoi(hostPort[lastColon+1:])
+		if err != nil {
+			continue
+		}
+		ips = append(ips, ip)
+		if dbPort == 0 {
+			dbPort = p
+		}
+	}
+	return
+}
+
+// parsePatroniPort extracts the patroni check port from the default-server line.
+// It reads: `    default-server ... check port {n}`
+func parsePatroniPort(content string) int {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "default-server ") {
+			continue
+		}
+		parts := strings.Fields(trimmed)
+		for i, part := range parts {
+			if part == "port" && i+1 < len(parts) {
+				p, err := strconv.Atoi(parts[i+1])
+				if err == nil {
+					return p
+				}
+			}
+		}
+	}
+	return 0
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func mysqlPortDesc(port int) string {

@@ -328,7 +328,42 @@
               },
               "raw": "{\n  \"port\": 25010,\n  \"node_ips\": [\"10.10.107.182\", \"10.10.107.183\"],\n  \"db_port\": 6446\n}"
             },
-            "description": "Creates an HAProxy frontend for a MySQL Router cluster. db_port is typically 6446 (R/W) or 6447 (R/O).",
+            "description": "Creates (or replaces) an HAProxy frontend for a MySQL Router cluster. `db_port` is typically 6446 (R/W) or 6447 (R/O).\n\n**Dual-mode:** If you omit `db_port` and `node_ips` and only provide `port` + `node_ip` (singular), the request adds that IP to an existing config instead of creating a new one — same as calling `PATCH /haproxy/config/mysql`.",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/config/mysql",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "haproxy",
+                "config",
+                "mysql"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Add MySQL Member",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"port\": 25010,\n  \"node_ip\": \"{{MEMBER_IP}}\"\n}"
+            },
+            "description": "Adds a new backend server to an existing MySQL HAProxy config identified by `port`. Reads the current config, appends the new IP, rebuilds, validates, and reloads HAProxy.\n\n- `port` — the HAProxy listen port of the config to update\n- `node_ip` — IP or hostname of the new node to add",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/config/mysql",
               "protocol": "http",
@@ -363,7 +398,42 @@
               },
               "raw": "{\n  \"port\": 25432,\n  \"node_ips\": [\"10.0.0.1\", \"10.0.0.2\"],\n  \"db_port\": 5432,\n  \"patroni_port\": 8008\n}"
             },
-            "description": "Creates an HAProxy frontend for a PostgreSQL/Patroni cluster. Uses httpchk GET /leader on the Patroni REST port so only the current leader receives traffic. patroni_port defaults to 8008 when omitted.",
+            "description": "Creates (or replaces) an HAProxy frontend for a PostgreSQL/Patroni cluster. Uses `httpchk GET /leader` on the Patroni REST port so only the current leader receives traffic. `patroni_port` defaults to 8008 when omitted.\n\n**Dual-mode:** If you omit `db_port` and `node_ips` and only provide `port` + `node_ip` (singular), the request adds that IP to an existing config instead of creating a new one — same as calling `PATCH /haproxy/config/pgsql`.",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/config/pgsql",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "haproxy",
+                "config",
+                "pgsql"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Add PostgreSQL Member",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"port\": 25432,\n  \"node_ip\": \"{{MEMBER_IP}}\"\n}"
+            },
+            "description": "Adds a new backend server to an existing PostgreSQL HAProxy config identified by `port`. Reads the current config (including patroni check port), appends the new IP, rebuilds, validates, and reloads HAProxy.\n\n- `port` — the HAProxy listen port of the config to update\n- `node_ip` — IP or hostname of the new node to add",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/config/pgsql",
               "protocol": "http",
@@ -722,6 +792,26 @@
         },
         {
           "name": "Add Member",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Auto-extract JOB_ID from add-member response (no encryption)",
+                  "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
+                  "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
+                  "try {",
+                  "    const body = pm.response.json();",
+                  "    if (body && body.data && body.data.id) {",
+                  "        pm.collectionVariables.set('JOB_ID', body.data.id);",
+                  "        console.log('[erawan] JOB_ID set to:', body.data.id);",
+                  "    }",
+                  "} catch(e) {}"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "header": [
@@ -739,7 +829,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"member_ips\": [\"{{MEMBER_IP}}\"],\n  \"assume_prepared\": false\n}"
             },
-            "description": "Adds one or more standby nodes to an existing MySQL InnoDB Cluster. Blocks until the Ansible playbook completes for each node (configure → add via mysqlsh → verify). Nodes are added sequentially; if one fails the operation stops and returns partial results.\n\nOn success, the job's stored spec is updated with the new `standby_ips`, so all subsequent operations (metrics, DB manager) automatically include the new nodes.\n\n- `job_id` — ID of the cluster deployment job\n- `member_ips` — list of IPs of the new nodes to add\n- `assume_prepared` — set `true` to skip the `configure_instances` step (nodes already have MySQL installed and configured)\n\nPasswords are always taken from the stored job secret — no password fields needed.",
+            "description": "Adds one or more standby nodes to an existing MySQL InnoDB Cluster. Returns a new member job immediately (202 Accepted). Poll `GET /cluster/mysql/jobs/{id}` to track progress.\n\nThe response includes a `member_op` field with `type: \"add\"`, `member_ips`, and `source_job_id` (the original deploy job). `JOB_ID` is auto-set to the new member job ID.\n\nNodes are added sequentially; if one fails the job is marked failed with the step details. On success the deploy job's `standby_ips` is updated automatically.\n\n- `job_id` — ID of the cluster deployment job\n- `member_ips` — list of IPs of the new nodes to add\n- `assume_prepared` — set `true` to skip the `configure_instances` step\n\nPasswords are always taken from the stored job secret — no password fields needed.",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/members",
               "protocol": "http",
@@ -757,6 +847,26 @@
         },
         {
           "name": "Remove Member",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Auto-extract JOB_ID from remove-member response (no encryption)",
+                  "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
+                  "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
+                  "try {",
+                  "    const body = pm.response.json();",
+                  "    if (body && body.data && body.data.id) {",
+                  "        pm.collectionVariables.set('JOB_ID', body.data.id);",
+                  "        console.log('[erawan] JOB_ID set to:', body.data.id);",
+                  "    }",
+                  "} catch(e) {}"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "DELETE",
             "header": [
@@ -774,7 +884,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"member_ip\": \"{{MEMBER_IP}}\",\n  \"force\": false\n}"
             },
-            "description": "Removes a standby node from the MySQL InnoDB Cluster. Blocks until the Ansible playbook completes (remove via mysqlsh → verify). The primary node cannot be removed.\n\nOn success, the job's stored spec is updated to remove the IP from `standby_ips`.\n\n- `job_id` — ID of the cluster deployment job\n- `member_ip` — IP of the standby node to remove\n- `force` — set `true` to force-remove a node that is unreachable or in an error state\n\nPasswords are always taken from the stored job secret — no password fields needed.",
+            "description": "Removes a standby node from the MySQL InnoDB Cluster. Returns a new member job immediately (202 Accepted). Poll `GET /cluster/mysql/jobs/{id}` to track progress.\n\nThe response includes a `member_op` field with `type: \"remove\"`, `member_ips`, and `source_job_id`. `JOB_ID` is auto-set to the new member job ID. The primary node cannot be removed.\n\nOn success the deploy job's `standby_ips` is updated automatically.\n\n- `job_id` — ID of the cluster deployment job\n- `member_ip` — IP of the standby node to remove\n- `force` — set `true` to force-remove an unreachable or error-state node\n\nPasswords are always taken from the stored job secret — no password fields needed.",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/members",
               "protocol": "http",
@@ -981,6 +1091,26 @@
         },
         {
           "name": "Add Member",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Auto-extract JOB_ID from add-member response (no encryption)",
+                  "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
+                  "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
+                  "try {",
+                  "    const body = pm.response.json();",
+                  "    if (body && body.data && body.data.id) {",
+                  "        pm.collectionVariables.set('JOB_ID', body.data.id);",
+                  "        console.log('[erawan] JOB_ID set to:', body.data.id);",
+                  "    }",
+                  "} catch(e) {}"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "header": [
@@ -998,7 +1128,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"member_ips\": [\"{{MEMBER_IP}}\"]\n}"
             },
-            "description": "Adds one or more standby nodes to an existing PostgreSQL/Patroni cluster. Blocks until the Ansible playbook completes for each node (register in etcd → base_config + configure_node → start etcd + Patroni → verify). Nodes are added sequentially; if one fails the operation stops and returns partial results.\n\nOn success, the job's stored spec is updated with the new `standby_ips`, so the DB manager's primary discovery and all metrics calls automatically include the new nodes.\n\n- `job_id` — ID of the cluster deployment job\n- `member_ips` — list of IPs of the new standby nodes to add\n\nPasswords are always taken from the stored job secret — no password fields needed.",
+            "description": "Adds one or more standby nodes to an existing PostgreSQL/Patroni cluster. Returns a new member job immediately (202 Accepted). Poll `GET /cluster/pgsql/jobs/{id}` to track progress.\n\nThe response includes a `member_op` field with `type: \"add\"`, `member_ips`, and `source_job_id` (the original deploy job). `JOB_ID` is auto-set to the new member job ID.\n\nNodes are added sequentially; if one fails the job is marked failed with the step details. On success the deploy job's `standby_ips` is updated automatically.\n\n- `job_id` — ID of the cluster deployment job\n- `member_ips` — list of IPs of the new standby nodes to add\n\nPasswords are always taken from the stored job secret — no password fields needed.",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/members",
               "protocol": "http",
@@ -1016,6 +1146,26 @@
         },
         {
           "name": "Remove Member",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Auto-extract JOB_ID from remove-member response (no encryption)",
+                  "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
+                  "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
+                  "try {",
+                  "    const body = pm.response.json();",
+                  "    if (body && body.data && body.data.id) {",
+                  "        pm.collectionVariables.set('JOB_ID', body.data.id);",
+                  "        console.log('[erawan] JOB_ID set to:', body.data.id);",
+                  "    }",
+                  "} catch(e) {}"
+                ]
+              }
+            }
+          ],
           "request": {
             "method": "DELETE",
             "header": [
@@ -1033,7 +1183,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"member_ip\": \"{{MEMBER_IP}}\",\n  \"force\": false\n}"
             },
-            "description": "Removes a standby node from the PostgreSQL/Patroni cluster. Blocks until the Ansible playbook completes (stop Patroni/etcd on removed node → remove etcd membership → verify remaining nodes). The primary node cannot be removed.\n\nOn success, the job's stored spec is updated to remove the IP from `standby_ips`, and the DB manager's primary discovery is automatically corrected.\n\n- `job_id` — ID of the cluster deployment job\n- `member_ip` — IP of the standby node to remove\n- `force` — set `true` to proceed even if the node is unreachable (skips graceful stop)\n\nPasswords are always taken from the stored job secret — no password fields needed.",
+            "description": "Removes a standby node from the PostgreSQL/Patroni cluster. Returns a new member job immediately (202 Accepted). Poll `GET /cluster/pgsql/jobs/{id}` to track progress.\n\nThe response includes a `member_op` field with `type: \"remove\"`, `member_ips`, and `source_job_id`. `JOB_ID` is auto-set to the new member job ID. The primary node cannot be removed.\n\nOn success the deploy job's `standby_ips` is updated automatically, and the DB manager's primary discovery is corrected.\n\n- `job_id` — ID of the cluster deployment job\n- `member_ip` — IP of the standby node to remove\n- `force` — set `true` to proceed even if the node is unreachable (skips graceful stop)\n\nPasswords are always taken from the stored job secret — no password fields needed.",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/members",
               "protocol": "http",

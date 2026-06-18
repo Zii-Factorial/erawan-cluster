@@ -103,20 +103,12 @@ func (app *application) addPGSQLMemberHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	result, err := app.pgsqlCluster.AddMember(r.Context(), req)
+	job, err := app.pgsqlCluster.AddMember(r.Context(), req)
 	if err != nil {
-		if result != nil {
-			writeJSON(w, http.StatusUnprocessableEntity, envelope{
-				"status":  "error",
-				"message": err.Error(),
-				"data":    result,
-			})
-			return
-		}
 		errJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	ok(w, "PostgreSQL cluster member added", result)
+	accepted(w, "PostgreSQL cluster member addition started", job)
 }
 
 func (app *application) removePGSQLMemberHandler(w http.ResponseWriter, r *http.Request) {
@@ -126,18 +118,10 @@ func (app *application) removePGSQLMemberHandler(w http.ResponseWriter, r *http.
 		return
 	}
 
-	result, err := app.pgsqlCluster.RemoveMember(r.Context(), req)
+	job, err := app.pgsqlCluster.RemoveMember(r.Context(), req)
 	if err != nil {
-		if result != nil {
-			writeJSON(w, http.StatusUnprocessableEntity, envelope{
-				"status":  "error",
-				"message": err.Error(),
-				"data":    result,
-			})
-			return
-		}
 		errJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	ok(w, "PostgreSQL cluster member removed", result)
+	accepted(w, "PostgreSQL cluster member removal started", job)
 }

@@ -118,20 +118,12 @@ func (app *application) addMySQLMemberHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	result, err := app.mysqlCluster.AddMember(r.Context(), req)
+	job, err := app.mysqlCluster.AddMember(r.Context(), req)
 	if err != nil {
-		if result != nil {
-			writeJSON(w, http.StatusUnprocessableEntity, envelope{
-				"status":  "error",
-				"message": err.Error(),
-				"data":    result,
-			})
-			return
-		}
 		errJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	ok(w, "MySQL cluster member added", result)
+	accepted(w, "MySQL cluster member addition started", job)
 }
 
 func (app *application) removeMySQLMemberHandler(w http.ResponseWriter, r *http.Request) {
@@ -141,18 +133,10 @@ func (app *application) removeMySQLMemberHandler(w http.ResponseWriter, r *http.
 		return
 	}
 
-	result, err := app.mysqlCluster.RemoveMember(r.Context(), req)
+	job, err := app.mysqlCluster.RemoveMember(r.Context(), req)
 	if err != nil {
-		if result != nil {
-			writeJSON(w, http.StatusUnprocessableEntity, envelope{
-				"status":  "error",
-				"message": err.Error(),
-				"data":    result,
-			})
-			return
-		}
 		errJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	ok(w, "MySQL cluster member removed", result)
+	accepted(w, "MySQL cluster member removal started", job)
 }

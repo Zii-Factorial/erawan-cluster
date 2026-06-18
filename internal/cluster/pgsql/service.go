@@ -212,21 +212,22 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 	return job, nil
 }
 
-func (s *Service) AddMember(ctx context.Context, req AddMemberRequest) (*MemberOperationResult, error) {
+func (s *Service) AddMember(ctx context.Context, req AddMemberRequest) (*Job, error) {
+	_ = ctx
 	if err := ValidateAddMemberRequest(&req); err != nil {
 		return nil, err
 	}
-	job, err := s.store.Load(req.JobID)
+	deployJob, err := s.store.Load(req.JobID)
 	if err != nil {
 		return nil, fmt.Errorf("load job %q: %w", req.JobID, err)
 	}
-	if err := s.hydrateStoredSSHConfig(job); err != nil {
+	if err := s.hydrateStoredSSHConfig(deployJob); err != nil {
 		return nil, err
 	}
 
-	existing := make(map[string]struct{}, len(job.Request.StandbyIPs)+1)
-	existing[job.Request.PrimaryIP] = struct{}{}
-	for _, ip := range job.Request.StandbyIPs {
+	existing := make(map[string]struct{}, len(deployJob.Request.StandbyIPs)+1)
+	existing[deployJob.Request.PrimaryIP] = struct{}{}
+	for _, ip := range deployJob.Request.StandbyIPs {
 		existing[ip] = struct{}{}
 	}
 	for _, ip := range req.MemberIPs {
@@ -235,63 +236,61 @@ func (s *Service) AddMember(ctx context.Context, req AddMemberRequest) (*MemberO
 		}
 	}
 
-	storedSecret, err := s.store.LoadSecret(req.JobID)
-	if err != nil {
+	if _, err := s.store.LoadSecret(req.JobID); err != nil {
 		return nil, fmt.Errorf("load job secret %q: %w", req.JobID, err)
 	}
-	secret := SecretInput{
-		PostgresPassword:   storedSecret.PostgresPassword,
-		ReplicatorPassword: storedSecret.ReplicatorPassword,
-		AdminPassword:      storedSecret.AdminPassword,
+
+	memberJob := &Job{
+		ID:                newJobID(),
+		Status:            JobStatusRunning,
+		CreatedAt:         time.Now().UTC(),
+		UpdatedAt:         time.Now().UTC(),
+		LastCompletedStep: -1,
+		Request:           deployJob.Request,
+		MemberOp: &MemberOperation{
+			Type:        "add",
+			MemberIPs:   req.MemberIPs,
+			SourceJobID: req.JobID,
+		},
+		Steps: make([]StepResult, 0, len(req.MemberIPs)),
+	}
+	s.updateJobProgress(memberJob)
+	if err := s.store.Save(memberJob); err != nil {
+		return nil, err
 	}
 
-	timeout := time.Duration(job.Request.StepTimeoutSeconds) * time.Second
-	out := &MemberOperationResult{
-		Action:    "add",
-		MemberIPs: req.MemberIPs,
-		Spec:      job.Request,
-		Steps:     make([]StepResult, 0, len(req.MemberIPs)),
+	bgMemberJob, err := s.store.Load(memberJob.ID)
+	if err != nil {
+		return nil, err
 	}
-
-	for _, ip := range req.MemberIPs {
-		result := s.doAddMember(ctx, memberRunConfig{
-			jobID:    req.JobID,
-			spec:     job.Request,
-			secret:   secret,
-			memberIP: ip,
-			timeout:  timeout,
-		})
-		out.Steps = append(out.Steps, result)
-		if result.Status == JobStatusCompleted {
-			job.Request.StandbyIPs = append(job.Request.StandbyIPs, ip)
-			_ = s.store.Save(job)
-		} else {
-			out.Spec = job.Request
-			return out, stepError(result)
-		}
+	bgDeployJob, err := s.store.Load(req.JobID)
+	if err != nil {
+		return nil, err
 	}
-
-	out.Spec = job.Request
-	return out, nil
+	s.start(func() {
+		s.executeMemberAdd(s.ctx, bgMemberJob, bgDeployJob)
+	})
+	return memberJob, nil
 }
 
-func (s *Service) RemoveMember(ctx context.Context, req RemoveMemberRequest) (*MemberOperationResult, error) {
+func (s *Service) RemoveMember(ctx context.Context, req RemoveMemberRequest) (*Job, error) {
+	_ = ctx
 	if err := ValidateRemoveMemberRequest(&req); err != nil {
 		return nil, err
 	}
-	job, err := s.store.Load(req.JobID)
+	deployJob, err := s.store.Load(req.JobID)
 	if err != nil {
 		return nil, fmt.Errorf("load job %q: %w", req.JobID, err)
 	}
-	if err := s.hydrateStoredSSHConfig(job); err != nil {
+	if err := s.hydrateStoredSSHConfig(deployJob); err != nil {
 		return nil, err
 	}
 
-	if job.Request.PrimaryIP == req.MemberIP {
+	if deployJob.Request.PrimaryIP == req.MemberIP {
 		return nil, fmt.Errorf("cannot remove the primary node %s; promote a standby first", req.MemberIP)
 	}
 	found := false
-	for _, ip := range job.Request.StandbyIPs {
+	for _, ip := range deployJob.Request.StandbyIPs {
 		if ip == req.MemberIP {
 			found = true
 			break
@@ -301,43 +300,151 @@ func (s *Service) RemoveMember(ctx context.Context, req RemoveMemberRequest) (*M
 		return nil, fmt.Errorf("member_ip %s is not in the cluster", req.MemberIP)
 	}
 
-	storedSecret, err := s.store.LoadSecret(req.JobID)
-	if err != nil {
+	if _, err := s.store.LoadSecret(req.JobID); err != nil {
 		return nil, fmt.Errorf("load job secret %q: %w", req.JobID, err)
+	}
+
+	memberJob := &Job{
+		ID:                newJobID(),
+		Status:            JobStatusRunning,
+		CreatedAt:         time.Now().UTC(),
+		UpdatedAt:         time.Now().UTC(),
+		LastCompletedStep: -1,
+		Request:           deployJob.Request,
+		MemberOp: &MemberOperation{
+			Type:        "remove",
+			MemberIPs:   []string{req.MemberIP},
+			SourceJobID: req.JobID,
+		},
+		Steps: make([]StepResult, 0, 1),
+	}
+	s.updateJobProgress(memberJob)
+	if err := s.store.Save(memberJob); err != nil {
+		return nil, err
+	}
+
+	bgMemberJob, err := s.store.Load(memberJob.ID)
+	if err != nil {
+		return nil, err
+	}
+	bgDeployJob, err := s.store.Load(req.JobID)
+	if err != nil {
+		return nil, err
+	}
+	force := req.Force
+	s.start(func() {
+		s.executeMemberRemove(s.ctx, bgMemberJob, bgDeployJob, force)
+	})
+	return memberJob, nil
+}
+
+func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJob *Job) {
+	storedSecret, err := s.store.LoadSecret(deployJob.ID)
+	if err != nil {
+		memberJob.Status = JobStatusFailed
+		memberJob.Error = fmt.Sprintf("load job secret: %s", err)
+		s.updateJobProgress(memberJob)
+		_ = s.store.Save(memberJob)
+		return
 	}
 	secret := SecretInput{
 		PostgresPassword:   storedSecret.PostgresPassword,
 		ReplicatorPassword: storedSecret.ReplicatorPassword,
 		AdminPassword:      storedSecret.AdminPassword,
 	}
+	timeout := time.Duration(deployJob.Request.StepTimeoutSeconds) * time.Second
 
-	timeout := time.Duration(job.Request.StepTimeoutSeconds) * time.Second
-	result := s.doRemoveMember(ctx, memberRunConfig{
-		jobID:    req.JobID,
-		spec:     job.Request,
-		secret:   secret,
-		memberIP: req.MemberIP,
-		force:    req.Force,
-		timeout:  timeout,
-	})
+	for _, ip := range memberJob.MemberOp.MemberIPs {
+		memberJob.CurrentStep = ip
+		s.updateJobProgress(memberJob)
+		_ = s.store.Save(memberJob)
 
-	if result.Status == JobStatusCompleted {
-		updated := make([]string, 0, len(job.Request.StandbyIPs))
-		for _, ip := range job.Request.StandbyIPs {
-			if ip != req.MemberIP {
-				updated = append(updated, ip)
+		result := s.doAddMember(ctx, memberRunConfig{
+			jobID:    deployJob.ID,
+			spec:     deployJob.Request,
+			secret:   secret,
+			memberIP: ip,
+			timeout:  timeout,
+		})
+		memberJob.Steps = append(memberJob.Steps, result)
+
+		if result.Status == JobStatusCompleted {
+			deployJob.Request.StandbyIPs = append(deployJob.Request.StandbyIPs, ip)
+			memberJob.Request.StandbyIPs = deployJob.Request.StandbyIPs
+			_ = s.store.Save(deployJob)
+		} else {
+			memberJob.Status = JobStatusFailed
+			memberJob.Error = result.Message
+			if memberJob.Error == "" {
+				memberJob.Error = fmt.Sprintf("add member %s failed", ip)
 			}
+			memberJob.CurrentStep = ""
+			s.updateJobProgress(memberJob)
+			_ = s.store.Save(memberJob)
+			return
 		}
-		job.Request.StandbyIPs = updated
-		_ = s.store.Save(job)
 	}
 
-	return &MemberOperationResult{
-		Action:    "remove",
-		MemberIPs: []string{req.MemberIP},
-		Spec:      job.Request,
-		Steps:     []StepResult{result},
-	}, stepError(result)
+	memberJob.Status = JobStatusCompleted
+	memberJob.CurrentStep = ""
+	memberJob.Error = ""
+	s.updateJobProgress(memberJob)
+	_ = s.store.Save(memberJob)
+}
+
+func (s *Service) executeMemberRemove(ctx context.Context, memberJob *Job, deployJob *Job, force bool) {
+	storedSecret, err := s.store.LoadSecret(deployJob.ID)
+	if err != nil {
+		memberJob.Status = JobStatusFailed
+		memberJob.Error = fmt.Sprintf("load job secret: %s", err)
+		s.updateJobProgress(memberJob)
+		_ = s.store.Save(memberJob)
+		return
+	}
+	secret := SecretInput{
+		PostgresPassword:   storedSecret.PostgresPassword,
+		ReplicatorPassword: storedSecret.ReplicatorPassword,
+		AdminPassword:      storedSecret.AdminPassword,
+	}
+	timeout := time.Duration(deployJob.Request.StepTimeoutSeconds) * time.Second
+	ip := memberJob.MemberOp.MemberIPs[0]
+
+	memberJob.CurrentStep = ip
+	s.updateJobProgress(memberJob)
+	_ = s.store.Save(memberJob)
+
+	result := s.doRemoveMember(ctx, memberRunConfig{
+		jobID:    deployJob.ID,
+		spec:     deployJob.Request,
+		secret:   secret,
+		memberIP: ip,
+		force:    force,
+		timeout:  timeout,
+	})
+	memberJob.Steps = append(memberJob.Steps, result)
+
+	if result.Status == JobStatusCompleted {
+		updated := make([]string, 0, len(deployJob.Request.StandbyIPs))
+		for _, existingIP := range deployJob.Request.StandbyIPs {
+			if existingIP != ip {
+				updated = append(updated, existingIP)
+			}
+		}
+		deployJob.Request.StandbyIPs = updated
+		memberJob.Request.StandbyIPs = updated
+		_ = s.store.Save(deployJob)
+		memberJob.Status = JobStatusCompleted
+		memberJob.Error = ""
+	} else {
+		memberJob.Status = JobStatusFailed
+		memberJob.Error = result.Message
+		if memberJob.Error == "" {
+			memberJob.Error = fmt.Sprintf("remove member %s failed", ip)
+		}
+	}
+	memberJob.CurrentStep = ""
+	s.updateJobProgress(memberJob)
+	_ = s.store.Save(memberJob)
 }
 
 func (s *Service) doAddMember(ctx context.Context, cfg memberRunConfig) StepResult {
@@ -523,7 +630,11 @@ func (s *Service) ConnectionInfo(ctx context.Context, jobID string) (host string
 }
 
 func (s *Service) updateJobProgress(job *Job) {
-	job.TotalSteps = s.totalStepsFor(job.Request)
+	if job.MemberOp != nil {
+		job.TotalSteps = len(job.MemberOp.MemberIPs)
+	} else {
+		job.TotalSteps = s.totalStepsFor(job.Request)
+	}
 	job.CompletedSteps = completedSteps(job)
 	if job.Status == JobStatusCompleted && job.TotalSteps > 0 {
 		job.CompletedSteps = job.TotalSteps

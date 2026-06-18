@@ -50,6 +50,22 @@ func (app *application) createMySQLHAProxyConfigHandler(w http.ResponseWriter, r
 		return
 	}
 
+	// Add-member mode: port + single node_ip, no db_port and no node_ips list.
+	if req.DBPort == 0 && len(req.NodeIPs) == 0 && req.NodeIP != "" {
+		if err := app.haproxy.AddMySQLMember(r.Context(), haproxy.AddMemberConfigInput{
+			Port:   req.Port,
+			NodeIP: req.NodeIP,
+		}); err != nil {
+			errJSON(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		ok(w, "HAProxy MySQL config updated and reloaded", map[string]any{
+			"port":   req.Port,
+			"node_ip": req.NodeIP,
+		})
+		return
+	}
+
 	nodes := resolveNodeIPs(req.NodeIPs, req.NodeIP)
 
 	if err := app.haproxy.CreateMySQLConfig(r.Context(), haproxy.CreateMySQLConfigInput{
@@ -72,6 +88,22 @@ func (app *application) createPGSQLHAProxyConfigHandler(w http.ResponseWriter, r
 	var req createPGSQLHAProxyRequest
 	if err := decodeJSON(r, &req); err != nil {
 		errJSON(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	// Add-member mode: port + single node_ip, no db_port and no node_ips list.
+	if req.DBPort == 0 && len(req.NodeIPs) == 0 && req.NodeIP != "" {
+		if err := app.haproxy.AddPGSQLMember(r.Context(), haproxy.AddMemberConfigInput{
+			Port:   req.Port,
+			NodeIP: req.NodeIP,
+		}); err != nil {
+			errJSON(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		ok(w, "HAProxy PostgreSQL config updated and reloaded", map[string]any{
+			"port":   req.Port,
+			"node_ip": req.NodeIP,
+		})
 		return
 	}
 
@@ -152,4 +184,51 @@ func (app *application) reloadHAProxyHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	ok(w, "HAProxy reloaded successfully", nil)
+}
+
+type addMemberHAProxyRequest struct {
+	Port   int    `json:"port"`
+	NodeIP string `json:"node_ip"`
+}
+
+func (app *application) addMySQLMemberHAProxyHandler(w http.ResponseWriter, r *http.Request) {
+	var req addMemberHAProxyRequest
+	if err := decodeJSON(r, &req); err != nil {
+		errJSON(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	if err := app.haproxy.AddMySQLMember(r.Context(), haproxy.AddMemberConfigInput{
+		Port:   req.Port,
+		NodeIP: req.NodeIP,
+	}); err != nil {
+		errJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	ok(w, "HAProxy MySQL config updated and reloaded", map[string]any{
+		"port":   req.Port,
+		"node_ip": req.NodeIP,
+	})
+}
+
+func (app *application) addPGSQLMemberHAProxyHandler(w http.ResponseWriter, r *http.Request) {
+	var req addMemberHAProxyRequest
+	if err := decodeJSON(r, &req); err != nil {
+		errJSON(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	if err := app.haproxy.AddPGSQLMember(r.Context(), haproxy.AddMemberConfigInput{
+		Port:   req.Port,
+		NodeIP: req.NodeIP,
+	}); err != nil {
+		errJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	ok(w, "HAProxy PostgreSQL config updated and reloaded", map[string]any{
+		"port":   req.Port,
+		"node_ip": req.NodeIP,
+	})
 }
