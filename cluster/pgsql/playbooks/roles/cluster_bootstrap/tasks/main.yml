@@ -101,6 +101,21 @@
   when: inventory_hostname in groups['pgsql_primary']
   tags: ["cluster_bootstrap"]
 
+# Enforce synchronous_mode via the Patroni REST API so this takes effect on
+# both fresh clusters (redundant with bootstrap.dcs but harmless) and on
+# existing clusters whose DCS config pre-dates the synchronous_mode setting.
+- name: Set synchronous_mode in Patroni DCS
+  ansible.builtin.uri:
+    url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/config"
+    method: PATCH
+    body_format: json
+    body:
+      synchronous_mode: true
+      synchronous_mode_strict: false
+    status_code: [200]
+  when: inventory_hostname in groups['pgsql_primary']
+  tags: ["cluster_bootstrap"]
+
 - name: Start Patroni on standby nodes
   ansible.builtin.systemd:
     name: patroni

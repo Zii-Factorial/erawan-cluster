@@ -61,6 +61,20 @@
   delegate_to: "{{ groups['pgsql_primary'][0] }}"
   tags: ["verify_cluster"]
 
+- name: Wait for sync_standby to be elected
+  ansible.builtin.uri:
+    url: "http://{{ primary_ip }}:{{ patroni_rest_port }}/cluster"
+    return_content: true
+  register: _sync_check
+  until: _sync_check.json.members | selectattr('role', 'equalto', 'sync_standby') | list | length > 0
+  retries: 30
+  delay: 5
+  changed_when: false
+  run_once: true
+  delegate_to: "{{ groups['pgsql_primary'][0] }}"
+  when: standby_ips | length > 0
+  tags: ["verify_cluster"]
+
 - name: Wait for expected replication connections on primary
   no_log: true
   ansible.builtin.shell: |
