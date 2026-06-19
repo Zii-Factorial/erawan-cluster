@@ -5,19 +5,23 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 )
 
 type Service struct {
-	ctx           context.Context
-	store         *Store
-	runner        *Runner
-	collector     *Collector
-	steps         []step
-	sshUser       string
-	sshKeyPath    string
-	start         func(func())
-	runDeployStep func(context.Context, runConfig) StepResult
+	ctx              context.Context
+	store            *Store
+	runner           *Runner
+	collector        *Collector
+	steps            []step
+	sshUser          string
+	sshKeyPath       string
+	start            func(func())
+	runDeployStep    func(context.Context, runConfig) StepResult
+	runAddMemberStep func(context.Context, memberRunConfig) StepResult
+	runRemMemberStep func(context.Context, memberRunConfig) StepResult
 }
 
 type step struct {
@@ -45,6 +49,8 @@ func NewService(store *Store, runner *Runner) *Service {
 	svc.start = func(fn func()) { go fn() }
 	if runner != nil {
 		svc.runDeployStep = runner.RunDeployStep
+		svc.runAddMemberStep = runner.RunAddMember
+		svc.runRemMemberStep = runner.RunRemoveMember
 	}
 	return svc
 }
@@ -208,6 +214,304 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 	return job, nil
 }
 
+func (s *Service) AddMember(ctx context.Context, req AddMemberRequest) (*Job, error) {
+	_ = ctx
+	if err := ValidateAddMemberRequest(&req); err != nil {
+		return nil, err
+	}
+	deployJob, err := s.store.Load(req.JobID)
+	if err != nil {
+		return nil, fmt.Errorf("load job %q: %w", req.JobID, err)
+	}
+	if err := s.hydrateStoredSSHConfig(deployJob); err != nil {
+		return nil, err
+	}
+
+	existing := make(map[string]struct{}, len(deployJob.Request.StandbyIPs)+1)
+	existing[deployJob.Request.PrimaryIP] = struct{}{}
+	for _, ip := range deployJob.Request.StandbyIPs {
+		existing[ip] = struct{}{}
+	}
+	for _, ip := range req.MemberIPs {
+		if _, ok := existing[ip]; ok {
+			return nil, fmt.Errorf("member_ip %s is already in the cluster", ip)
+		}
+	}
+
+	if _, err := s.store.LoadSecret(req.JobID); err != nil {
+		return nil, fmt.Errorf("load job secret %q: %w", req.JobID, err)
+	}
+
+	memberJob := &Job{
+		ID:                newJobID(),
+		Status:            JobStatusRunning,
+		CreatedAt:         time.Now().UTC(),
+		UpdatedAt:         time.Now().UTC(),
+		LastCompletedStep: -1,
+		Request:           deployJob.Request,
+		MemberOp: &MemberOperation{
+			Type:        "add",
+			MemberIPs:   req.MemberIPs,
+			SourceJobID: req.JobID,
+		},
+		Steps: make([]StepResult, 0, len(req.MemberIPs)),
+	}
+	s.updateJobProgress(memberJob)
+	if err := s.store.Save(memberJob); err != nil {
+		return nil, err
+	}
+
+	bgMemberJob, err := s.store.Load(memberJob.ID)
+	if err != nil {
+		return nil, err
+	}
+	bgDeployJob, err := s.store.Load(req.JobID)
+	if err != nil {
+		return nil, err
+	}
+	s.start(func() {
+		s.executeMemberAdd(s.ctx, bgMemberJob, bgDeployJob)
+	})
+	return memberJob, nil
+}
+
+func (s *Service) RemoveMember(ctx context.Context, req RemoveMemberRequest) (*Job, error) {
+	_ = ctx
+	if err := ValidateRemoveMemberRequest(&req); err != nil {
+		return nil, err
+	}
+	deployJob, err := s.store.Load(req.JobID)
+	if err != nil {
+		return nil, fmt.Errorf("load job %q: %w", req.JobID, err)
+	}
+	if err := s.hydrateStoredSSHConfig(deployJob); err != nil {
+		return nil, err
+	}
+
+	if deployJob.Request.PrimaryIP == req.MemberIP {
+		return nil, fmt.Errorf("cannot remove the primary node %s; promote a standby first", req.MemberIP)
+	}
+	found := false
+	for _, ip := range deployJob.Request.StandbyIPs {
+		if ip == req.MemberIP {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("member_ip %s is not in the cluster", req.MemberIP)
+	}
+
+	if _, err := s.store.LoadSecret(req.JobID); err != nil {
+		return nil, fmt.Errorf("load job secret %q: %w", req.JobID, err)
+	}
+
+	memberJob := &Job{
+		ID:                newJobID(),
+		Status:            JobStatusRunning,
+		CreatedAt:         time.Now().UTC(),
+		UpdatedAt:         time.Now().UTC(),
+		LastCompletedStep: -1,
+		Request:           deployJob.Request,
+		MemberOp: &MemberOperation{
+			Type:        "remove",
+			MemberIPs:   []string{req.MemberIP},
+			SourceJobID: req.JobID,
+		},
+		Steps: make([]StepResult, 0, 1),
+	}
+	s.updateJobProgress(memberJob)
+	if err := s.store.Save(memberJob); err != nil {
+		return nil, err
+	}
+
+	bgMemberJob, err := s.store.Load(memberJob.ID)
+	if err != nil {
+		return nil, err
+	}
+	bgDeployJob, err := s.store.Load(req.JobID)
+	if err != nil {
+		return nil, err
+	}
+	force := req.Force
+	s.start(func() {
+		s.executeMemberRemove(s.ctx, bgMemberJob, bgDeployJob, force)
+	})
+	return memberJob, nil
+}
+
+func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJob *Job) {
+	storedSecret, err := s.store.LoadSecret(deployJob.ID)
+	if err != nil {
+		memberJob.Status = JobStatusFailed
+		memberJob.Error = fmt.Sprintf("load job secret: %s", err)
+		s.updateJobProgress(memberJob)
+		_ = s.store.Save(memberJob)
+		return
+	}
+	secret := SecretInput{
+		PostgresPassword:   storedSecret.PostgresPassword,
+		ReplicatorPassword: storedSecret.ReplicatorPassword,
+		AdminPassword:      storedSecret.AdminPassword,
+	}
+	timeout := time.Duration(deployJob.Request.StepTimeoutSeconds) * time.Second
+	newIPs := memberJob.MemberOp.MemberIPs
+
+	// Snapshot the current spec so all goroutines share the same read-only base.
+	baseSpec := deployJob.Request
+	baseSpec.StandbyIPs = append([]string{}, deployJob.Request.StandbyIPs...)
+
+	// Mark all nodes as in-flight so the caller can see what's running.
+	memberJob.CurrentStep = strings.Join(newIPs, ",")
+	s.updateJobProgress(memberJob)
+	_ = s.store.Save(memberJob)
+
+	// Run each member addition in parallel — their Ansible runs are independent
+	// (separate temp dirs, inventories, and pg_basebackup streams from primary).
+	results := make([]StepResult, len(newIPs))
+	var wg sync.WaitGroup
+	for i, ip := range newIPs {
+		i, ip := i, ip
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = s.doAddMember(ctx, memberRunConfig{
+				jobID:    deployJob.ID,
+				spec:     baseSpec,
+				secret:   secret,
+				memberIP: ip,
+				timeout:  timeout,
+			})
+		}()
+	}
+	wg.Wait()
+
+	// Collect results; add successful nodes to the deploy job's standby list.
+	var failed []string
+	for i, result := range results {
+		memberJob.Steps = append(memberJob.Steps, result)
+		ip := newIPs[i]
+		if result.Status == JobStatusCompleted {
+			deployJob.Request.StandbyIPs = append(deployJob.Request.StandbyIPs, ip)
+		} else {
+			msg := result.Message
+			if msg == "" {
+				msg = fmt.Sprintf("add member %s failed", ip)
+			}
+			failed = append(failed, msg)
+		}
+	}
+	memberJob.Request.StandbyIPs = deployJob.Request.StandbyIPs
+	_ = s.store.Save(deployJob)
+
+	memberJob.CurrentStep = ""
+	if len(failed) > 0 {
+		memberJob.Status = JobStatusFailed
+		memberJob.Error = strings.Join(failed, "; ")
+		s.updateJobProgress(memberJob)
+		_ = s.store.Save(memberJob)
+		return
+	}
+
+	memberJob.Status = JobStatusCompleted
+	memberJob.Error = ""
+	s.updateJobProgress(memberJob)
+	_ = s.store.Save(memberJob)
+}
+
+func (s *Service) executeMemberRemove(ctx context.Context, memberJob *Job, deployJob *Job, force bool) {
+	storedSecret, err := s.store.LoadSecret(deployJob.ID)
+	if err != nil {
+		memberJob.Status = JobStatusFailed
+		memberJob.Error = fmt.Sprintf("load job secret: %s", err)
+		s.updateJobProgress(memberJob)
+		_ = s.store.Save(memberJob)
+		return
+	}
+	secret := SecretInput{
+		PostgresPassword:   storedSecret.PostgresPassword,
+		ReplicatorPassword: storedSecret.ReplicatorPassword,
+		AdminPassword:      storedSecret.AdminPassword,
+	}
+	timeout := time.Duration(deployJob.Request.StepTimeoutSeconds) * time.Second
+	ip := memberJob.MemberOp.MemberIPs[0]
+
+	memberJob.CurrentStep = ip
+	s.updateJobProgress(memberJob)
+	_ = s.store.Save(memberJob)
+
+	result := s.doRemoveMember(ctx, memberRunConfig{
+		jobID:    deployJob.ID,
+		spec:     deployJob.Request,
+		secret:   secret,
+		memberIP: ip,
+		force:    force,
+		timeout:  timeout,
+	})
+	memberJob.Steps = append(memberJob.Steps, result)
+
+	if result.Status == JobStatusCompleted {
+		updated := make([]string, 0, len(deployJob.Request.StandbyIPs))
+		for _, existingIP := range deployJob.Request.StandbyIPs {
+			if existingIP != ip {
+				updated = append(updated, existingIP)
+			}
+		}
+		deployJob.Request.StandbyIPs = updated
+		memberJob.Request.StandbyIPs = updated
+		_ = s.store.Save(deployJob)
+		memberJob.Status = JobStatusCompleted
+		memberJob.Error = ""
+	} else {
+		memberJob.Status = JobStatusFailed
+		memberJob.Error = result.Message
+		if memberJob.Error == "" {
+			memberJob.Error = fmt.Sprintf("remove member %s failed", ip)
+		}
+	}
+	memberJob.CurrentStep = ""
+	s.updateJobProgress(memberJob)
+	_ = s.store.Save(memberJob)
+}
+
+func (s *Service) doAddMember(ctx context.Context, cfg memberRunConfig) StepResult {
+	if s.runAddMemberStep == nil {
+		return StepResult{
+			Name:      "add_member",
+			Status:    JobStatusFailed,
+			StartedAt: time.Now().UTC(),
+			EndedAt:   time.Now().UTC(),
+			ExitCode:  -1,
+			Message:   "add member runner is not configured",
+		}
+	}
+	return s.runAddMemberStep(ctx, cfg)
+}
+
+func (s *Service) doRemoveMember(ctx context.Context, cfg memberRunConfig) StepResult {
+	if s.runRemMemberStep == nil {
+		return StepResult{
+			Name:      "remove_member",
+			Status:    JobStatusFailed,
+			StartedAt: time.Now().UTC(),
+			EndedAt:   time.Now().UTC(),
+			ExitCode:  -1,
+			Message:   "remove member runner is not configured",
+		}
+	}
+	return s.runRemMemberStep(ctx, cfg)
+}
+
+func stepError(result StepResult) error {
+	if result.Status != JobStatusCompleted {
+		if result.Message != "" {
+			return fmt.Errorf("%s", result.Message)
+		}
+		return fmt.Errorf("step %s failed", result.Name)
+	}
+	return nil
+}
+
 func (s *Service) Get(jobID string) (*Job, error) {
 	job, err := s.store.Load(jobID)
 	if err != nil {
@@ -353,7 +657,11 @@ func (s *Service) ConnectionInfo(ctx context.Context, jobID string) (host string
 }
 
 func (s *Service) updateJobProgress(job *Job) {
-	job.TotalSteps = s.totalStepsFor(job.Request)
+	if job.MemberOp != nil {
+		job.TotalSteps = len(job.MemberOp.MemberIPs)
+	} else {
+		job.TotalSteps = s.totalStepsFor(job.Request)
+	}
 	job.CompletedSteps = completedSteps(job)
 	if job.Status == JobStatusCompleted && job.TotalSteps > 0 {
 		job.CompletedSteps = job.TotalSteps

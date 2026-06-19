@@ -1,0 +1,33 @@
+---
+# ---------------------------------------------------------------------------
+# PLAY 1 — Gracefully stop Patroni/etcd on the node being removed
+# ---------------------------------------------------------------------------
+- name: Stop services on removed node
+  hosts: all
+  gather_facts: false
+  become: true
+  any_errors_fatal: false
+  roles:
+    - remove_member_stop
+
+# ---------------------------------------------------------------------------
+# PLAY 2 — Remove etcd membership from the cluster (runs on primary)
+# ---------------------------------------------------------------------------
+- name: Remove etcd member from cluster
+  hosts: pgsql_primary
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  roles:
+    - remove_member
+
+# ---------------------------------------------------------------------------
+# PLAY 3 — Verify cluster health on remaining nodes
+# ---------------------------------------------------------------------------
+- name: Verify cluster after member removal
+  hosts: pgsql_primary:pgsql_standby
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  roles:
+    - verify_cluster

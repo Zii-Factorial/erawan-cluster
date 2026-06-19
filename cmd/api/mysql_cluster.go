@@ -110,3 +110,33 @@ func (app *application) rollbackMySQLClusterJobHandler(w http.ResponseWriter, r 
 	}
 	ok(w, "MySQL cluster rollback executed", job)
 }
+
+func (app *application) addMySQLMemberHandler(w http.ResponseWriter, r *http.Request) {
+	var req mysqlcluster.AddMemberRequest
+	if err := decodeJSON(r, &req); err != nil {
+		errJSON(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	job, err := app.mysqlCluster.AddMember(r.Context(), req)
+	if err != nil {
+		errJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	accepted(w, "MySQL cluster member addition started", job)
+}
+
+func (app *application) removeMySQLMemberHandler(w http.ResponseWriter, r *http.Request) {
+	var req mysqlcluster.RemoveMemberRequest
+	if err := decodeJSON(r, &req); err != nil {
+		errJSON(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	job, err := app.mysqlCluster.RemoveMember(r.Context(), req)
+	if err != nil {
+		errJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	accepted(w, "MySQL cluster member removal started", job)
+}

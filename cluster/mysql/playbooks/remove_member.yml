@@ -1,0 +1,22 @@
+---
+# ---------------------------------------------------------------------------
+# PLAY 1 — Remove instance from InnoDB Cluster (runs on primary)
+# ---------------------------------------------------------------------------
+- name: Remove member from InnoDB Cluster
+  hosts: mysql_primary
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  roles:
+    - remove_member
+
+# ---------------------------------------------------------------------------
+# PLAY 2 — Verify cluster health after removal
+# ---------------------------------------------------------------------------
+- name: Verify cluster after member removal
+  hosts: mysql_primary
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  roles:
+    - verify_cluster

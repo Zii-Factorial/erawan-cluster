@@ -145,6 +145,16 @@
       "key": "DBMGR_DBNAME",
       "value": "newdb",
       "description": "Database name to create or delete via DB Manager"
+    },
+    {
+      "key": "MEMBER_IP",
+      "value": "10.0.0.4",
+      "description": "IP of the node to add or remove from the cluster"
+    },
+    {
+      "key": "MEMBER_JOB_ID",
+      "value": "",
+      "description": "Job ID returned by Add Member / Remove Member — use this to poll the member operation. JOB_ID always stays as the deploy job ID."
     }
 
   ],
@@ -241,8 +251,14 @@
           "        pm.collectionVariables.set('LAST_RESPONSE', JSON.stringify(json, null, 2));",
           "        console.log('[erawan] response decrypted:', JSON.stringify(json, null, 2));",
           "        if (json && json.data && json.data.id) {",
-          "            pm.collectionVariables.set('JOB_ID', json.data.id);",
-          "            console.log('[erawan] JOB_ID set to:', json.data.id);",
+          "            if (json.data.member_op) {",
+          "                // Member operation job — store separately, keep JOB_ID as the deploy job ID",
+          "                pm.collectionVariables.set('MEMBER_JOB_ID', json.data.id);",
+          "                console.log('[erawan] MEMBER_JOB_ID set to:', json.data.id);",
+          "            } else {",
+          "                pm.collectionVariables.set('JOB_ID', json.data.id);",
+          "                console.log('[erawan] JOB_ID set to:', json.data.id);",
+          "            }",
           "        }",
           "        if (json && json.data && json.data.secret) {",
           "            const s = json.data.secret;",
@@ -323,7 +339,42 @@
               },
               "raw": "{\n  \"port\": 25010,\n  \"node_ips\": [\"10.10.107.182\", \"10.10.107.183\"],\n  \"db_port\": 6446\n}"
             },
-            "description": "Creates an HAProxy frontend for a MySQL Router cluster. db_port is typically 6446 (R/W) or 6447 (R/O).",
+            "description": "Creates (or replaces) an HAProxy frontend for a MySQL Router cluster. `db_port` is typically 6446 (R/W) or 6447 (R/O).\n\n**Dual-mode:** If you omit `db_port` and `node_ips` and only provide `port` + `node_ip` (singular), the request adds that IP to an existing config instead of creating a new one — same as calling `PATCH /haproxy/config/mysql`.",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/config/mysql",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "haproxy",
+                "config",
+                "mysql"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Add MySQL Member",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"port\": 25010,\n  \"node_ip\": \"{{MEMBER_IP}}\"\n}"
+            },
+            "description": "Adds a new backend server to an existing MySQL HAProxy config identified by `port`. Reads the current config, appends the new IP, rebuilds, validates, and reloads HAProxy.\n\n- `port` — the HAProxy listen port of the config to update\n- `node_ip` — IP or hostname of the new node to add",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/config/mysql",
               "protocol": "http",
@@ -358,7 +409,42 @@
               },
               "raw": "{\n  \"port\": 25432,\n  \"node_ips\": [\"10.0.0.1\", \"10.0.0.2\"],\n  \"db_port\": 5432,\n  \"patroni_port\": 8008\n}"
             },
-            "description": "Creates an HAProxy frontend for a PostgreSQL/Patroni cluster. Uses httpchk GET /leader on the Patroni REST port so only the current leader receives traffic. patroni_port defaults to 8008 when omitted.",
+            "description": "Creates (or replaces) an HAProxy frontend for a PostgreSQL/Patroni cluster. Uses `httpchk GET /leader` on the Patroni REST port so only the current leader receives traffic. `patroni_port` defaults to 8008 when omitted.\n\n**Dual-mode:** If you omit `db_port` and `node_ips` and only provide `port` + `node_ip` (singular), the request adds that IP to an existing config instead of creating a new one — same as calling `PATCH /haproxy/config/pgsql`.",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/config/pgsql",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "haproxy",
+                "config",
+                "pgsql"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Add PostgreSQL Member",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"port\": 25432,\n  \"node_ip\": \"{{MEMBER_IP}}\"\n}"
+            },
+            "description": "Adds a new backend server to an existing PostgreSQL HAProxy config identified by `port`. Reads the current config (including patroni check port), appends the new IP, rebuilds, validates, and reloads HAProxy.\n\n- `port` — the HAProxy listen port of the config to update\n- `node_ip` — IP or hostname of the new node to add",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/config/pgsql",
               "protocol": "http",
@@ -556,20 +642,22 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"ssl_mode\": \"disable\",\n  \"connect_timeout\": 10,\n  \"categories\": [],\n  \"databases\": [],\n  \"limit\": 20\n}"
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"proxy_port\": {{MYSQL_PROXY_PORT}},\n  \"ssl_mode\": \"disable\",\n  \"connect_timeout\": 10,\n  \"categories\": [],\n  \"databases\": [],\n  \"limit\": 20\n}"
             },
             "url": {
-              "raw": "{{API_HOST}}:{{API_PORT}}/cluster/mysql/metrics",
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/metrics",
+              "protocol": "http",
               "host": [
-                "{{API_HOST}}:{{API_PORT}}"
+                "{{API_HOST}}"
               ],
+              "port": "{{API_PORT}}",
               "path": [
                 "cluster",
                 "mysql",
                 "metrics"
               ]
             },
-            "description": "Collects live metrics from a running MySQL InnoDB Cluster.\n\n**Required:** `user`\n\n**Connection routing:**\n- `host` (optional) — HAProxy or MySQL Router address; defaults to `PROXY_HOST` env var on the server (usually `127.0.0.1`)\n- `port` — HAProxy listen port for MySQL R/W traffic (e.g. 25010)\n\n**Optional:** `host`, `port` (default 3306), `password`, `database` (default `information_schema`), `ssl_mode` (`disable`|`require`, default `disable`), `connect_timeout` (seconds, default 10), `limit` (top-N for slow queries/digest lists, default 20), `from`/`to` (ISO 8601, filter slow queries)\n\n**`databases`** — optional list of database names to filter per-database results (connections by_database, slow queries, full-scan digests, fragmented tables). Empty array = all user databases. Response always includes `database_count` (total user databases on the server).\n\n**`categories`** — empty array returns all 7; pick any subset:\n- `cluster` — Group Replication membership, primary election, node states\n- `uptime` — MySQL server process uptime\n- `connections` — active/sleeping threads, utilisation, per-database breakdown\n- `replication` — GR member certification stats and applier worker lag\n- `performance` — InnoDB buffer-pool hit ratio, QPS/TPS, temp-table and sort pressure\n- `query` — Digest stats from performance_schema, slow queries, full-scan digests\n- `maintenance` — InnoDB purge lag, table fragmentation, metadata locks"
+            "description": "Collects live metrics from a running MySQL InnoDB Cluster.\n\n**Connection routing (all server-side — not in payload):**\n- `host` — always `PROXY_HOST` env on the server (default `127.0.0.1`)\n- `user` / `password` — resolved from the deploy job via `job_id`\n\n**Required payload fields:**\n- `job_id` — deploy job ID (resolves credentials)\n- `proxy_port` — HAProxy frontend port for this cluster (e.g. `{{MYSQL_PROXY_PORT}}`). This is NOT the MySQL server port (3306).\n\n**Optional:** `database` (default `information_schema`), `ssl_mode` (`disable`|`require`, default `disable`), `connect_timeout` (seconds, default 10), `limit` (top-N for slow queries/digest lists, default 20), `from`/`to` (ISO 8601, filter slow queries)\n\n**`databases`** — optional list of database names to filter per-database results (connections by_database, slow queries, full-scan digests, fragmented tables). Empty array = all user databases. Response always includes `database_count` (total user databases on the server).\n\n**`categories`** — empty array returns all 7; pick any subset:\n- `cluster` — Group Replication membership, primary election, node states\n- `uptime` — MySQL server process uptime\n- `connections` — active/sleeping threads, utilisation, per-database breakdown\n- `replication` — GR member certification stats and applier worker lag\n- `performance` — InnoDB buffer-pool hit ratio, QPS/TPS, temp-table and sort pressure\n- `query` — Digest stats from performance_schema, slow queries, full-scan digests\n- `maintenance` — InnoDB purge lag, table fragmentation, metadata locks"
           },
           "response": []
         },
@@ -714,6 +802,122 @@
               ]
             }
           }
+        },
+        {
+          "name": "Add Member",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Auto-extract MEMBER_JOB_ID from add-member response (no encryption).",
+                  "// JOB_ID is intentionally NOT updated — it stays as the deploy job ID",
+                  "// for DB manager / metrics / resume calls.",
+                  "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
+                  "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
+                  "try {",
+                  "    const body = pm.response.json();",
+                  "    if (body && body.data && body.data.id) {",
+                  "        pm.collectionVariables.set('MEMBER_JOB_ID', body.data.id);",
+                  "        console.log('[erawan] MEMBER_JOB_ID set to:', body.data.id);",
+                  "        console.log('[erawan] Poll GET /cluster/mysql/jobs/' + body.data.id + ' to track progress');",
+                  "    }",
+                  "} catch(e) {}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"member_ips\": [\"{{MEMBER_IP}}\"],\n  \"assume_prepared\": false\n}"
+            },
+            "description": "Adds one or more standby nodes to an existing MySQL InnoDB Cluster. Returns a new member job immediately (202 Accepted). Poll `GET /cluster/mysql/jobs/{id}` to track progress.\n\nThe response includes a `member_op` field with `type: \"add\"`, `member_ips`, and `source_job_id` (the original deploy job). `JOB_ID` is auto-set to the new member job ID.\n\nNodes are added sequentially; if one fails the job is marked failed with the step details. On success the deploy job's `standby_ips` is updated automatically.\n\n- `job_id` — ID of the cluster deployment job\n- `member_ips` — list of IPs of the new nodes to add\n- `assume_prepared` — set `true` to skip the `configure_instances` step\n\nPasswords are always taken from the stored job secret — no password fields needed.",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/members",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "mysql",
+                "members"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Remove Member",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Auto-extract MEMBER_JOB_ID from remove-member response (no encryption).",
+                  "// JOB_ID is intentionally NOT updated — it stays as the deploy job ID",
+                  "// for DB manager / metrics / resume calls.",
+                  "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
+                  "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
+                  "try {",
+                  "    const body = pm.response.json();",
+                  "    if (body && body.data && body.data.id) {",
+                  "        pm.collectionVariables.set('MEMBER_JOB_ID', body.data.id);",
+                  "        console.log('[erawan] MEMBER_JOB_ID set to:', body.data.id);",
+                  "        console.log('[erawan] Poll GET /cluster/mysql/jobs/' + body.data.id + ' to track progress');",
+                  "    }",
+                  "} catch(e) {}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"member_ip\": \"{{MEMBER_IP}}\",\n  \"force\": false\n}"
+            },
+            "description": "Removes a standby node from the MySQL InnoDB Cluster. Returns a new member job immediately (202 Accepted). Poll `GET /cluster/mysql/jobs/{id}` to track progress.\n\nThe response includes a `member_op` field with `type: \"remove\"`, `member_ips`, and `source_job_id`. `JOB_ID` is auto-set to the new member job ID. The primary node cannot be removed.\n\nOn success the deploy job's `standby_ips` is updated automatically.\n\n- `job_id` — ID of the cluster deployment job\n- `member_ip` — IP of the standby node to remove\n- `force` — set `true` to force-remove an unreachable or error-state node\n\nPasswords are always taken from the stored job secret — no password fields needed.",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/members",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "mysql",
+                "members"
+              ]
+            }
+          }
         }
       ]
     },
@@ -802,9 +1006,9 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"database\": \"postgres\",\n  \"ssl_mode\": \"require\",\n  \"connect_timeout\": 10,\n  \"patroni_port\": 8008,\n  \"categories\": [],\n  \"databases\": [],\n  \"limit\": 20\n}"
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"proxy_port\": {{PGSQL_PROXY_PORT}},\n  \"database\": \"postgres\",\n  \"ssl_mode\": \"disable\",\n  \"connect_timeout\": 10,\n  \"patroni_port\": 8008,\n  \"categories\": [],\n  \"databases\": [],\n  \"limit\": 20\n}"
             },
-            "description": "Collects live metrics from a running PostgreSQL/Patroni cluster.\n\n**Required:** `user`\n\n**Connection routing:**\n- `host` (optional) — HAProxy address; defaults to `PROXY_HOST` env var on the server (usually `127.0.0.1`)\n- `port` — HAProxy listen port for PostgreSQL traffic (e.g. 25432)\n- `node_ips` — list of all cluster member IPs; the collector calls `GET /leader` on each and auto-discovers the current primary for Patroni REST (`cluster`, `failover` categories). Required only when collecting those categories.\n\n**Optional:** `host`, `port` (default 5432), `password`, `database` (default `postgres`), `ssl_mode` (`disable`|`require`, default `disable`), `connect_timeout` (seconds, default 10), `patroni_port` (default 8008), `limit` (top-N for slow queries/latency, default 20), `from`/`to` (ISO 8601, filter failover events and slow queries)\n\n**`databases`** — optional list of database names to filter per-database results (connections by_database, slow queries, autovacuum workers, logical slot lag). Empty array = all databases. Response always includes `database_count` (total user databases, excluding templates).\n\n**`categories`** — empty array returns all; pick any subset:\n- `cluster` — Patroni HA state, DCS health, node roles, TTL/loop_wait\n- `uptime` — PostgreSQL process uptime\n- `failover` — Patroni timeline/failover history (supports `from`/`to` filter)\n- `connections` — active, idle, idle-in-transaction, lock-waiters, wait-event breakdown\n- `replication` — streaming lag (LSN pipeline), standby count, WAL config, slot lag\n- `performance` — TPS, cache hit ratio, temp files, checkpoint pressure, bgwriter stats\n- `query` — avg/p95/p99 latency, slow queries, lock/deadlock counts, scan efficiency\n- `maintenance` — autovacuum workers, XID wraparound age, logical slot lag, pg_locks",
+            "description": "Collects live metrics from a running PostgreSQL/Patroni cluster.\n\n**Connection routing (all server-side — not in payload):**\n- `host` — always `PROXY_HOST` env on the server (default `127.0.0.1`)\n- `user` / `password` / `node_ips` — resolved from the deploy job via `job_id`\n\n**Required payload fields:**\n- `job_id` — deploy job ID (resolves credentials and node IPs for Patroni health checks)\n- `proxy_port` — HAProxy frontend port for this cluster (e.g. `{{PGSQL_PROXY_PORT}}`). This is NOT the PostgreSQL server port (5432).\n\n**Optional:** `database` (default `postgres`), `ssl_mode` (`disable`|`require`, default `disable`), `connect_timeout` (seconds, default 10), `patroni_port` (default 8008), `limit` (top-N for slow queries/latency, default 20), `from`/`to` (ISO 8601, filter failover events and slow queries)\n\n**`databases`** — optional list of database names to filter per-database results (connections by_database, slow queries, autovacuum workers, logical slot lag). Empty array = all databases. Response always includes `database_count` (total user databases, excluding templates).\n\n**`categories`** — empty array returns all; pick any subset:\n- `cluster` — Patroni HA state, DCS health, node roles, TTL/loop_wait\n- `uptime` — PostgreSQL process uptime\n- `failover` — Patroni timeline/failover history (supports `from`/`to` filter)\n- `connections` — active, idle, idle-in-transaction, lock-waiters, wait-event breakdown\n- `replication` — streaming lag (LSN pipeline), standby count, WAL config, slot lag\n- `performance` — TPS, cache hit ratio, temp files, checkpoint pressure, bgwriter stats\n- `query` — avg/p95/p99 latency, slow queries, lock/deadlock counts, scan efficiency\n- `maintenance` — autovacuum workers, XID wraparound age, logical slot lag, pg_locks",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/metrics",
               "protocol": "http",
@@ -900,6 +1104,122 @@
                 "jobs",
                 "{{JOB_ID}}",
                 "resume"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Add Member",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Auto-extract MEMBER_JOB_ID from add-member response (no encryption).",
+                  "// JOB_ID is intentionally NOT updated — it stays as the deploy job ID",
+                  "// for DB manager / metrics / resume calls.",
+                  "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
+                  "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
+                  "try {",
+                  "    const body = pm.response.json();",
+                  "    if (body && body.data && body.data.id) {",
+                  "        pm.collectionVariables.set('MEMBER_JOB_ID', body.data.id);",
+                  "        console.log('[erawan] MEMBER_JOB_ID set to:', body.data.id);",
+                  "        console.log('[erawan] Poll GET /cluster/mysql/jobs/' + body.data.id + ' to track progress');",
+                  "    }",
+                  "} catch(e) {}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"member_ips\": [\"{{MEMBER_IP}}\"]\n}"
+            },
+            "description": "Adds one or more standby nodes to an existing PostgreSQL/Patroni cluster. Returns a new member job immediately (202 Accepted). Poll `GET /cluster/pgsql/jobs/{id}` to track progress.\n\nThe response includes a `member_op` field with `type: \"add\"`, `member_ips`, and `source_job_id` (the original deploy job). `JOB_ID` is auto-set to the new member job ID.\n\nNodes are added sequentially; if one fails the job is marked failed with the step details. On success the deploy job's `standby_ips` is updated automatically.\n\n- `job_id` — ID of the cluster deployment job\n- `member_ips` — list of IPs of the new standby nodes to add\n\nPasswords are always taken from the stored job secret — no password fields needed.",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/members",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "pgsql",
+                "members"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Remove Member",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Auto-extract MEMBER_JOB_ID from remove-member response (no encryption).",
+                  "// JOB_ID is intentionally NOT updated — it stays as the deploy job ID",
+                  "// for DB manager / metrics / resume calls.",
+                  "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
+                  "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
+                  "try {",
+                  "    const body = pm.response.json();",
+                  "    if (body && body.data && body.data.id) {",
+                  "        pm.collectionVariables.set('MEMBER_JOB_ID', body.data.id);",
+                  "        console.log('[erawan] MEMBER_JOB_ID set to:', body.data.id);",
+                  "        console.log('[erawan] Poll GET /cluster/mysql/jobs/' + body.data.id + ' to track progress');",
+                  "    }",
+                  "} catch(e) {}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"member_ip\": \"{{MEMBER_IP}}\",\n  \"force\": false\n}"
+            },
+            "description": "Removes a standby node from the PostgreSQL/Patroni cluster. Returns a new member job immediately (202 Accepted). Poll `GET /cluster/pgsql/jobs/{id}` to track progress.\n\nThe response includes a `member_op` field with `type: \"remove\"`, `member_ips`, and `source_job_id`. `JOB_ID` is auto-set to the new member job ID. The primary node cannot be removed.\n\nOn success the deploy job's `standby_ips` is updated automatically, and the DB manager's primary discovery is corrected.\n\n- `job_id` — ID of the cluster deployment job\n- `member_ip` — IP of the standby node to remove\n- `force` — set `true` to proceed even if the node is unreachable (skips graceful stop)\n\nPasswords are always taken from the stored job secret — no password fields needed.",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/members",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "pgsql",
+                "members"
               ]
             }
           }

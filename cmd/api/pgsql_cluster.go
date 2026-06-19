@@ -95,3 +95,33 @@ func (app *application) resumePGSQLClusterJobHandler(w http.ResponseWriter, r *h
 		Secret *pgsqlcluster.StoredSecret `json:"secret,omitempty"`
 	}{job, secret})
 }
+
+func (app *application) addPGSQLMemberHandler(w http.ResponseWriter, r *http.Request) {
+	var req pgsqlcluster.AddMemberRequest
+	if err := decodeJSON(r, &req); err != nil {
+		errJSON(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	job, err := app.pgsqlCluster.AddMember(r.Context(), req)
+	if err != nil {
+		errJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	accepted(w, "PostgreSQL cluster member addition started", job)
+}
+
+func (app *application) removePGSQLMemberHandler(w http.ResponseWriter, r *http.Request) {
+	var req pgsqlcluster.RemoveMemberRequest
+	if err := decodeJSON(r, &req); err != nil {
+		errJSON(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	job, err := app.pgsqlCluster.RemoveMember(r.Context(), req)
+	if err != nil {
+		errJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	accepted(w, "PostgreSQL cluster member removal started", job)
+}

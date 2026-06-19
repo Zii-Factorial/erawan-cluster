@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -13,10 +14,16 @@ import (
 )
 
 type Service struct {
-	store *pgsql.Store
+	store      *pgsql.Store
+	httpClient *http.Client
 }
 
-func NewService(store *pgsql.Store) *Service { return &Service{store: store} }
+func NewService(store *pgsql.Store) *Service {
+	return &Service{
+		store:      store,
+		httpClient: &http.Client{Timeout: 4 * time.Second},
+	}
+}
 
 // resolve loads the current primary IP, port, and postgres superuser credentials.
 // It probes each node's Patroni /master endpoint so the result is correct even
@@ -35,7 +42,7 @@ func (s *Service) resolve(ctx context.Context, jobID string) (host string, port 
 		p = 5432
 	}
 	candidates := append([]string{job.Request.PrimaryIP}, job.Request.StandbyIPs...)
-	primary, err := findPrimary(ctx, candidates)
+	primary, err := s.findPrimary(ctx, candidates)
 	if err != nil {
 		return "", 0, "", "", fmt.Errorf("discover primary: %w", err)
 	}
@@ -44,20 +51,21 @@ func (s *Service) resolve(ctx context.Context, jobID string) (host string, port 
 
 // findPrimary probes each node's Patroni /master endpoint (port 8008) and
 // returns the first node that responds 200 — that is the current read-write leader.
-func findPrimary(ctx context.Context, candidates []string) (string, error) {
-	client := &http.Client{Timeout: 4 * time.Second}
+func (s *Service) findPrimary(ctx context.Context, candidates []string) (string, error) {
 	for _, ip := range candidates {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 			fmt.Sprintf("http://%s:8008/master", ip), nil)
 		if err != nil {
 			continue
 		}
-		resp, err := client.Do(req)
+		resp, err := s.httpClient.Do(req)
 		if err != nil {
 			continue
 		}
+		status := resp.StatusCode
+		_, _ = io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
+		if status == http.StatusOK {
 			return ip, nil
 		}
 	}
@@ -81,20 +89,24 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) error {
 
 	userLit := pq.QuoteLiteral(req.Username)
 	passLit := pq.QuoteLiteral(req.Password)
+	createdbOpt := "CREATEDB"
+	if req.DatabaseName != "" {
+		createdbOpt = "NOCREATEDB"
+	}
 	upsertRole := fmt.Sprintf(`
 		DO $body$
 		BEGIN
 		  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %s) THEN
 		    EXECUTE format(
-		      'CREATE ROLE %%I WITH LOGIN CREATEDB NOSUPERUSER NOCREATEROLE INHERIT PASSWORD %%L',
+		      'CREATE ROLE %%I WITH LOGIN %s NOSUPERUSER NOCREATEROLE INHERIT PASSWORD %%L',
 		      %s, %s);
 		  ELSE
 		    EXECUTE format(
-		      'ALTER ROLE %%I WITH LOGIN CREATEDB NOSUPERUSER NOCREATEROLE INHERIT PASSWORD %%L',
+		      'ALTER ROLE %%I WITH LOGIN %s NOSUPERUSER NOCREATEROLE INHERIT PASSWORD %%L',
 		      %s, %s);
 		  END IF;
 		END
-		$body$`, userLit, userLit, passLit, userLit, passLit)
+		$body$`, userLit, createdbOpt, userLit, passLit, createdbOpt, userLit, passLit)
 	if _, err := root.ExecContext(ctx, upsertRole); err != nil {
 		return fmt.Errorf("upsert role: %w", err)
 	}

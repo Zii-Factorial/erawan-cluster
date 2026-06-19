@@ -1,0 +1,41 @@
+---
+- name: Get current etcd member list
+  ansible.builtin.shell: |
+    set -euo pipefail
+    etcdctl \
+      --endpoints="http://{{ ansible_host }}:{{ etcd_client_port }}" \
+      member list --write-out=json
+  args:
+    executable: /bin/bash
+  register: etcd_members_json
+  changed_when: false
+
+- name: Find member ID and convert to hex string
+  ansible.builtin.set_fact:
+    etcd_remove_member_id: >-
+      {%- set mid = (etcd_members_json.stdout | from_json).members
+          | selectattr('peerURLs', 'contains', 'http://' + remove_member_ip + ':' + (etcd_peer_port | string))
+          | map(attribute='ID') | first | default(0) | int -%}
+      {{ '%x' % mid if mid != 0 else '' }}
+
+- name: Remove etcd member
+  ansible.builtin.shell: |
+    set -euo pipefail
+    etcdctl \
+      --endpoints="http://{{ ansible_host }}:{{ etcd_client_port }}" \
+      member remove {{ etcd_remove_member_id }}
+  args:
+    executable: /bin/bash
+  when: etcd_remove_member_id != ''
+  register: etcd_remove_result
+  changed_when: etcd_remove_result.rc == 0
+
+- name: Confirm member was removed
+  ansible.builtin.debug:
+    msg: "etcd member for {{ remove_member_ip }} removed (id={{ etcd_remove_member_id }})"
+  when: etcd_remove_member_id != ''
+
+- name: Skip removal if member not found
+  ansible.builtin.debug:
+    msg: "etcd member for {{ remove_member_ip }} not found — already removed or never joined"
+  when: etcd_remove_member_id == ''

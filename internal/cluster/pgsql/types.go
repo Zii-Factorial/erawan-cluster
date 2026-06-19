@@ -49,18 +49,19 @@ type StepResult struct {
 }
 
 type Job struct {
-	ID                string       `json:"id"`
-	Status            string       `json:"status"`
-	CreatedAt         time.Time    `json:"created_at"`
-	UpdatedAt         time.Time    `json:"updated_at"`
-	CurrentStep       string       `json:"current_step,omitempty"`
-	LastCompletedStep int          `json:"last_completed_step"`
-	CompletedSteps    int          `json:"completed_steps"`
-	TotalSteps        int          `json:"total_steps"`
-	ProgressPercent   int          `json:"progress_percent"`
-	Error             string       `json:"error,omitempty"`
-	Request           StoredSpec   `json:"request"`
-	Steps             []StepResult `json:"steps"`
+	ID                string           `json:"id"`
+	Status            string           `json:"status"`
+	CreatedAt         time.Time        `json:"created_at"`
+	UpdatedAt         time.Time        `json:"updated_at"`
+	CurrentStep       string           `json:"current_step,omitempty"`
+	LastCompletedStep int              `json:"last_completed_step"`
+	CompletedSteps    int              `json:"completed_steps"`
+	TotalSteps        int              `json:"total_steps"`
+	ProgressPercent   int              `json:"progress_percent"`
+	Error             string           `json:"error,omitempty"`
+	Request           StoredSpec       `json:"request"`
+	Steps             []StepResult     `json:"steps"`
+	MemberOp          *MemberOperation `json:"member_op,omitempty"`
 }
 
 type StoredSpec struct {
@@ -92,6 +93,23 @@ type StoredSecret struct {
 	ReplicatorUser     string `json:"replicator_user"`
 	ReplicatorPassword string `json:"replicator_password"`
 	AdminPassword      string `json:"admin_password"`
+}
+
+type AddMemberRequest struct {
+	JobID     string   `json:"job_id"`
+	MemberIPs []string `json:"member_ips"`
+}
+
+type RemoveMemberRequest struct {
+	JobID    string `json:"job_id"`
+	MemberIP string `json:"member_ip"`
+	Force    bool   `json:"force,omitempty"`
+}
+
+type MemberOperation struct {
+	Type        string   `json:"type"`         // "add" or "remove"
+	MemberIPs   []string `json:"member_ips"`
+	SourceJobID string   `json:"source_job_id"`
 }
 
 func (r DeployRequest) NewUserSSLRequiredEnabled() bool {

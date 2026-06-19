@@ -34,7 +34,9 @@ type config struct {
 	env       string
 	apiKey    string
 	version   string
-	proxyHost string // default host for metric connections; filled from PROXY_HOST env
+	proxyHost      string // HAProxy host for metric connections; from PROXY_HOST env (default 127.0.0.1)
+	proxyMySQLPort int    // HAProxy frontend port for MySQL; from PROXY_MYSQL_PORT env (default 3306)
+	proxyPGSQLPort int    // HAProxy frontend port for pgsql; from PROXY_PGSQL_PORT env (default 5432)
 }
 
 func (app *application) mount() *chi.Mux {
@@ -54,7 +56,9 @@ func (app *application) mount() *chi.Mux {
 
 	r.Route("/haproxy", func(r chi.Router) {
 		r.Post("/config/mysql", app.createMySQLHAProxyConfigHandler)
+		r.Patch("/config/mysql", app.addMySQLMemberHAProxyHandler)
 		r.Post("/config/pgsql", app.createPGSQLHAProxyConfigHandler)
+		r.Patch("/config/pgsql", app.addPGSQLMemberHAProxyHandler)
 		r.Delete("/config", app.deleteHAProxyConfigHandler)
 		r.Get("/configs", app.listHAProxyConfigsHandler)
 		r.Get("/configs/download", app.downloadTenantsZipHandler)
@@ -68,6 +72,8 @@ func (app *application) mount() *chi.Mux {
 		r.Get("/jobs/{jobID}", app.getMySQLClusterJobHandler)
 		r.Post("/jobs/{jobID}/resume", app.resumeMySQLClusterJobHandler)
 		r.Post("/jobs/{jobID}/rollback", app.rollbackMySQLClusterJobHandler)
+		r.Post("/members", app.addMySQLMemberHandler)
+		r.Delete("/members", app.removeMySQLMemberHandler)
 
 		r.Post("/users", app.createMySQLUserHandler)
 		r.Patch("/users", app.updateMySQLUserHandler)
@@ -84,6 +90,8 @@ func (app *application) mount() *chi.Mux {
 		r.Get("/jobs", app.listPGSQLClusterJobsHandler)
 		r.Get("/jobs/{jobID}", app.getPGSQLClusterJobHandler)
 		r.Post("/jobs/{jobID}/resume", app.resumePGSQLClusterJobHandler)
+		r.Post("/members", app.addPGSQLMemberHandler)
+		r.Delete("/members", app.removePGSQLMemberHandler)
 
 		r.Post("/users", app.createPGSQLUserHandler)
 		r.Patch("/users", app.updatePGSQLUserHandler)

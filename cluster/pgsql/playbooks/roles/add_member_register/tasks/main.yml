@@ -1,0 +1,98 @@
+---
+- name: Retrieve current etcd member list
+  ansible.builtin.shell: |
+    set -euo pipefail
+    etcdctl \
+      --endpoints="http://{{ ansible_host }}:{{ etcd_client_port }}" \
+      member list --write-out=json
+  args:
+    executable: /bin/bash
+  register: etcd_members_json
+  changed_when: false
+
+- name: Parse existing etcd cluster peers
+  ansible.builtin.set_fact:
+    etcd_existing_peers: >-
+      {{
+        (etcd_members_json.stdout | from_json).members
+        | map(attribute='peerURLs')
+        | flatten
+        | join(',')
+      }}
+
+- name: Check whether new member is already registered
+  ansible.builtin.set_fact:
+    etcd_member_already_registered: >-
+      {{
+        (etcd_members_json.stdout | from_json).members
+        | selectattr('peerURLs', 'contains', 'http://' + new_member_ip + ':' + etcd_peer_port | string)
+        | list | length > 0
+      }}
+
+# Unstarted members (name == "") from prior failed attempts cause
+# "etcdserver: unhealthy cluster" on the next member add. Remove them first.
+- name: Remove orphaned unstarted etcd members from prior failed attempts
+  ansible.builtin.shell: |
+    set -euo pipefail
+    etcdctl \
+      --endpoints="http://{{ ansible_host }}:{{ etcd_client_port }}" \
+      member list --write-out=json \
+    | python3 -c "
+    import json, sys, subprocess
+    data = json.load(sys.stdin)
+    removed = 0
+    for m in data.get('members', []):
+        if m.get('name', '').strip():
+            continue  # started — leave it alone
+        peer_urls = m.get('peerURLs', [])
+        if any('{{ new_member_ip }}' in url for url in peer_urls):
+            continue  # this is our intended new member
+        mid = format(m['ID'], 'x')
+        print('removing orphaned member id=' + mid, flush=True)
+        subprocess.run([
+            'etcdctl',
+            '--endpoints=http://{{ ansible_host }}:{{ etcd_client_port }}',
+            'member', 'remove', mid,
+        ], check=True)
+        removed += 1
+    print('removed=' + str(removed), flush=True)
+    "
+  args:
+    executable: /bin/bash
+  register: _etcd_orphan_cleanup
+  changed_when: "'removed=0' not in _etcd_orphan_cleanup.stdout"
+  when: not etcd_member_already_registered
+
+# Use --learner so this works even on single-node clusters.
+# Direct member add requires post-add quorum (e.g. 2 of 2) but a 1-node cluster
+# only has 1 started member, so it always returns "unhealthy cluster".
+# Learner registration skips the quorum gate, then we promote after the node syncs.
+- name: Register new member in etcd cluster as learner
+  ansible.builtin.shell: |
+    set -euo pipefail
+    etcdctl \
+      --endpoints="http://{{ ansible_host }}:{{ etcd_client_port }}" \
+      member add new_member \
+      --learner \
+      --peer-urls="http://{{ new_member_ip }}:{{ etcd_peer_port }}"
+  args:
+    executable: /bin/bash
+  when: not etcd_member_already_registered
+  register: etcd_member_add
+
+- name: Build initial cluster string for new member
+  ansible.builtin.set_fact:
+    etcd_initial_cluster_for_new_member: >-
+      {{
+        etcd_existing_peers + ',new_member=http://' + new_member_ip + ':' + etcd_peer_port | string
+      }}
+  when: not etcd_member_already_registered
+
+- name: Use existing cluster peers when member already registered
+  ansible.builtin.set_fact:
+    etcd_initial_cluster_for_new_member: "{{ etcd_existing_peers }}"
+  when: etcd_member_already_registered
+
+- name: Export initial cluster string for new member
+  ansible.builtin.set_fact:
+    hostvars_etcd_initial_cluster: "{{ etcd_initial_cluster_for_new_member }}"

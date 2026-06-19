@@ -1,0 +1,72 @@
+---
+- name: Derive node IP (fallback)
+  ansible.builtin.set_fact:
+    erawan_node_ip: "{{ ansible_host }}"
+  when: erawan_node_ip is not defined
+  tags: ["add_member"]
+
+- name: Wait for new member MySQL port to be reachable
+  ansible.builtin.wait_for:
+    host: "{{ new_member_ip }}"
+    port: "{{ mysql_port }}"
+    state: started
+    delay: 5
+    timeout: 120
+  tags: ["add_member"]
+
+- name: Add new member to InnoDB Cluster
+  no_log: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
+    trap 'rm -f "$_tmp"' EXIT
+    cat >"$_tmp" <<'PY'
+    import json
+    import time
+
+    shell.options["useWizards"] = False
+    shell.options["dba.restartWaitTimeout"] = {{ step_timeout_seconds | int }}
+
+    primary_host       = {{ erawan_node_ip | to_json }}
+    mysql_port         = {{ mysql_port }}
+    cluster_admin_user = {{ cluster_admin_username | to_json }}
+    cluster_admin_pass = {{ cluster_admin_password | to_json }}
+    cluster_name       = {{ cluster_name | to_json }}
+    new_member_ip      = {{ new_member_ip | to_json }}
+
+    shell.connect(f"mysql://{cluster_admin_user}@{primary_host}:{mysql_port}", cluster_admin_pass)
+    cluster  = dba.get_cluster(cluster_name)
+    endpoint = f"{cluster_admin_user}@{new_member_ip}:{mysql_port}"
+
+    try:
+      cluster.add_instance(endpoint, {"password": cluster_admin_pass, "recoveryMethod": "clone", "waitRecovery": 0})
+      print("clone initiated: " + new_member_ip)
+    except Exception as e:
+      msg = str(e).lower()
+      if "already" in msg:
+        print("already in cluster: " + new_member_ip)
+      else:
+        raise
+
+    deadline = time.time() + {{ step_timeout_seconds | int }}
+    while time.time() < deadline:
+      rs     = dba.get_cluster(cluster_name).status().get("defaultReplicaSet", {})
+      topo   = rs.get("topology", {})
+      status = next((v.get("status") for k, v in topo.items() if new_member_ip in k), "unknown")
+      print("  " + new_member_ip + ": " + str(status))
+      if status == "ONLINE":
+        break
+      time.sleep(10)
+    else:
+      raise RuntimeError("timed out waiting for " + new_member_ip + " to be ONLINE")
+
+    cluster.rescan()
+    print(json.dumps(dba.get_cluster(cluster_name).status(), indent=2))
+    PY
+    timeout {{ step_timeout_seconds | int }} \
+      mysqlsh --no-wizard --py --file "$_tmp"
+  args:
+    executable: /bin/bash
+  register: add_member_result
+  changed_when: "'clone initiated' in add_member_result.stdout"
+  tags: ["add_member"]

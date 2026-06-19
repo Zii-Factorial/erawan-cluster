@@ -33,7 +33,7 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 
 	categories := resolveCategories(req.Categories)
 
-	db, err := openDB(req)
+	db, err := openDB(ctx, req)
 	if err != nil {
 		for _, cat := range categories {
 			resp.Errors[cat] = "db connect: " + err.Error()
@@ -110,10 +110,10 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 func ValidateMetricRequest(req *MetricRequest) error {
 	req.Host = strings.TrimSpace(req.Host)
 	if req.Port == 0 {
-		req.Port = 3306
+		return fmt.Errorf("proxy_port is required (HAProxy frontend port, e.g. 25041)")
 	}
 	if req.Port < 1 || req.Port > 65535 {
-		return fmt.Errorf("port must be between 1 and 65535")
+		return fmt.Errorf("proxy_port must be between 1 and 65535")
 	}
 	req.User = strings.TrimSpace(req.User)
 	if req.User == "" {
@@ -170,7 +170,7 @@ func resolveCategories(requested []string) []string {
 	return out
 }
 
-func openDB(req MetricRequest) (*sql.DB, error) {
+func openDB(ctx context.Context, req MetricRequest) (*sql.DB, error) {
 	port := resolvePort(req.Port, 3306)
 	dbName := req.Database
 	if dbName == "" {
@@ -203,15 +203,15 @@ func openDB(req MetricRequest) (*sql.DB, error) {
 	db.SetMaxOpenConns(len(allMetricCategories))
 	db.SetMaxIdleConns(2)
 	db.SetConnMaxLifetime(30 * time.Second)
-	if err := db.PingContext(ctx()); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		db.Close()
-		return nil, err
+		// "invalid connection" typically means caching_sha2_password full-auth RSA
+		// exchange failed through MySQL Router. Fix: ALTER USER ... IDENTIFIED WITH
+		// mysql_native_password BY '...'; FLUSH PRIVILEGES;
+		return nil, fmt.Errorf("%w (addr=%s user=%s — if 'invalid connection', alter user to mysql_native_password)", err, cfg.Addr, cfg.User)
 	}
 	return db, nil
 }
-
-// ctx returns a background context; openDB ping does not need the request ctx.
-func ctx() context.Context { return context.Background() }
 
 // collectDatabaseCount returns the number of user databases (excludes system schemas).
 func collectDatabaseCount(ctx context.Context, db *sql.DB) (int, error) {

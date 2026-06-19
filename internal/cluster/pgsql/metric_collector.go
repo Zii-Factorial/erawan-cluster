@@ -131,10 +131,10 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 func ValidateMetricRequest(req *MetricRequest) error {
 	req.Host = strings.TrimSpace(req.Host)
 	if req.Port == 0 {
-		req.Port = 5432
+		return fmt.Errorf("proxy_port is required (HAProxy frontend port, e.g. 25041)")
 	}
 	if req.Port < 1 || req.Port > 65535 {
-		return fmt.Errorf("port must be between 1 and 65535")
+		return fmt.Errorf("proxy_port must be between 1 and 65535")
 	}
 	req.User = strings.TrimSpace(req.User)
 	if req.User == "" {
@@ -195,8 +195,10 @@ func (c *Collector) discoverLeader(ctx context.Context, req MetricRequest) (stri
 		if err != nil {
 			continue
 		}
+		status := resp.StatusCode
+		_, _ = io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
+		if status == http.StatusOK {
 			return ip, nil
 		}
 	}

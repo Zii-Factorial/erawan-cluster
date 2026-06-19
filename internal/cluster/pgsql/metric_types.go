@@ -66,14 +66,19 @@ var allMetricCategories = []string{
 // All snapshot categories (connections, replication, performance, …) always
 // return the current point-in-time value — time range is not applicable.
 type MetricRequest struct {
-	// JobID resolves host, port, user, password, and node_ips from the stored deploy job.
-	// When set, explicit host/port/user/password/node_ips fields are ignored.
+	// JobID resolves user, password, and node_ips from the stored deploy job.
+	// host is always sourced from the server's PROXY_HOST env (never from the client).
 	JobID string `json:"job_id"`
 
-	// PostgreSQL connection — point this at HAProxy when a proxy is in use.
-	Host           string `json:"host"`
-	Port           int    `json:"port"`            // default 5432
-	User           string `json:"user"`            // superuser recommended for full metrics
+	// ProxyPort is the HAProxy frontend port for this cluster (e.g. 25041).
+	// Required when using job_id — this is NOT the PostgreSQL server port (5432).
+	ProxyPort int `json:"proxy_port"`
+
+	// Host and Port are server-side only — not exposed in the payload.
+	Host string `json:"-"`
+	Port int    `json:"-"`
+
+	User     string `json:"user"`     // superuser recommended for full metrics
 	Password       string `json:"password"`
 	Database       string `json:"database"`        // for table/query queries; default "postgres"
 	SSLMode        string `json:"ssl_mode"`        // "disable" | "require"; default "disable"

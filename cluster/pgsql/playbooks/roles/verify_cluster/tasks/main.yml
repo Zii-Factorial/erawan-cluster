@@ -61,7 +61,21 @@
   delegate_to: "{{ groups['pgsql_primary'][0] }}"
   tags: ["verify_cluster"]
 
-- name: Count replication senders on leader
+- name: Wait for sync_standby to be elected
+  ansible.builtin.uri:
+    url: "http://{{ primary_ip }}:{{ patroni_rest_port }}/cluster"
+    return_content: true
+  register: _sync_check
+  until: _sync_check.json.members | selectattr('role', 'equalto', 'sync_standby') | list | length > 0
+  retries: 30
+  delay: 5
+  changed_when: false
+  run_once: true
+  delegate_to: "{{ groups['pgsql_primary'][0] }}"
+  when: standby_ips | length > 0
+  tags: ["verify_cluster"]
+
+- name: Wait for expected replication connections on primary
   no_log: true
   ansible.builtin.shell: |
     set -euo pipefail
@@ -72,15 +86,9 @@
     PGPASSWORD: "{{ postgres_superuser_password }}"
   register: pgsql_replication_count
   changed_when: false
-  run_once: true
-  delegate_to: "{{ groups['pgsql_primary'][0] }}"
-  tags: ["verify_cluster"]
-
-- name: Ensure expected replication connections exist
-  ansible.builtin.assert:
-    that:
-      - pgsql_replication_count.stdout | int >= (standby_ips | length)
-    fail_msg: "Expected at least {{ standby_ips | length }} replication connections on primary"
+  until: pgsql_replication_count.stdout | int >= (standby_ips | length)
+  retries: "{{ ((step_timeout_seconds | default(900) | int) / 10) | int }}"
+  delay: 10
   run_once: true
   delegate_to: "{{ groups['pgsql_primary'][0] }}"
   tags: ["verify_cluster"]

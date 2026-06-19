@@ -1,0 +1,11 @@
+---
+- name: Stop Patroni and etcd on node being removed
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop:
+    - patroni
+    - etcd
+  failed_when: false
+  when: ansible_host == remove_member_ip
