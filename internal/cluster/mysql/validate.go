@@ -22,7 +22,7 @@ func ValidateDeployRequest(req *DeployRequest) error {
 	req.NewUser = strings.TrimSpace(req.NewUser)
 	req.NewDB = strings.TrimSpace(req.NewDB)
 	if req.ClusterName == "" {
-		req.ClusterName = "prodCluster"
+		return fmt.Errorf("cluster_name is required")
 	}
 	if req.AdminUsername == "" {
 		req.AdminUsername = "clusteradmin"

@@ -150,6 +150,11 @@
       "key": "MEMBER_IP",
       "value": "10.0.0.4",
       "description": "IP of the node to add or remove from the cluster"
+    },
+    {
+      "key": "MEMBER_JOB_ID",
+      "value": "",
+      "description": "Job ID returned by Add Member / Remove Member — use this to poll the member operation. JOB_ID always stays as the deploy job ID."
     }
 
   ],
@@ -246,8 +251,14 @@
           "        pm.collectionVariables.set('LAST_RESPONSE', JSON.stringify(json, null, 2));",
           "        console.log('[erawan] response decrypted:', JSON.stringify(json, null, 2));",
           "        if (json && json.data && json.data.id) {",
-          "            pm.collectionVariables.set('JOB_ID', json.data.id);",
-          "            console.log('[erawan] JOB_ID set to:', json.data.id);",
+          "            if (json.data.member_op) {",
+          "                // Member operation job — store separately, keep JOB_ID as the deploy job ID",
+          "                pm.collectionVariables.set('MEMBER_JOB_ID', json.data.id);",
+          "                console.log('[erawan] MEMBER_JOB_ID set to:', json.data.id);",
+          "            } else {",
+          "                pm.collectionVariables.set('JOB_ID', json.data.id);",
+          "                console.log('[erawan] JOB_ID set to:', json.data.id);",
+          "            }",
           "        }",
           "        if (json && json.data && json.data.secret) {",
           "            const s = json.data.secret;",
@@ -798,14 +809,17 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "// Auto-extract JOB_ID from add-member response (no encryption)",
+                  "// Auto-extract MEMBER_JOB_ID from add-member response (no encryption).",
+                  "// JOB_ID is intentionally NOT updated — it stays as the deploy job ID",
+                  "// for DB manager / metrics / resume calls.",
                   "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
                   "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
                   "try {",
                   "    const body = pm.response.json();",
                   "    if (body && body.data && body.data.id) {",
-                  "        pm.collectionVariables.set('JOB_ID', body.data.id);",
-                  "        console.log('[erawan] JOB_ID set to:', body.data.id);",
+                  "        pm.collectionVariables.set('MEMBER_JOB_ID', body.data.id);",
+                  "        console.log('[erawan] MEMBER_JOB_ID set to:', body.data.id);",
+                  "        console.log('[erawan] Poll GET /cluster/mysql/jobs/' + body.data.id + ' to track progress');",
                   "    }",
                   "} catch(e) {}"
                 ]
@@ -853,14 +867,17 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "// Auto-extract JOB_ID from remove-member response (no encryption)",
+                  "// Auto-extract MEMBER_JOB_ID from remove-member response (no encryption).",
+                  "// JOB_ID is intentionally NOT updated — it stays as the deploy job ID",
+                  "// for DB manager / metrics / resume calls.",
                   "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
                   "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
                   "try {",
                   "    const body = pm.response.json();",
                   "    if (body && body.data && body.data.id) {",
-                  "        pm.collectionVariables.set('JOB_ID', body.data.id);",
-                  "        console.log('[erawan] JOB_ID set to:', body.data.id);",
+                  "        pm.collectionVariables.set('MEMBER_JOB_ID', body.data.id);",
+                  "        console.log('[erawan] MEMBER_JOB_ID set to:', body.data.id);",
+                  "        console.log('[erawan] Poll GET /cluster/mysql/jobs/' + body.data.id + ' to track progress');",
                   "    }",
                   "} catch(e) {}"
                 ]
@@ -1097,14 +1114,17 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "// Auto-extract JOB_ID from add-member response (no encryption)",
+                  "// Auto-extract MEMBER_JOB_ID from add-member response (no encryption).",
+                  "// JOB_ID is intentionally NOT updated — it stays as the deploy job ID",
+                  "// for DB manager / metrics / resume calls.",
                   "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
                   "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
                   "try {",
                   "    const body = pm.response.json();",
                   "    if (body && body.data && body.data.id) {",
-                  "        pm.collectionVariables.set('JOB_ID', body.data.id);",
-                  "        console.log('[erawan] JOB_ID set to:', body.data.id);",
+                  "        pm.collectionVariables.set('MEMBER_JOB_ID', body.data.id);",
+                  "        console.log('[erawan] MEMBER_JOB_ID set to:', body.data.id);",
+                  "        console.log('[erawan] Poll GET /cluster/mysql/jobs/' + body.data.id + ' to track progress');",
                   "    }",
                   "} catch(e) {}"
                 ]
@@ -1152,14 +1172,17 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "// Auto-extract JOB_ID from remove-member response (no encryption)",
+                  "// Auto-extract MEMBER_JOB_ID from remove-member response (no encryption).",
+                  "// JOB_ID is intentionally NOT updated — it stays as the deploy job ID",
+                  "// for DB manager / metrics / resume calls.",
                   "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
                   "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
                   "try {",
                   "    const body = pm.response.json();",
                   "    if (body && body.data && body.data.id) {",
-                  "        pm.collectionVariables.set('JOB_ID', body.data.id);",
-                  "        console.log('[erawan] JOB_ID set to:', body.data.id);",
+                  "        pm.collectionVariables.set('MEMBER_JOB_ID', body.data.id);",
+                  "        console.log('[erawan] MEMBER_JOB_ID set to:', body.data.id);",
+                  "        console.log('[erawan] Poll GET /cluster/mysql/jobs/' + body.data.id + ' to track progress');",
                   "    }",
                   "} catch(e) {}"
                 ]
