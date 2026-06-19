@@ -8,25 +8,28 @@ This document explains how the erawan-cluster proxy node works — what runs on 
 
 ## Overview
 
+```mermaid
+flowchart TB
+    client["Client apps"]
+
+    subgraph proxy["PROXY NODE"]
+        api["erawan-cluster Go API<br/>:8080"]
+        haproxy["HAProxy<br/>:25041 MySQL frontend<br/>:25042 pgsql frontend"]
+    end
+
+    subgraph db["DB CLUSTER"]
+        n1["10.0.0.1 :3306 — primary"]
+        n2["10.0.0.2 :3306 — secondary"]
+        n3["10.0.0.3 :3306 — secondary"]
+    end
+
+    client -- "manage (X-API-Key)" --> api
+    client -- "SQL connections" --> haproxy
+    api -- "ansible-playbook over SSH" --> db
+    haproxy -- "TCP proxy → active node" --> db
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        PROXY NODE                               │
-│                                                                 │
-│   ┌──────────────────┐         ┌──────────────────────────┐    │
-│   │  erawan-cluster  │         │         HAProxy           │    │
-│   │    Go API        │─ SSH ──▶│   :25041  MySQL frontend  │    │
-│   │    :8080         │         │   :25042  pgsql frontend  │    │
-│   └────────┬─────────┘         └──────────┬───────────────┘    │
-│            │ ansible-playbook             │ TCP proxy           │
-└────────────┼──────────────────────────────┼────────────────────┘
-             │                              │
-     ┌───────┴──────────────────┐    ┌──────┴───────────────┐
-     │      DB CLUSTER          │    │      DB CLUSTER       │
-     │  10.0.0.1  (primary)     │    │  10.0.0.1 :3306       │
-     │  10.0.0.2  (secondary)   │◀───│  10.0.0.2 :3306       │
-     │  10.0.0.3  (secondary)   │    │  10.0.0.3 :3306       │
-     └──────────────────────────┘    └──────────────────────┘
-```
+
+> Client applications never connect directly to DB node IPs — all SQL goes through HAProxy.
 
 A single **proxy node** runs two services:
 

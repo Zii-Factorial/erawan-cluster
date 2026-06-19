@@ -1,0 +1,12 @@
+# Keeps at least one node serving during voluntary disruptions (drains, upgrades).
+# Effective once replicas > 1 (Phase 2).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: erawan-cluster
+  namespace: erawan
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: erawan-cluster

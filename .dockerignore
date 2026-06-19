@@ -1,0 +1,9 @@
+.git
+bin
+doc
+postman.json
+*.md
+.github
+.vscode
+.claude
+.envrc

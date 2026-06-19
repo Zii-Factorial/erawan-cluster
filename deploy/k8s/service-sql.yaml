@@ -1,0 +1,36 @@
+# Client-facing SQL data plane, fronted by the CloudStack LB (CCM provisions it).
+#
+# CAVEAT: a Service must enumerate every port. HAProxy tenant ports are dynamic
+# (one per cluster), so this list must be kept in sync with the tenants you create —
+# either by hand for now, or by the Phase 2 operator that patches this Service as
+# tenants are added/removed (doc/ha-architecture.md §7). Pre-publish the band you
+# plan to use.
+apiVersion: v1
+kind: Service
+metadata:
+  name: erawan-sql
+  namespace: erawan
+  annotations:
+    # Example CloudStack CCM hints; adjust to your environment.
+    # service.beta.kubernetes.io/cloudstack-load-balancer-proxy-protocol: "false"
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+  selector:
+    app.kubernetes.io/name: erawan-cluster
+  ports:
+    - name: sql-25041
+      port: 25041
+      targetPort: 25041
+    - name: sql-25042
+      port: 25042
+      targetPort: 25042
+    - name: sql-25043
+      port: 25043
+      targetPort: 25043
+    - name: sql-25044
+      port: 25044
+      targetPort: 25044
+    - name: sql-25045
+      port: 25045
+      targetPort: 25045

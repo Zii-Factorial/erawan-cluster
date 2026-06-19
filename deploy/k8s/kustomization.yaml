@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: erawan
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - configmap.yaml
+  # secret.yaml is intentionally NOT listed — create it out-of-band from
+  # secret.example.yaml so secrets never land in git.
+  - statefulset.yaml
+  - service-api.yaml
+  - service-sql.yaml
+  - pdb.yaml
+  - networkpolicy.yaml
+
+images:
+  - name: ghcr.io/REPLACE_OWNER/erawan-cluster
+    newTag: latest

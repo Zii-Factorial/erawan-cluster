@@ -1,0 +1,15 @@
+# Management API (HTTP). Internal ClusterIP by default; switch to LoadBalancer to
+# expose it through the CloudStack cloud-controller-manager.
+apiVersion: v1
+kind: Service
+metadata:
+  name: erawan-api
+  namespace: erawan
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: erawan-cluster
+  ports:
+    - name: api
+      port: 8080
+      targetPort: api

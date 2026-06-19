@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: erawan-config
+  namespace: erawan
+data:
+  ENV: "production"
+  API_HOST: "0.0.0.0"
+  API_PORT: "8080"
+  # State + tenant config live on the PVC (see statefulset volumeClaimTemplates).
+  TENANTS_DIR: "/var/lib/erawan-cluster/haproxy/tenants"
+  CLUSTER_STATE_DIR: "/var/lib/erawan-cluster/cluster/jobs"
+  # Container reload: SIGUSR2 to the HAProxy master (no systemd in a pod).
+  HAPROXY_RELOAD_CMD: "/usr/local/bin/haproxy-reload.sh"
+  HAPROXY_RELOAD_TIMEOUT_SECONDS: "15"
+  # HAProxy runs in the same pod, so SQL metric connections go to localhost.
+  PROXY_HOST: "127.0.0.1"
+  # SSH identity for Ansible → DB node VMs (key mounted from the secret).
+  CLUSTER_SSH_USER: "clusterops"
+  CLUSTER_SSH_PRIVATE_KEY_PATH: "/etc/erawan/ssh/id_rsa"

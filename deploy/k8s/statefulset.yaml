@@ -1,0 +1,126 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: erawan-cluster
+  namespace: erawan
+  labels:
+    app.kubernetes.io/name: erawan-cluster
+spec:
+  serviceName: erawan-cluster
+  # Phase 1: a single replica (state lives on the PVC). Going to >1 for active-active
+  # requires the DB-backed store + reconciler + leader election (doc/ha-architecture.md
+  # build steps 1-3). Do NOT bump this before then — replicas would each keep their own
+  # local jobs/tenant config and run Ansible twice.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: erawan-cluster
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: erawan-cluster
+    spec:
+      serviceAccountName: erawan
+      # Phase 1 makes no k8s API calls — don't expose a token. Flip to true when
+      # Phase 2 leader election (Leases) lands.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        # fsGroup makes the PVC + secret volumes group-owned/readable by the non-root user.
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      # Spread replicas across hosts once we scale out (Phase 2).
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: erawan-cluster
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: erawan
+          image: ghcr.io/REPLACE_OWNER/erawan-cluster:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: api
+              containerPort: 8080
+            # SQL tenant ports are dynamic; HAProxy binds them as tenants are created.
+            # The Service below publishes the same band — keep them in sync.
+          envFrom:
+            - configMapRef:
+                name: erawan-config
+          env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: erawan-secrets
+                  key: API_KEY
+            - name: ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: erawan-secrets
+                  key: ENCRYPTION_KEY
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/erawan-cluster
+            - name: ssh-key
+              mountPath: /etc/erawan/ssh
+              readOnly: true
+            # Writable scratch for a read-only root filesystem:
+            # /run holds the HAProxy master pid; /tmp holds Ansible workspaces + temp configs.
+            - name: run
+              mountPath: /run
+            - name: tmp
+              mountPath: /tmp
+          # /health requires the API key, so probe the TCP port instead.
+          readinessProbe:
+            tcpSocket:
+              port: api
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: api
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 250m
+              memory: 384Mi
+            limits:
+              cpu: "1"
+              # Ansible (Python) can spike during a deploy; keep headroom to avoid OOMKill.
+              memory: 1Gi
+      volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        - name: ssh-key
+          secret:
+            secretName: erawan-secrets
+            items:
+              - key: ssh-privatekey
+                path: id_rsa
+            # 0440: owner root, group fsGroup (10001) read — readable by the non-root user.
+            defaultMode: 0440
+  volumeClaimTemplates:
+    - metadata:
+        name: state
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi
+        # storageClassName: custom-cloudstack-sc   # set to your CKS storage class

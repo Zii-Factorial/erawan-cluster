@@ -1,0 +1,35 @@
+# Restricts ingress to just the API + published SQL ports. Egress is left open
+# because Ansible must SSH to arbitrary DB node VM IPs and reach DB/Patroni ports;
+# tighten the egress block to your DB subnets once they are known.
+#
+# Requires a CNI that enforces NetworkPolicy (Calico, Cilium, etc.).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: erawan-cluster
+  namespace: erawan
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: erawan-cluster
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8080
+        # Published SQL tenant band (keep in sync with service-sql.yaml).
+        - protocol: TCP
+          port: 25041
+          endPort: 25045
+  egress:
+    # DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Everything else (SSH to DB VMs, DB ports, Patroni 8008). Narrow to your
+    # DB subnets with `to: [ipBlock: {cidr: ...}]` in production.
+    - {}

@@ -20,6 +20,15 @@ coverage.txt
 .envrc
 *.local
 
+# Kubernetes secrets — only the *.example.yaml is tracked
+deploy/k8s/secret.yaml
+*.secret.yaml
+# SSH keys / certs
+*.pem
+id_rsa
+id_rsa.*
+*_id_rsa
+
 # Logs and temp files
 *.log
 /tmp/
