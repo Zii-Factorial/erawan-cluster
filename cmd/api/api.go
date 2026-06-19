@@ -34,7 +34,9 @@ type config struct {
 	env       string
 	apiKey    string
 	version   string
-	proxyHost string // default host for metric connections; filled from PROXY_HOST env
+	proxyHost      string // HAProxy host for metric connections; from PROXY_HOST env (default 127.0.0.1)
+	proxyMySQLPort int    // HAProxy frontend port for MySQL; from PROXY_MYSQL_PORT env (default 3306)
+	proxyPGSQLPort int    // HAProxy frontend port for pgsql; from PROXY_PGSQL_PORT env (default 5432)
 }
 
 func (app *application) mount() *chi.Mux {

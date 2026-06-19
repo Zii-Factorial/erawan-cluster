@@ -51,12 +51,15 @@ type MetricRequest struct {
 	// host is always sourced from the server's PROXY_HOST env (never from the client).
 	JobID string `json:"job_id"`
 
-	// Host and Port are server-side only — injected from PROXY_HOST env and the
-	// stored deploy job. Clients cannot set these fields; all SQL traffic routes
-	// through local HAProxy on the port the cluster was deployed with.
-	Host           string `json:"-"`
-	Port           int    `json:"-"`               // from job (MySQLPort) or default 3306
-	User           string `json:"user"`            // needs PROCESS, SELECT on performance_schema
+	// ProxyPort is the HAProxy frontend port for this cluster (e.g. 25041).
+	// Required when using job_id — this is NOT the MySQL server port (3306).
+	ProxyPort int `json:"proxy_port"`
+
+	// Host and Port are server-side only — not exposed in the payload.
+	Host string `json:"-"`
+	Port int    `json:"-"`
+
+	User     string `json:"user"`     // needs PROCESS, SELECT on performance_schema
 	Password       string `json:"password"`
 	Database       string `json:"database"`        // for table/query stats; default "information_schema"
 	SSLMode        string `json:"ssl_mode"`        // "disable" | "require"; default "disable"
