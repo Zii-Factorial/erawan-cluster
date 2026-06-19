@@ -1,341 +1,326 @@
 # PostgreSQL HA with Patroni + etcd
 
-This project deploys PostgreSQL HA using `Patroni` and `etcd` for distributed consensus and automatic leader election.
+This document covers what gets deployed on each VM, what the tech stack is, how the config files look, and how the cluster workflow operates.
 
-## Assumptions
+See [doc/api.md](api.md) for the full API payload reference.  
+**Diagrams (draw.io):** [diagrams/pgsql-cluster.drawio](diagrams/pgsql-cluster.drawio)
 
-- PostgreSQL is already installed on every node.
-- `patroni[etcd]` is already installed.
-- `etcd` is already installed.
-- The API host already has the matching private key for the cloud-template SSH user, such as `clusterops`.
-- That SSH user can run `sudo` without a password on every DB node.
+---
 
-Supported topologies:
+## Tech Stack
 
-- Single-node bootstrap:
-  - 1 primary node
-- HA cluster:
-  - 1 primary node
-  - 1 or more standby nodes
+| Layer | Technology | Purpose |
+|-------|-----------|---------|
+| Database engine | PostgreSQL 14–18 | Data storage and SQL interface |
+| HA manager | Patroni | Leader election, automatic failover, config management |
+| Distributed consensus | etcd | Patroni DCS (Distributed Configuration Store) — stores cluster state |
+| Health check | Patroni REST API (`:8008`) | Used by HAProxy to route to the current leader |
+| Automation | Ansible playbooks | Deploy, configure, and manage the cluster lifecycle |
 
-## What the automation writes
+---
 
-On every node the playbooks create:
+## What Is Installed on Each VM
 
-- `/etc/etcd/etcd.conf`
-- `/etc/systemd/system/etcd.service`
-- `/etc/patroni/patroni.yml`
-- `/etc/systemd/system/patroni.service`
+Every cluster node (primary and standbys) runs the same stack:
 
-The generated Patroni config follows this layout:
-
-- `scope: <cluster_name>`
-- `namespace: /db/`
-- REST API on `:8008`
-- etcd client endpoints on `:2379`
-- PostgreSQL on `:5432` (or `postgres_port` if provided)
-- PostgreSQL SSL enabled with the distro default snakeoil certificate and key:
-  - `/etc/ssl/certs/ssl-cert-snakeoil.pem`
-  - `/etc/ssl/private/ssl-cert-snakeoil.key`
-- `synchronous_mode: true` and `synchronous_mode_strict: false` for DCS-managed synchronous replication
-- `password_encryption: scram-sha-256` enforced cluster-wide
-- `pg_stat_statements` loaded via `shared_preload_libraries`
-
-## API payloads
-
-### Deploy
-
-Minimal (no app DB):
-
-```json
-{
-  "cluster_name": "postgres-cluster",
-  "primary_ip": "10.0.0.1",
-  "standby_ips": ["10.0.0.2", "10.0.0.3"],
-  "ssh_port": 22,
-  "postgres_port": 5432,
-  "postgres_version": 16,
-  "step_timeout_seconds": 900
-}
+```
+DB Node VM
+├── PostgreSQL server        (data engine; managed by Patroni, not systemd)
+├── Patroni                  (HA manager; runs as patroni.service)
+│   └── patroni.service      (systemd-managed; controls PostgreSQL process)
+└── etcd                     (distributed key-value store for DCS)
+    └── etcd.service         (systemd-managed)
 ```
 
-Full (with app user and DB):
+**PostgreSQL is NOT managed by the distro `postgresql@...` systemd service after deploy.** Patroni takes over as the process manager. The distro service is stopped and disabled.
 
-```json
-{
-  "cluster_name": "postgres-cluster",
-  "primary_ip": "10.0.0.1",
-  "standby_ips": ["10.0.0.2", "10.0.0.3"],
-  "new_user": "appuser",
-  "new_user_password": "AppUser#2026",
-  "new_user_ssl_required": true,
-  "new_db": "appdb",
-  "ssh_port": 22,
-  "postgres_port": 5432,
-  "postgres_version": 16,
-  "step_timeout_seconds": 900
-}
+---
+
+## Supported Topologies
+
+| Mode | Nodes | Failover |
+|------|-------|---------|
+| Single-node | 1 primary | No |
+| HA cluster | 1 primary + 1 or more standbys | Yes (automatic via Patroni) |
+
+For quorum, etcd needs an odd number of nodes. Use **3 or more** for production.
+
+---
+
+## What Happens on Each VM After Deploy
+
+### Phase 1 — Preflight
+Each node is verified to have PostgreSQL, Patroni, and etcd binaries installed and reachable from the proxy.
+
+### Phase 2 — Base configuration
+On each node:
+- `postgresql@<version>` systemd service is stopped and disabled
+- etcd systemd unit and config are written
+- Patroni systemd unit is written
+
+### Phase 3 — Node configuration
+On each node, the playbook writes:
+- `/etc/etcd/etcd.conf` — etcd member config (unique per node)
+- `/etc/patroni/patroni.yml` — Patroni config (unique per node)
+
+PostgreSQL data directory (`/var/lib/postgresql/<major>/main`) is cleared for a fresh bootstrap.
+
+### Phase 4 — Cluster bootstrap
+1. `etcd.service` starts on all nodes simultaneously
+2. etcd cluster forms (peer discovery via `initial-cluster` list)
+3. `patroni.service` starts on the **primary node**
+4. Patroni bootstraps PostgreSQL, initializes the data directory, creates users
+5. Patroni pushes `bootstrap.dcs` config to etcd:
+   - `synchronous_mode: true`
+   - `synchronous_mode_strict: false`
+6. The API PATCH-es Patroni REST (`/config`) to enforce sync mode — idempotent, applies to both new and existing clusters
+7. `patroni.service` starts on **standby nodes**
+8. Each standby clones the primary data directory via `pg_basebackup` and starts streaming
+
+### Phase 5 — Verification
+- Patroni REST `/leader` confirms primary election
+- Patroni REST `/replica` confirms all standbys are streaming
+- `pg_stat_replication` row count matches `len(standby_ips)`
+- Patroni cluster view confirms `sync_standby` is elected (when standbys > 0)
+
+### Phase 6 — Application DB and user
+If `new_db` and `new_user` are set:
+```sql
+CREATE DATABASE appdb;
+CREATE USER appuser WITH PASSWORD 'password';
+GRANT CONNECT ON DATABASE appdb TO appuser;
+GRANT USAGE ON SCHEMA public TO appuser;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO appuser;
 ```
 
-**`postgres_version`** controls which major version paths are used during Ansible provisioning. Supported: `14`, `15`, `16`, `17`, `18`. Default: `16`.
+---
 
-Single-node example — set `standby_ips` to `[]`:
+## Config Files Written to Each VM
 
-```json
-{
-  "cluster_name": "postgres-cluster",
-  "primary_ip": "10.0.0.1",
-  "standby_ips": [],
-  "postgres_version": 16,
-  "ssh_port": 22,
-  "postgres_port": 5432,
-  "step_timeout_seconds": 900
-}
+### `/etc/etcd/etcd.conf`
+
+```ini
+ETCD_NAME=node1
+ETCD_DATA_DIR=/var/lib/etcd
+ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+ETCD_ADVERTISE_CLIENT_URLS=http://10.0.0.1:2379
+ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+ETCD_INITIAL_ADVERTISE_PEER_URLS=http://10.0.0.1:2380
+ETCD_INITIAL_CLUSTER=node1=http://10.0.0.1:2380,node2=http://10.0.0.2:2380,node3=http://10.0.0.3:2380
+ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-<cluster_name>
+ETCD_INITIAL_CLUSTER_STATE=new
 ```
 
-### Deploy response
+### `/etc/patroni/patroni.yml`
 
-The `202 Accepted` response includes the job and the generated cluster credentials:
+```yaml
+scope: pg-prod
+namespace: /db/
+name: node1
 
-```json
-{
-  "status": "accepted",
-  "message": "PostgreSQL cluster deployment started",
-  "data": {
-    "id": "abc123...",
-    "status": "running",
-    "secret": {
-      "postgres_user": "postgres",
-      "postgres_password": "<generated>",
-      "replicator_user": "replicator",
-      "replicator_password": "<generated>",
-      "admin_password": "<generated>"
-    }
-  }
-}
+restapi:
+  listen: 0.0.0.0:8008
+  connect_address: 10.0.0.1:8008
+
+etcd:
+  hosts: 10.0.0.1:2379,10.0.0.2:2379,10.0.0.3:2379
+
+bootstrap:
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    maximum_lag_on_failover: 1048576
+    synchronous_mode: true
+    synchronous_mode_strict: false
+    postgresql:
+      use_pg_rewind: true
+      use_slots: true
+      parameters:
+        wal_level: replica
+        hot_standby: "on"
+        max_connections: 200
+        max_wal_senders: 10
+        wal_keep_size: 1024
+        password_encryption: scram-sha-256
+        shared_preload_libraries: pg_stat_statements
+
+  initdb:
+    - encoding: UTF8
+    - data-checksums
+
+postgresql:
+  listen: 0.0.0.0:5432
+  connect_address: 10.0.0.1:5432
+  data_dir: /var/lib/postgresql/16/main
+  bin_dir: /usr/lib/postgresql/16/bin
+  config_dir: /etc/postgresql/16/main
+  pgpass: /tmp/pgpass
+
+  authentication:
+    superuser:
+      username: postgres
+      password: <postgres_password>
+    replication:
+      username: replicator
+      password: <replicator_password>
+
+  parameters:
+    unix_socket_directories: /var/run/postgresql
+    ssl: "on"
+    ssl_cert_file: /etc/ssl/certs/ssl-cert-snakeoil.pem
+    ssl_key_file: /etc/ssl/private/ssl-cert-snakeoil.key
+
+tags:
+  nofailover: false
+  noloadbalance: false
+  clonefrom: false
+  nosync: false       ← all nodes eligible for sync_standby election
 ```
 
-Save `postgres_user` and `postgres_password` — they are needed for the Collect Metrics request. All five secret fields are reused automatically on resume.
+---
 
-### Get Job response
+## Cluster Architecture
 
-`GET /cluster/pgsql/jobs/{jobID}` returns the secret alongside the job:
-
-```json
-{
-  "status": "ok",
-  "message": "success",
-  "data": {
-    "id": "abc123...",
-    "status": "completed",
-    "secret": {
-      "postgres_user": "postgres",
-      "postgres_password": "<stored password>",
-      "replicator_user": "replicator",
-      "replicator_password": "<stored password>",
-      "admin_password": "<stored password>"
-    }
-  }
-}
+```
+            Application Clients
+                    │
+                    ▼
+          ┌──────────────────┐
+          │     HAProxy       │
+          │  :25042 (TCP)    │
+          │  httpchk GET /leader on :8008 │
+          │  → only current leader gets traffic │
+          └────────┬─────────┘
+                   │
+       ┌───────────┼───────────┐
+       │           │           │
+       ▼           ▼           ▼
+  ┌─────────┐ ┌─────────┐ ┌─────────┐
+  │ Node 1  │ │ Node 2  │ │ Node 3  │
+  │ Patroni │ │ Patroni │ │ Patroni │
+  │ :8008   │ │ :8008   │ │ :8008   │
+  │ [leader]│ │[sync_sb]│ │[replica]│
+  └────┬────┘ └────┬────┘ └────┬────┘
+       │ streaming replication  │
+  ┌─────────┐ ┌─────────┐ ┌─────────┐
+  │Postgres │ │Postgres │ │Postgres │
+  │:5432    │◀│:5432    │ │:5432    │
+  │(primary)│  streaming│  streaming│
+  └─────────┘ └─────────┘ └─────────┘
+       │           │           │
+       └─────┬─────┘           │
+             │    etcd DCS     │
+       ┌─────▼───────────────────┐
+       │  etcd cluster (3 nodes) │
+       │  stores Patroni leader  │
+       │  lock + cluster config  │
+       └─────────────────────────┘
 ```
 
-### Resume a failed job
+### Node roles
 
-`POST /cluster/pgsql/jobs/{jobID}/resume`
+| Role | Description |
+|------|-------------|
+| `leader` | Current primary — accepts writes, holds the Patroni DCS lock |
+| `sync_standby` | Synchronous standby — commits only confirmed by this node; RPO = 0 |
+| `replica` | Asynchronous standby — small lag; does not block primary commits |
 
-```json
-{
-  "new_user_password": "AppUser#2026"
-}
+### Synchronous replication
+
+`synchronous_mode: true` (DCS-managed) means:
+- Patroni sets PostgreSQL `synchronous_standby_names` to the current `sync_standby` node
+- Primary commits only after the `sync_standby` acknowledges the WAL write
+- After a failover, Patroni automatically elects the remaining standby as the new `sync_standby`
+
+`synchronous_mode_strict: false` means: if no sync_standby is available, the primary falls back to async mode (accepts writes) rather than blocking.
+
+### HAProxy health check
+
+HAProxy checks `GET http://<node>:8008/leader` on each backend. Patroni returns:
+- `200 OK` — this node is the current leader (primary)
+- `503` — this node is a standby or not ready
+
+Only the leader receives client connections. After a failover, Patroni elects a new leader within seconds, and HAProxy reroutes automatically without any config change.
+
+---
+
+## Failover Flow
+
+```
+1. Primary node (Node 1) dies or loses etcd lock
+           │
+           ▼
+2. Patroni on Node 2 (sync_standby) detects leader loss
+   → tries to acquire etcd lock
+           │
+           ▼
+3. Node 2 wins election → becomes leader
+   → promotes PostgreSQL to read-write
+   → Node 2 REST /leader now returns 200
+           │
+           ▼
+4. HAProxy health check fires (≤10s interval)
+   → Node 1: /leader returns 503 (or no response)
+   → Node 2: /leader returns 200
+   → HAProxy reroutes all new connections to Node 2
+           │
+           ▼
+5. Node 3 (was replica) detects new leader via etcd
+   → Patroni elects Node 3 as sync_standby
+   → pg_rewind used if Node 3 diverged during transition
+           │
+           ▼
+6. Cluster stable: Node 2=leader, Node 3=sync_standby
+   (Node 1 rejoins as replica when it recovers)
 ```
 
-Omit `new_user_password` if the original deploy had no `new_user`. Stored secrets (postgres, replicator, admin passwords) are reused automatically from the saved job state.
+---
 
-The resume `202` response also returns the secret in the same format as the deploy response.
+## Add Member Workflow
 
-## Deployment flow
-
-1. Preflight checks confirm `psql`, `patroni`, `etcd`, and the PostgreSQL server binaries are present on every node.
-2. Base configuration stops the distro-managed PostgreSQL service, installs the `etcd` systemd unit, and installs the Patroni systemd unit.
-3. Primary and standby steps write node-specific Patroni configs and reset the PostgreSQL data directories for a fresh Patroni bootstrap.
-4. Cluster bootstrap starts `etcd` on all nodes, then starts Patroni on the primary, then on standby nodes when `standby_ips` is not empty.
-5. Verification checks systemd state, Patroni REST API membership, and `pg_stat_replication`.
-
-When `new_user_ssl_required` is omitted, it defaults to `true`.
-SSH user and private key are configured once on the API host through `CLUSTER_SSH_USER` and `CLUSTER_SSH_PRIVATE_KEY_PATH`.
-
-## Collect Metrics
-
-`POST /cluster/pgsql/metrics`
-
-Point `port` at HAProxy when a proxy is in front of the cluster. `host` is optional — when omitted the server uses the `PROXY_HOST` environment variable (typically `127.0.0.1`). Use `node_ips` for Patroni REST auto-discovery (`cluster` and `failover` categories).
-
-**Always use the PostgreSQL superuser credentials** (`postgres_user` / `postgres_password` from the deploy response). The `postgres` superuser has full access to `pg_stat_*` views and `pg_stat_statements`. Application users (`new_user`) and the replicator user do not have these privileges.
-
-### Request
-
-```json
-{
-  "port": 25005,
-  "node_ips": ["10.0.0.1", "10.0.0.2", "10.0.0.3"],
-  "user": "postgres",
-  "password": "<postgres_password from deploy response>",
-  "ssl_mode": "require",
-  "connect_timeout": 10,
-  "patroni_port": 8008,
-  "categories": [],
-  "databases": [],
-  "limit": 20
-}
+```
+POST /cluster/pgsql/members
+  { "job_id": "abc", "member_ips": ["10.0.0.4"] }
+           │
+           ▼
+  1. Register new node as etcd learner
+  2. Configure etcd on new node (joins existing cluster)
+  3. Promote etcd learner to full voting member
+  4. Write /etc/patroni/patroni.yml on new node
+  5. Start patroni.service on new node
+  6. Patroni clones data from primary via pg_basebackup
+  7. New node starts streaming replication
+  8. Patroni verifies /replica API returns 200
+  9. If no sync_standby exists, new node may be elected sync_standby
 ```
 
-| Field | Default | Description |
-|-------|---------|-------------|
-| `host` | `PROXY_HOST` env | HAProxy or primary IP. Omit to use server default. |
-| `port` | `5432` | HAProxy listen port or direct PostgreSQL port |
-| `node_ips` | — | All cluster member IPs. The collector calls `GET /leader` on each to auto-discover the Patroni leader. Required for `cluster` and `failover` categories. |
-| `user` | — | PostgreSQL superuser (`postgres`) |
-| `password` | — | Superuser password from deploy response |
-| `database` | `postgres` | Connection default database |
-| `ssl_mode` | `disable` | `disable` or `require` |
-| `connect_timeout` | `10` | Seconds |
-| `patroni_port` | `8008` | Patroni REST port on each node |
-| `categories` | all | Leave empty for all 8, or specify a subset |
-| `databases` | all | Optional list of database names to filter per-database results. Empty = all databases. |
-| `limit` | `20` | Top-N cap for slow queries, stale tables, and seq-scan tables. Max 500. |
-| `from` | — | ISO 8601 lower bound for failover events and slow queries |
-| `to` | — | ISO 8601 upper bound for failover events and slow queries |
+---
 
-### Response envelope
+## Metrics Collection
 
-Every response includes `database_count` — the total number of non-template databases on the server (includes `postgres`):
+Metrics connect through HAProxy — **not directly to DB node IPs**:
 
-```json
-{
-  "collected_at": "...",
-  "host": "127.0.0.1",
-  "port": 25005,
-  "database_count": 3,
-  "categories": { ... },
-  "errors": { ... }
-}
+```
+POST /cluster/pgsql/metrics
+  { "job_id": "abc", "proxy_port": 25042 }
+           │
+           ▼
+  API → 127.0.0.1:25042 → HAProxy → Patroni leader check → PostgreSQL primary :5432
 ```
 
-### Available categories
+Use the **postgres superuser credentials** (`postgres_user` / `postgres_password` from the deploy response). The `postgres` user has full access to `pg_stat_*` views and `pg_stat_statements`. Application users do not have these privileges.
 
-| Category | Source | Description |
-|----------|--------|-------------|
-| `cluster` | Patroni REST `/` + `/cluster` + `/config` | HA state, node roles (leader/sync_standby/replica), DCS health, TTL, loop_wait, retry_timeout |
-| `uptime` | `pg_postmaster_start_time()` | Server start time, uptime in seconds and human-readable form |
-| `failover` | Patroni REST `/history` | Timeline change events, time since last failover, supports `from`/`to` filter |
-| `connections` | `pg_database` + `pg_stat_activity` | Active, idle, idle-in-transaction, lock-waiters, wait-event breakdown, per-database counts (all databases shown including those with zero connections) |
-| `replication` | `pg_stat_replication` + `pg_replication_slots` + `pg_settings` | Streaming lag (LSN pipeline), sync state, WAL level, max_wal_senders, slot lag bytes |
-| `performance` | `pg_stat_bgwriter` + `pg_stat_database` | Avg TPS since stats reset, cache hit ratio, temp files/bytes, checkpoint pressure, bgwriter stats |
-| `query` | `pg_stat_activity` + `pg_stat_statements` | Avg/P95/P99 latency (when `pg_stat_statements` is available), slow queries, lock/deadlock counts, seq-scan vs index-scan ratio, high seq-scan tables |
-| `maintenance` | `pg_stat_progress_vacuum` + `pg_stat_user_tables` + `pg_replication_slots` + `pg_locks` | Running autovacuum workers, stale tables (high dead tuple count), tables needing vacuum, XID wraparound age and risk level, logical slot lag, lock grant/wait counts |
+For the `cluster` and `failover` categories, the collector also calls Patroni REST directly on each `node_ips` entry to get HA state and timeline history.
 
-### `databases` filter scope
+---
 
-When `databases` is non-empty, only matching database names appear in these fields:
+## Important Behaviors
 
-- `connections.by_database` — per-database connection counts
-- `query.slow_queries` — filtered by the query's active database (`datname`)
-- `maintenance.workers` — autovacuum workers filtered by database name
-- `maintenance.logical_slot_lag` — logical replication slots filtered by slot database
-
-`database_count` always reflects the total on the server regardless of the filter.
-
-### Failover detection
-
-The `failover` category returns Patroni timeline change history from `/history`:
-
-```json
-"failover": {
-  "current_timeline": 3,
-  "total_events": 2,
-  "time_since_last_failover_seconds": 3600,
-  "events": [
-    { "timeline": 2, "lsn": "...", "reason": "...", "occurred_at": "..." }
-  ]
-}
-```
-
-The `cluster` category shows the current leader and all member roles, which confirms which node holds primary after a failover:
-
-```json
-"cluster": {
-  "role": "primary",
-  "members": [
-    { "name": "node1", "role": "leader",       "state": "running" },
-    { "name": "node2", "role": "sync_standby", "state": "streaming" },
-    { "name": "node3", "role": "replica",      "state": "streaming" }
-  ]
-}
-```
-
-### `limit` scope
-
-`limit` applies to list-type fields only:
-- `query.slow_queries`
-- `query.high_seq_scan_tables`
-- `query.top_by_mean_exec_ms`
-- `query.top_by_total_exec_ms`
-- `maintenance.stale_tables`
-
-All snapshot categories (`connections`, `replication`, `performance`, `uptime`, `cluster`, `failover`) return full results regardless of `limit`.
-
-`from` / `to` filters `failover.events` (by `occurred_at`) and `query.slow_queries` (by query start time).
-
-## Optional modes
-
-Single-node mode:
-
-- Set `standby_ips` to `[]`.
-- Only the primary node is configured and bootstrapped.
-
-HA mode:
-
-- Set `standby_ips` to one or more standby node IPs.
-- Patroni bootstraps the primary first then joins standby nodes.
-
-## Architecture Overview
-
-```text
-                    App Clients / Applications
-                               |
-                               v
-                   +------------------------+
-                   |        HAProxy         |
-                   | TCP proxy, port 25005  |
-                   | httpchk GET /leader    |
-                   | routes to primary only |
-                   +------------------------+
-                               |
-            +------------------+------------------+
-            |                  |                  |
-            v                  v                  v
-   +----------------+  +----------------+  +----------------+
-   | Patroni Leader |  | Patroni Sync   |  | Patroni Async  |
-   | PostgreSQL     |  | Standby        |  | Replica        |
-   | (write)        |  | (streaming)    |  | (streaming)    |
-   +----------------+  +----------------+  +----------------+
-            |                  |                  |
-            +------------------+------------------+
-                               |
-          +--------------------+--------------------+
-          |                    |                    |
-   +-------------+    +-------------+    +-------------+
-   | etcd node 1 |    | etcd node 2 |    | etcd node 3 |
-   | (DCS)       |    | (DCS)       |    | (DCS)       |
-   +-------------+    +-------------+    +-------------+
-```
-
-HAProxy uses `httpchk GET /leader` on Patroni port `8008` — only the node returning `200 OK` receives connections. Patroni auto-manages `synchronous_standby_names` via `synchronous_mode: true`.
-
-## Important behavior
-
-- The automation is intended for a fresh cluster bootstrap.
-- It clears `/var/lib/etcd` and the PostgreSQL data directory under `/var/lib/postgresql/<major>/main` once per deployment job.
-- Resume retries for the same job do not wipe the PostgreSQL or etcd data again.
-- Patroni becomes the process manager for PostgreSQL; the distro `postgresql@...` service is stopped and disabled.
-- Credentials (postgres, replicator, admin) are generated internally if not provided and stored per-job. They are returned in the deploy `202` response and reused automatically on resume.
+- PostgreSQL data directory and etcd data are cleared **once per deployment job**. Resuming a failed job does not clear data again.
+- `pg_rewind` is enabled — this allows a former primary that diverged to rejoin as a standby without a full data copy.
+- `pg_stat_statements` is loaded via `shared_preload_libraries` and available immediately after deploy.
+- `password_encryption: scram-sha-256` is enforced cluster-wide — MD5 auth is not supported.
+- SSL is enabled using the distro default snakeoil certificate. Replace with a real cert for production.
+- Single-node mode: `standby_ips: []` — only primary is bootstrapped. No HA.
+- The deploy response credentials (`postgres_password`, `replicator_password`, `admin_password`) are stored per-job and used automatically when `job_id` is supplied to the metrics endpoint.
