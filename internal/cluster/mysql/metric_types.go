@@ -47,13 +47,15 @@ var allMetricCategories = []string{
 //
 // All snapshot categories return the current point-in-time value.
 type MetricRequest struct {
-	// JobID resolves host, port, user, and password from the stored deploy job.
-	// When set, explicit host/port/user/password fields are ignored.
+	// JobID resolves user and password from the stored deploy job.
+	// host is always sourced from the server's PROXY_HOST env (never from the client).
 	JobID string `json:"job_id"`
 
-	// MySQL connection — point this at HAProxy/MySQL Router when a proxy is in use.
-	Host           string `json:"host"`
-	Port           int    `json:"port"`            // default 3306
+	// Host and Port are server-side only — injected from PROXY_HOST env and the
+	// stored deploy job. Clients cannot set these fields; all SQL traffic routes
+	// through local HAProxy on the port the cluster was deployed with.
+	Host           string `json:"-"`
+	Port           int    `json:"-"`               // from job (MySQLPort) or default 3306
 	User           string `json:"user"`            // needs PROCESS, SELECT on performance_schema
 	Password       string `json:"password"`
 	Database       string `json:"database"`        // for table/query stats; default "information_schema"

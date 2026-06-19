@@ -24,20 +24,17 @@ func (app *application) mysqlMetricsHandler(w http.ResponseWriter, r *http.Reque
 	}
 
 	if req.JobID != "" {
-		host, port, user, password, err := app.mysqlCluster.ConnectionInfo(req.JobID)
+		_, port, user, password, err := app.mysqlCluster.ConnectionInfo(req.JobID)
 		if err != nil {
 			errJSON(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}
-		req.Host = host
 		req.Port = port
 		req.User = user
 		req.Password = password
 	}
 
-	if req.Host == "" {
-		req.Host = app.config.proxyHost
-	}
+	req.Host = app.config.proxyHost
 
 	if err := mysqlcluster.ValidateMetricRequest(&req); err != nil {
 		errJSON(w, http.StatusBadRequest, err.Error())
