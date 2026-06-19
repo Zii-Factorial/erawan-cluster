@@ -10,15 +10,15 @@
 
 ## Tech Stack
 
-| Component | Technology |
-|-----------|------------|
-| Language | Go 1.22+ |
-| HTTP Router | [go-chi/chi](https://github.com/go-chi/chi) |
-| Build | Makefile |
-| Automation | Ansible |
-| Proxy | HAProxy |
-| MySQL Cluster | MySQL InnoDB Cluster + MySQL Shell + MySQL Router |
-| PostgreSQL Cluster | PostgreSQL + Patroni + etcd |
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Language | Go 1.22+ | API server, job orchestration, metrics collection |
+| HTTP Router | [go-chi/chi](https://github.com/go-chi/chi) | Request routing and middleware |
+| Build | Makefile | Build, test, and run targets |
+| Automation | Ansible | Cluster deploy, configuration, and member management via SSH |
+| Proxy / Load Balancer | HAProxy | TCP proxy and SQL routing to DB cluster nodes |
+| MySQL Cluster | MySQL InnoDB Cluster + MySQL Shell + MySQL Router | HA MySQL with Group Replication and automatic failover |
+| PostgreSQL Cluster | PostgreSQL + Patroni + etcd | HA PostgreSQL with leader election and synchronous replication |
 
 ---
 
