@@ -158,7 +158,6 @@ Deploy a MySQL InnoDB Cluster. Returns immediately with a job ID; the deployment
 | `cluster_name` | string | yes | InnoDB Cluster name (alphanumeric, no spaces) |
 | `primary_ip` | string | yes | IP of the primary node |
 | `standby_ips` | string[] | yes | IPs of secondary nodes; empty `[]` for single-node |
-| `root_password` | string | yes | MySQL `root` user password (used only during deploy) |
 | `admin_username` | string | yes | Cluster admin user to create (e.g. `clusteradmin`) |
 | `admin_password` | string | yes | Password for the admin user |
 | `new_user` | string | no | Application user to create |
@@ -177,7 +176,6 @@ Deploy a MySQL InnoDB Cluster. Returns immediately with a job ID; the deployment
   "cluster_name": "prodCluster",
   "primary_ip": "10.0.0.1",
   "standby_ips": ["10.0.0.2", "10.0.0.3"],
-  "root_password": "RootPass#2026",
   "admin_username": "clusteradmin",
   "admin_password": "AdminPass#2026",
   "new_user": "appuser",
@@ -264,13 +262,11 @@ Resume a failed MySQL deploy job from the last completed step.
 **Request:**
 | Field | Type | Description |
 |-------|------|-------------|
-| `root_password` | string | MySQL root password (re-supplied for security) |
 | `admin_password` | string | Cluster admin password |
 | `new_user_password` | string | Application user password (if applicable) |
 
 ```json
 {
-  "root_password": "RootPass#2026",
   "admin_password": "AdminPass#2026"
 }
 ```
@@ -284,7 +280,6 @@ Roll back a MySQL cluster deployment (removes cluster config, unjoins nodes).
 **Request:**
 ```json
 {
-  "root_password": "RootPass#2026",
   "admin_password": "AdminPass#2026"
 }
 ```

@@ -156,7 +156,6 @@
       "value": "",
       "description": "Job ID returned by Add Member / Remove Member — use this to poll the member operation. JOB_ID always stays as the deploy job ID."
     }
-
   ],
   "event": [
     {
@@ -339,7 +338,7 @@
               },
               "raw": "{\n  \"port\": 25010,\n  \"node_ips\": [\"10.10.107.182\", \"10.10.107.183\"],\n  \"db_port\": 6446\n}"
             },
-            "description": "Creates (or replaces) an HAProxy frontend for a MySQL Router cluster. `db_port` is typically 6446 (R/W) or 6447 (R/O).\n\n**Dual-mode:** If you omit `db_port` and `node_ips` and only provide `port` + `node_ip` (singular), the request adds that IP to an existing config instead of creating a new one — same as calling `PATCH /haproxy/config/mysql`.",
+            "description": "Creates (or replaces) an HAProxy frontend+backend for a MySQL cluster.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `port` | int | yes | HAProxy frontend listen port (e.g. `25041`) |\n| `node_ips` | string[] or string | yes | DB node IPs to add as backends |\n| `db_port` | int | yes | MySQL port on the DB nodes (e.g. `3306` or Router `6446`) |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/config/mysql",
               "protocol": "http",
@@ -374,7 +373,7 @@
               },
               "raw": "{\n  \"port\": 25010,\n  \"node_ip\": \"{{MEMBER_IP}}\"\n}"
             },
-            "description": "Adds a new backend server to an existing MySQL HAProxy config identified by `port`. Reads the current config, appends the new IP, rebuilds, validates, and reloads HAProxy.\n\n- `port` — the HAProxy listen port of the config to update\n- `node_ip` — IP or hostname of the new node to add",
+            "description": "Adds a new backend server to an existing MySQL HAProxy config.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `port` | int | yes | HAProxy frontend port that identifies the config |\n| `node_ip` | string | yes | IP of the new backend node to add |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/config/mysql",
               "protocol": "http",
@@ -409,7 +408,7 @@
               },
               "raw": "{\n  \"port\": 25432,\n  \"node_ips\": [\"10.0.0.1\", \"10.0.0.2\"],\n  \"db_port\": 5432,\n  \"patroni_port\": 8008\n}"
             },
-            "description": "Creates (or replaces) an HAProxy frontend for a PostgreSQL/Patroni cluster. Uses `httpchk GET /leader` on the Patroni REST port so only the current leader receives traffic. `patroni_port` defaults to 8008 when omitted.\n\n**Dual-mode:** If you omit `db_port` and `node_ips` and only provide `port` + `node_ip` (singular), the request adds that IP to an existing config instead of creating a new one — same as calling `PATCH /haproxy/config/pgsql`.",
+            "description": "Creates (or replaces) an HAProxy frontend for a PostgreSQL/Patroni cluster. Uses `httpchk GET /leader` on the Patroni REST port — only the current leader receives connections.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `port` | int | yes | HAProxy frontend listen port (e.g. `25042`) |\n| `node_ips` | string[] or string | yes | DB node IPs to add as backends |\n| `db_port` | int | yes | PostgreSQL port on the DB nodes (default `5432`) |\n| `patroni_port` | int | no | Patroni REST port for `/leader` health check (default `8008`) |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/config/pgsql",
               "protocol": "http",
@@ -444,7 +443,7 @@
               },
               "raw": "{\n  \"port\": 25432,\n  \"node_ip\": \"{{MEMBER_IP}}\"\n}"
             },
-            "description": "Adds a new backend server to an existing PostgreSQL HAProxy config identified by `port`. Reads the current config (including patroni check port), appends the new IP, rebuilds, validates, and reloads HAProxy.\n\n- `port` — the HAProxy listen port of the config to update\n- `node_ip` — IP or hostname of the new node to add",
+            "description": "Adds a new backend server to an existing PostgreSQL HAProxy config. The new node's Patroni health check is also configured.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `port` | int | yes | HAProxy frontend port that identifies the config |\n| `node_ip` | string | yes | IP of the new backend node to add |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/config/pgsql",
               "protocol": "http",
@@ -490,7 +489,8 @@
                 "haproxy",
                 "config"
               ]
-            }
+            },
+            "description": "Removes an HAProxy tenant config file and reloads HAProxy. All traffic on that port is dropped.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `port` | int | yes | HAProxy frontend port identifying the config to delete |\n"
           }
         },
         {
@@ -517,7 +517,7 @@
           "request": {
             "method": "GET",
             "header": [],
-            "description": "Downloads all tenant HAProxy .cfg files packaged as a single zip archive.\n\nThe response is binary (application/zip) — use 'Save Response' in Postman to save the file. This endpoint is exempt from response encryption even when ENCRYPTION_KEY is set.",
+            "description": "Downloads all tenant HAProxy `.cfg` files packaged as a single zip archive.\n\nThe response is binary (`application/zip`). Use **Send and Download** in Postman to save the file.\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/configs/download",
               "protocol": "http",
@@ -609,7 +609,7 @@
               },
               "raw": "{\n  \"cluster_name\": \"{{CLUSTER_NAME}}\",\n  \"admin_username\": \"clusteradmin\",\n  \"admin_password\": \"\",\n  \"primary_ip\": \"{{PRIMARY_IP}}\",\n  \"standby_ips\": [\"{{SECONDARY_IP}}\"],\n  \"new_user\": \"{{NEW_USER}}\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\",\n  \"new_user_ssl_required\": {{NEW_USER_SSL_REQUIRED}},\n  \"new_db\": \"{{NEW_DB}}\",\n  \"assume_prepared\": false,\n  \"bootstrap_router\": true,\n  \"ssh_port\": 22,\n  \"mysql_port\": 3306,\n  \"mysql_version\": 8,\n  \"step_timeout_seconds\": 900\n}"
             },
-            "description": "Starts a MySQL InnoDB Cluster deployment. Returns a job immediately (202 Accepted). Poll 'Get Job' to track progress.\n\nJOB_ID is auto-extracted from the response and stored as a collection variable.",
+            "description": "Starts a MySQL InnoDB Cluster deployment. Returns a job immediately (`202 Accepted`). Poll **Get Job** to track progress. `JOB_ID` is auto-extracted from the response into the collection variable.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `cluster_name` | string | yes | InnoDB Cluster name (alphanumeric, no spaces) |\n| `primary_ip` | string | yes | IP of the primary node |\n| `standby_ips` | string[] | yes | IPs of secondary nodes; `[]` for single-node |\n| `admin_username` | string | yes | Cluster admin user to create (e.g. `clusteradmin`) |\n| `admin_password` | string | yes | Password for the admin user (auto-generated if empty) |\n| `new_user` | string | no | Application user to create |\n| `new_user_password` | string | no | Password for the application user |\n| `new_user_ssl_required` | bool | no | Require SSL for the application user (default `false`) |\n| `new_db` | string | no | Application database to create |\n| `assume_prepared` | bool | no | Skip node preparation steps if already prepared (default `false`) |\n| `bootstrap_router` | bool | no | Bootstrap MySQL Router on each node (default `true`) |\n| `ssh_port` | int | no | SSH port for Ansible (default `22`) |\n| `mysql_port` | int | no | MySQL port on DB nodes (default `3306`) |\n| `mysql_version` | int | no | Major version: `8` = 8.x, `9` = 9.x (default `8`) |\n| `step_timeout_seconds` | int | no | Per-step Ansible timeout in seconds (default `900`) |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/deploy",
               "protocol": "http",
@@ -657,7 +657,7 @@
                 "metrics"
               ]
             },
-            "description": "Collects live metrics from a running MySQL InnoDB Cluster.\n\n**Connection routing (all server-side — not in payload):**\n- `host` — always `PROXY_HOST` env on the server (default `127.0.0.1`)\n- `user` / `password` — resolved from the deploy job via `job_id`\n\n**Required payload fields:**\n- `job_id` — deploy job ID (resolves credentials)\n- `proxy_port` — HAProxy frontend port for this cluster (e.g. `{{MYSQL_PROXY_PORT}}`). This is NOT the MySQL server port (3306).\n\n**Optional:** `database` (default `information_schema`), `ssl_mode` (`disable`|`require`, default `disable`), `connect_timeout` (seconds, default 10), `limit` (top-N for slow queries/digest lists, default 20), `from`/`to` (ISO 8601, filter slow queries)\n\n**`databases`** — optional list of database names to filter per-database results (connections by_database, slow queries, full-scan digests, fragmented tables). Empty array = all user databases. Response always includes `database_count` (total user databases on the server).\n\n**`categories`** — empty array returns all 7; pick any subset:\n- `cluster` — Group Replication membership, primary election, node states\n- `uptime` — MySQL server process uptime\n- `connections` — active/sleeping threads, utilisation, per-database breakdown\n- `replication` — GR member certification stats and applier worker lag\n- `performance` — InnoDB buffer-pool hit ratio, QPS/TPS, temp-table and sort pressure\n- `query` — Digest stats from performance_schema, slow queries, full-scan digests\n- `maintenance` — InnoDB purge lag, table fragmentation, metadata locks"
+            "description": "Collects live metrics from a running MySQL InnoDB Cluster. All SQL connections route through HAProxy — never directly to DB node IPs.\n\n**Connection routing (server-side only — not in payload):**\n- `host` always resolves to `PROXY_HOST` env on the server (default `127.0.0.1`)\n- `user` / `password` are resolved from the deploy job via `job_id`\n- `proxy_port` is the **HAProxy frontend port**, not the MySQL server port (`3306`)\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID — resolves credentials and proxy routing |\n| `proxy_port` | int | yes | HAProxy frontend port for this cluster (e.g. `25041`) |\n| `database` | string | no | Default database context (default `information_schema`) |\n| `ssl_mode` | string | no | `disable` or `require` (default `disable`) |\n| `connect_timeout` | int | no | Connection timeout in seconds (default `10`) |\n| `limit` | int | no | Top-N rows for slow queries and digest lists (default `20`) |\n| `from` | string | no | ISO 8601 start time to filter slow queries |\n| `to` | string | no | ISO 8601 end time to filter slow queries |\n| `databases` | string[] | no | DB names to scope per-database metrics; `[]` = all user DBs |\n| `categories` | string[] | no | Metric categories to collect; `[]` = all 7 |\n\n**`categories` values:** `cluster`, `uptime`, `connections`, `replication`, `performance`, `query`, `maintenance`\n"
           },
           "response": []
         },
@@ -748,7 +748,7 @@
               },
               "raw": "{\n  \"admin_password\": \"\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\"\n}"
             },
-            "description": "Resumes a failed MySQL cluster job from the last completed step.\n\n- `admin_password` — leave empty to reuse the password stored from the original deploy\n- `new_user_password` — required when the job has a `new_user`",
+            "description": "Resumes a failed MySQL cluster job from the last completed step. Requires the `X-Job-Secret` header (returned in the deploy response).\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `admin_password` | string | no | Cluster admin password — leave empty to reuse the stored password from the original deploy |\n| `new_user_password` | string | no | Application user password — leave empty to reuse from deploy |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/jobs/{{JOB_ID}}/resume",
               "protocol": "http",
@@ -785,7 +785,7 @@
               },
               "raw": "{\n  \"admin_password\": \"\"\n}"
             },
-            "description": "Runs the rollback playbook to undo a failed MySQL cluster deployment.\n\n- `admin_password` — leave empty to reuse the password stored from the original deploy",
+            "description": "Runs the rollback playbook to undo a failed MySQL cluster deployment. Dissolves the InnoDB Cluster, removes the admin user, stops and unregisters MySQL Router. Requires the `X-Job-Secret` header.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `admin_password` | string | no | Cluster admin password — leave empty to reuse from deploy |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/jobs/{{JOB_ID}}/rollback",
               "protocol": "http",
@@ -845,7 +845,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"member_ips\": [\"{{MEMBER_IP}}\"],\n  \"assume_prepared\": false\n}"
             },
-            "description": "Adds one or more standby nodes to an existing MySQL InnoDB Cluster. Returns a new member job immediately (202 Accepted). Poll `GET /cluster/mysql/jobs/{id}` to track progress.\n\nThe response includes a `member_op` field with `type: \"add\"`, `member_ips`, and `source_job_id` (the original deploy job). `JOB_ID` is auto-set to the new member job ID.\n\nNodes are added sequentially; if one fails the job is marked failed with the step details. On success the deploy job's `standby_ips` is updated automatically.\n\n- `job_id` — ID of the cluster deployment job\n- `member_ips` — list of IPs of the new nodes to add\n- `assume_prepared` — set `true` to skip the `configure_instances` step\n\nPasswords are always taken from the stored job secret — no password fields needed.",
+            "description": "Adds one or more standby nodes to an existing MySQL InnoDB Cluster. Returns a new member job immediately (`202 Accepted`). Poll **Get Job** to track progress.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID that owns this cluster (resolves credentials) |\n| `member_ips` | string[] | yes | IPs of the nodes to add as secondaries |\n| `assume_prepared` | bool | no | Skip instance preparation steps if already prepared (default `false`) |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/members",
               "protocol": "http",
@@ -903,7 +903,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"member_ip\": \"{{MEMBER_IP}}\",\n  \"force\": false\n}"
             },
-            "description": "Removes a standby node from the MySQL InnoDB Cluster. Returns a new member job immediately (202 Accepted). Poll `GET /cluster/mysql/jobs/{id}` to track progress.\n\nThe response includes a `member_op` field with `type: \"remove\"`, `member_ips`, and `source_job_id`. `JOB_ID` is auto-set to the new member job ID. The primary node cannot be removed.\n\nOn success the deploy job's `standby_ips` is updated automatically.\n\n- `job_id` — ID of the cluster deployment job\n- `member_ip` — IP of the standby node to remove\n- `force` — set `true` to force-remove an unreachable or error-state node\n\nPasswords are always taken from the stored job secret — no password fields needed.",
+            "description": "Removes a standby node from the MySQL InnoDB Cluster. Returns a new member job immediately (`202 Accepted`). Poll **Get Job** to track progress.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID that owns this cluster (resolves credentials) |\n| `member_ip` | string | yes | IP of the standby node to remove |\n| `force` | bool | no | Force removal even if node is unreachable (default `false`) |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/members",
               "protocol": "http",
@@ -973,7 +973,7 @@
               },
               "raw": "{\n  \"cluster_name\": \"{{CLUSTER_NAME}}\",\n  \"admin_username\": \"admin\",\n  \"admin_password\": \"\",\n  \"primary_ip\": \"{{PGSQL_PRIMARY_IP}}\",\n  \"standby_ips\": [],\n  \"new_user\": \"{{NEW_USER}}\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\",\n  \"new_user_ssl_required\": true,\n  \"new_db\": \"{{NEW_DB}}\",\n  \"ssh_port\": 22,\n  \"postgres_port\": 5432,\n  \"postgres_version\": 16,\n  \"step_timeout_seconds\": 900\n}"
             },
-            "description": "Starts a PostgreSQL/Patroni cluster deployment. Returns a job immediately (202 Accepted). Poll 'Get Job' to track progress.\n\nUse `standby_ips: []` for primary-only mode, or provide one or more standby IPs for HA mode.\n\nJOB_ID is auto-extracted from the response and stored as a collection variable.",
+            "description": "Starts a PostgreSQL/Patroni cluster deployment. Returns a job immediately (`202 Accepted`). Poll **Get Job** to track progress. `JOB_ID` is auto-extracted from the response into the collection variable.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `cluster_name` | string | yes | Patroni cluster scope name (alphanumeric, no spaces) |\n| `primary_ip` | string | yes | IP of the primary node |\n| `standby_ips` | string[] | yes | IPs of standby nodes; `[]` for single-node |\n| `admin_username` | string | yes | Patroni admin user to create (e.g. `admin`) |\n| `admin_password` | string | yes | Password for the admin user (auto-generated if empty) |\n| `postgres_version` | int | no | PostgreSQL major version (default `16`) |\n| `postgres_port` | int | no | PostgreSQL port on DB nodes (default `5432`) |\n| `new_user` | string | no | Application user to create |\n| `new_user_password` | string | no | Password for the application user |\n| `new_user_ssl_required` | bool | no | Require SSL for the application user (default `false`) |\n| `new_db` | string | no | Application database to create |\n| `ssh_port` | int | no | SSH port for Ansible (default `22`) |\n| `step_timeout_seconds` | int | no | Per-step Ansible timeout in seconds (default `900`) |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/deploy",
               "protocol": "http",
@@ -1008,7 +1008,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"proxy_port\": {{PGSQL_PROXY_PORT}},\n  \"database\": \"postgres\",\n  \"ssl_mode\": \"disable\",\n  \"connect_timeout\": 10,\n  \"patroni_port\": 8008,\n  \"categories\": [],\n  \"databases\": [],\n  \"limit\": 20\n}"
             },
-            "description": "Collects live metrics from a running PostgreSQL/Patroni cluster.\n\n**Connection routing (all server-side — not in payload):**\n- `host` — always `PROXY_HOST` env on the server (default `127.0.0.1`)\n- `user` / `password` / `node_ips` — resolved from the deploy job via `job_id`\n\n**Required payload fields:**\n- `job_id` — deploy job ID (resolves credentials and node IPs for Patroni health checks)\n- `proxy_port` — HAProxy frontend port for this cluster (e.g. `{{PGSQL_PROXY_PORT}}`). This is NOT the PostgreSQL server port (5432).\n\n**Optional:** `database` (default `postgres`), `ssl_mode` (`disable`|`require`, default `disable`), `connect_timeout` (seconds, default 10), `patroni_port` (default 8008), `limit` (top-N for slow queries/latency, default 20), `from`/`to` (ISO 8601, filter failover events and slow queries)\n\n**`databases`** — optional list of database names to filter per-database results (connections by_database, slow queries, autovacuum workers, logical slot lag). Empty array = all databases. Response always includes `database_count` (total user databases, excluding templates).\n\n**`categories`** — empty array returns all; pick any subset:\n- `cluster` — Patroni HA state, DCS health, node roles, TTL/loop_wait\n- `uptime` — PostgreSQL process uptime\n- `failover` — Patroni timeline/failover history (supports `from`/`to` filter)\n- `connections` — active, idle, idle-in-transaction, lock-waiters, wait-event breakdown\n- `replication` — streaming lag (LSN pipeline), standby count, WAL config, slot lag\n- `performance` — TPS, cache hit ratio, temp files, checkpoint pressure, bgwriter stats\n- `query` — avg/p95/p99 latency, slow queries, lock/deadlock counts, scan efficiency\n- `maintenance` — autovacuum workers, XID wraparound age, logical slot lag, pg_locks",
+            "description": "Collects live metrics from a running PostgreSQL/Patroni cluster. All SQL connections route through HAProxy — never directly to DB node IPs.\n\n**Connection routing (server-side only — not in payload):**\n- `host` always resolves to `PROXY_HOST` env on the server (default `127.0.0.1`)\n- `user` / `password` are resolved from the deploy job via `job_id`\n- `proxy_port` is the **HAProxy frontend port**, not the PostgreSQL server port (`5432`)\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID — resolves credentials and proxy routing |\n| `proxy_port` | int | yes | HAProxy frontend port for this cluster (e.g. `25042`) |\n| `database` | string | no | Database to connect to (default `postgres`) |\n| `ssl_mode` | string | no | `disable` or `require` (default `disable`) |\n| `connect_timeout` | int | no | Connection timeout in seconds (default `10`) |\n| `limit` | int | no | Top-N rows for slow queries and digest lists (default `20`) |\n| `from` | string | no | ISO 8601 start time to filter slow queries |\n| `to` | string | no | ISO 8601 end time to filter slow queries |\n| `node_ips` | string[] | no | Patroni node IPs for cluster/failover category REST calls |\n| `categories` | string[] | no | Metric categories to collect; `[]` = all 8 |\n\n**`categories` values:** `cluster`, `uptime`, `connections`, `replication`, `performance`, `query`, `maintenance`, `failover`\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/metrics",
               "protocol": "http",
@@ -1090,7 +1090,7 @@
               },
               "raw": "{\n  \"admin_password\": \"\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\"\n}"
             },
-            "description": "Resumes a failed PostgreSQL cluster job from the last completed step.\n\n- `admin_password` — leave empty to reuse the password stored from the original deploy\n- `new_user_password` — required when the job has a `new_user`",
+            "description": "Resumes a failed PostgreSQL cluster job from the last completed step. Requires the `X-Job-Secret` header (returned in the deploy response).\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `admin_password` | string | no | Patroni admin password — leave empty to reuse the stored password from the original deploy |\n| `new_user_password` | string | no | Application user password — leave empty to reuse from deploy |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/jobs/{{JOB_ID}}/resume",
               "protocol": "http",
@@ -1150,7 +1150,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"member_ips\": [\"{{MEMBER_IP}}\"]\n}"
             },
-            "description": "Adds one or more standby nodes to an existing PostgreSQL/Patroni cluster. Returns a new member job immediately (202 Accepted). Poll `GET /cluster/pgsql/jobs/{id}` to track progress.\n\nThe response includes a `member_op` field with `type: \"add\"`, `member_ips`, and `source_job_id` (the original deploy job). `JOB_ID` is auto-set to the new member job ID.\n\nNodes are added sequentially; if one fails the job is marked failed with the step details. On success the deploy job's `standby_ips` is updated automatically.\n\n- `job_id` — ID of the cluster deployment job\n- `member_ips` — list of IPs of the new standby nodes to add\n\nPasswords are always taken from the stored job secret — no password fields needed.",
+            "description": "Adds one or more standby nodes to an existing PostgreSQL/Patroni cluster. New nodes join the etcd cluster and clone data via `pg_basebackup`. Returns a new member job immediately (`202 Accepted`).\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID that owns this cluster (resolves credentials) |\n| `member_ips` | string[] | yes | IPs of the nodes to add as standbys |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/members",
               "protocol": "http",
@@ -1208,7 +1208,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"member_ip\": \"{{MEMBER_IP}}\",\n  \"force\": false\n}"
             },
-            "description": "Removes a standby node from the PostgreSQL/Patroni cluster. Returns a new member job immediately (202 Accepted). Poll `GET /cluster/pgsql/jobs/{id}` to track progress.\n\nThe response includes a `member_op` field with `type: \"remove\"`, `member_ips`, and `source_job_id`. `JOB_ID` is auto-set to the new member job ID. The primary node cannot be removed.\n\nOn success the deploy job's `standby_ips` is updated automatically, and the DB manager's primary discovery is corrected.\n\n- `job_id` — ID of the cluster deployment job\n- `member_ip` — IP of the standby node to remove\n- `force` — set `true` to proceed even if the node is unreachable (skips graceful stop)\n\nPasswords are always taken from the stored job secret — no password fields needed.",
+            "description": "Removes a standby node from the PostgreSQL/Patroni cluster. Gracefully stops Patroni and etcd on the node, then removes it from the etcd cluster. Returns a new member job immediately (`202 Accepted`).\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID that owns this cluster (resolves credentials) |\n| `member_ip` | string | yes | IP of the standby node to remove |\n| `force` | bool | no | Force removal even if node is unreachable (default `false`) |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/members",
               "protocol": "http",
@@ -1249,7 +1249,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"password\": \"{{DBMGR_PASSWORD}}\",\n  \"database\": \"{{DBMGR_DBNAME}}\"\n}"
             },
-            "description": "Creates (or updates) a MySQL user. Credentials and primary IP are resolved from the deploy job. Idempotent — re-running refreshes the password and re-applies grants.\n\n- `username` must match ^[a-zA-Z_][a-zA-Z0-9_-]{1,31}$\n- `database` (optional) — if provided, the user is granted access to this database only; the database will be created if it does not exist. If omitted, the user is created with no database access. Must match ^[a-zA-Z0-9_]{1,64}$",
+            "description": "Creates (or updates) a MySQL user. Credentials and primary IP are resolved from the deploy job. Idempotent — re-running with the same username updates the password and grants.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID (resolves admin credentials and primary IP) |\n| `username` | string | yes | MySQL username to create |\n| `password` | string | yes | User password |\n| `host` | string | no | Host pattern (default `%`) |\n| `databases` | string[] | no | Databases to grant `ALL PRIVILEGES` on (`[]` = no grants) |\n| `ssl_required` | bool | no | Require SSL for this user (default `false`) |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/users",
               "protocol": "http",
@@ -1284,13 +1284,19 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"new_username\": \"newname\"\n}"
             },
-            "description": "Renames a MySQL user. Existing grants are carried over automatically. System users and users with SUPER privilege are refused.\n\n- `username` — current username\n- `new_username` — desired new username, must match ^[a-zA-Z_][a-zA-Z0-9_-]{1,31}$",
+            "description": "Renames a MySQL user. Existing grants are carried over automatically. System users and users with `SUPER` privilege are refused.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `username` | string | yes | Current username |\n| `new_username` | string | yes | New username |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/users",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["cluster", "mysql", "users"]
+              "path": [
+                "cluster",
+                "mysql",
+                "users"
+              ]
             }
           }
         },
@@ -1313,13 +1319,20 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"password\": \"{{DBMGR_PASSWORD}}\"\n}"
             },
-            "description": "Resets the password for an existing MySQL user. System users and users with SUPER privilege are refused.\n\n- `username` — target username\n- `password` — new password",
+            "description": "Resets the password for an existing MySQL user. System users and users with `SUPER` privilege are refused.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `username` | string | yes | Username whose password to reset |\n| `password` | string | yes | New password |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/users/password",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["cluster", "mysql", "users", "password"]
+              "path": [
+                "cluster",
+                "mysql",
+                "users",
+                "password"
+              ]
             }
           }
         },
@@ -1342,7 +1355,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\"\n}"
             },
-            "description": "Drops a MySQL user. System users (root, mysql.sys, mysql.session, mysql.infoschema) and users with the SUPER privilege are refused. Credentials resolved from the deploy job.",
+            "description": "Drops a MySQL user. System users (`root`, `mysql.sys`, `mysql.session`, `mysql.infoschema`) and users with the `SUPER` privilege are refused.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `username` | string | yes | Username to drop |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/users",
               "protocol": "http",
@@ -1377,7 +1390,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\"\n}"
             },
-            "description": "Creates a database and grants all existing non-system app users access to it. Credentials resolved from the deploy job.\n\n- `dbname` must match ^[a-zA-Z0-9_]{1,64}$",
+            "description": "Creates a MySQL database and grants all existing non-system app users `ALL PRIVILEGES` on it. Credentials resolved from the deploy job.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `dbname` | string | yes | Database name to create |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/databases",
               "protocol": "http",
@@ -1412,13 +1425,19 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\",\n  \"new_dbname\": \"newdb\"\n}"
             },
-            "description": "Renames a MySQL database by creating the new database, moving all tables, re-applying grants, and dropping the old database. System databases are refused.\n\n- `dbname` — current database name\n- `new_dbname` — desired new name, must match ^[a-zA-Z0-9_]{1,64}$",
+            "description": "Renames a MySQL database by creating the new database, moving all tables, re-applying grants, and dropping the old database.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `dbname` | string | yes | Current database name |\n| `new_dbname` | string | yes | New database name |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/databases",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["cluster", "mysql", "databases"]
+              "path": [
+                "cluster",
+                "mysql",
+                "databases"
+              ]
             }
           }
         },
@@ -1441,7 +1460,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\"\n}"
             },
-            "description": "Terminates all active connections to the database, then drops it. System databases (information_schema, mysql, performance_schema, sys) are refused. Credentials resolved from the deploy job.",
+            "description": "Terminates all active connections to the database, then drops it. System databases (`information_schema`, `mysql`, `performance_schema`, `sys`) are refused.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `dbname` | string | yes | Database name to drop |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/databases",
               "protocol": "http",
@@ -1482,7 +1501,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"password\": \"{{DBMGR_PASSWORD}}\",\n  \"database\": \"{{DBMGR_DBNAME}}\"\n}"
             },
-            "description": "Creates (or updates) a PostgreSQL role. Credentials and primary IP are resolved from the deploy job. Idempotent — re-running refreshes the password and re-applies grants.\n\n- `username` must match ^[a-zA-Z_][a-zA-Z0-9_-]{1,31}$\n- `database` (optional) — if provided, the role is granted access to this database only; the database will be created if it does not exist. If omitted, the role is created with no database access. Must match ^[a-zA-Z0-9_]{1,64}$",
+            "description": "Creates (or updates) a PostgreSQL role. Credentials and primary IP are resolved from the deploy job. Idempotent — re-running with the same username updates the password and grants.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID (resolves admin credentials and primary IP) |\n| `username` | string | yes | PostgreSQL role name to create |\n| `password` | string | yes | Role password |\n| `databases` | string[] | no | Databases to grant `CONNECT` + `ALL ON ALL TABLES` on (`[]` = no grants) |\n| `ssl_required` | bool | no | Enforce `hostssl` rule for this role (default `false`) |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/users",
               "protocol": "http",
@@ -1517,13 +1536,19 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"new_username\": \"newname\"\n}"
             },
-            "description": "Renames a PostgreSQL role. Existing grants are carried over automatically. Superuser, replication, and built-in pg_* roles are refused.\n\n- `username` — current username\n- `new_username` — desired new username, must match ^[a-zA-Z_][a-zA-Z0-9_-]{1,31}$",
+            "description": "Renames a PostgreSQL role. Existing grants are carried over automatically. Superuser, replication, and built-in `pg_*` roles are refused.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `username` | string | yes | Current role name |\n| `new_username` | string | yes | New role name |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/users",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["cluster", "pgsql", "users"]
+              "path": [
+                "cluster",
+                "pgsql",
+                "users"
+              ]
             }
           }
         },
@@ -1546,13 +1571,20 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"password\": \"{{DBMGR_PASSWORD}}\"\n}"
             },
-            "description": "Resets the password for an existing PostgreSQL role. Superuser, replication, and built-in pg_* roles are refused.\n\n- `username` — target username\n- `password` — new password",
+            "description": "Resets the password for an existing PostgreSQL role. Superuser, replication, and built-in `pg_*` roles are refused.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `username` | string | yes | Role name whose password to reset |\n| `password` | string | yes | New password |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/users/password",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["cluster", "pgsql", "users", "password"]
+              "path": [
+                "cluster",
+                "pgsql",
+                "users",
+                "password"
+              ]
             }
           }
         },
@@ -1575,7 +1607,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\"\n}"
             },
-            "description": "Drops a PostgreSQL role. Superuser roles, replication roles, built-in pg_* roles, and the postgres user are refused. Objects are reassigned before dropping. Credentials resolved from the deploy job.",
+            "description": "Drops a PostgreSQL role. Superuser roles, replication roles, built-in `pg_*` roles, and the `postgres` user are refused. Objects owned by the role are reassigned to the admin user before drop.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `username` | string | yes | Role name to drop |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/users",
               "protocol": "http",
@@ -1610,7 +1642,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\"\n}"
             },
-            "description": "Creates a PostgreSQL database and grants all existing non-system app users access to it. Credentials resolved from the deploy job. Owner defaults to the postgres superuser.\n\n- `dbname` must match ^[a-zA-Z0-9_]{1,64}$",
+            "description": "Creates a PostgreSQL database and grants all existing non-system app roles `CONNECT` and `ALL ON ALL TABLES` access. Credentials resolved from the deploy job.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `dbname` | string | yes | Database name to create |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/databases",
               "protocol": "http",
@@ -1645,13 +1677,19 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\",\n  \"new_dbname\": \"newdb\"\n}"
             },
-            "description": "Renames a PostgreSQL database. Active connections are terminated first. Existing grants are preserved automatically by PostgreSQL. System databases (postgres, template0, template1) are refused.\n\n- `dbname` — current database name\n- `new_dbname` — desired new name, must match ^[a-zA-Z0-9_]{1,64}$",
+            "description": "Renames a PostgreSQL database. Active connections are terminated first. Existing grants are preserved automatically by PostgreSQL's internal OID references.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `dbname` | string | yes | Current database name |\n| `new_dbname` | string | yes | New database name |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/databases",
               "protocol": "http",
-              "host": ["{{API_HOST}}"],
+              "host": [
+                "{{API_HOST}}"
+              ],
               "port": "{{API_PORT}}",
-              "path": ["cluster", "pgsql", "databases"]
+              "path": [
+                "cluster",
+                "pgsql",
+                "databases"
+              ]
             }
           }
         },
@@ -1674,7 +1712,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"dbname\": \"{{DBMGR_DBNAME}}\"\n}"
             },
-            "description": "Terminates all active connections via pg_terminate_backend(), then drops the database. System databases (postgres, template0, template1) are refused. Credentials resolved from the deploy job.",
+            "description": "Terminates all active connections via `pg_terminate_backend()`, then drops the database. System databases (`postgres`, `template0`, `template1`) are refused.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `dbname` | string | yes | Database name to drop |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/databases",
               "protocol": "http",
