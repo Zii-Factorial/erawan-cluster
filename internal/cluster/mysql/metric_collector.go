@@ -33,7 +33,7 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 
 	categories := resolveCategories(req.Categories)
 
-	db, err := openDB(req)
+	db, err := openDB(ctx, req)
 	if err != nil {
 		for _, cat := range categories {
 			resp.Errors[cat] = "db connect: " + err.Error()
@@ -170,7 +170,7 @@ func resolveCategories(requested []string) []string {
 	return out
 }
 
-func openDB(req MetricRequest) (*sql.DB, error) {
+func openDB(ctx context.Context, req MetricRequest) (*sql.DB, error) {
 	port := resolvePort(req.Port, 3306)
 	dbName := req.Database
 	if dbName == "" {
@@ -203,15 +203,12 @@ func openDB(req MetricRequest) (*sql.DB, error) {
 	db.SetMaxOpenConns(len(allMetricCategories))
 	db.SetMaxIdleConns(2)
 	db.SetConnMaxLifetime(30 * time.Second)
-	if err := db.PingContext(ctx()); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return db, nil
 }
-
-// ctx returns a background context; openDB ping does not need the request ctx.
-func ctx() context.Context { return context.Background() }
 
 // collectDatabaseCount returns the number of user databases (excludes system schemas).
 func collectDatabaseCount(ctx context.Context, db *sql.DB) (int, error) {

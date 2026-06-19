@@ -78,7 +78,7 @@ defaults
 // preventing the broken config from ever reaching disk or causing a reload failure.
 // excludeFile is the path of an existing tenant config to skip during validation
 // (used when replacing an existing port config to avoid duplicate-bind errors).
-func (s *Service) validateConfigSyntax(content string, excludeFile string) error {
+func (s *Service) validateConfigSyntax(ctx context.Context, content string, excludeFile string) error {
 	stubFile, err := os.CreateTemp("", "haproxy-stub-*.cfg")
 	if err != nil {
 		return fmt.Errorf("create validation stub: %w", err)
@@ -126,14 +126,45 @@ func (s *Service) validateConfigSyntax(content string, excludeFile string) error
 	}
 	args = append(args, "-f", newFile.Name())
 
-	var out bytes.Buffer
-	cmd := exec.Command("haproxy", args...)
+	validCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	var out cappedBytes
+	cmd := exec.CommandContext(validCtx, "haproxy", args...)
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("config validation failed: %s", strings.TrimSpace(out.String()))
 	}
 	return nil
+}
+
+// cappedBytes is a write-capped bytes.Buffer. Writes beyond 8 KB are dropped.
+type cappedBytes struct {
+	buf  bytes.Buffer
+	full bool
+}
+
+func (b *cappedBytes) Write(p []byte) (int, error) {
+	const limit = 8 << 10
+	avail := limit - b.buf.Len()
+	if avail <= 0 {
+		b.full = true
+		return len(p), nil
+	}
+	if len(p) > avail {
+		p = p[:avail]
+		b.full = true
+	}
+	return b.buf.Write(p)
+}
+
+func (b *cappedBytes) String() string {
+	s := b.buf.String()
+	if b.full {
+		s += " ...[truncated]"
+	}
+	return s
 }
 
 const defaultPatroniPort = 8008
@@ -257,7 +288,7 @@ func (s *Service) applyConfig(ctx context.Context, port int, content string) err
 	if existing := s.filename(port); fileExists(existing) {
 		excludeFile = existing
 	}
-	if err := s.validateConfigSyntax(content, excludeFile); err != nil {
+	if err := s.validateConfigSyntax(ctx, content, excludeFile); err != nil {
 		return err
 	}
 

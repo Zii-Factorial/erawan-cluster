@@ -195,8 +195,10 @@ func (c *Collector) discoverLeader(ctx context.Context, req MetricRequest) (stri
 		if err != nil {
 			continue
 		}
+		status := resp.StatusCode
+		_, _ = io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
+		if status == http.StatusOK {
 			return ip, nil
 		}
 	}

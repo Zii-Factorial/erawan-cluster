@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -13,10 +14,16 @@ import (
 )
 
 type Service struct {
-	store *pgsql.Store
+	store      *pgsql.Store
+	httpClient *http.Client
 }
 
-func NewService(store *pgsql.Store) *Service { return &Service{store: store} }
+func NewService(store *pgsql.Store) *Service {
+	return &Service{
+		store:      store,
+		httpClient: &http.Client{Timeout: 4 * time.Second},
+	}
+}
 
 // resolve loads the current primary IP, port, and postgres superuser credentials.
 // It probes each node's Patroni /master endpoint so the result is correct even
@@ -35,7 +42,7 @@ func (s *Service) resolve(ctx context.Context, jobID string) (host string, port 
 		p = 5432
 	}
 	candidates := append([]string{job.Request.PrimaryIP}, job.Request.StandbyIPs...)
-	primary, err := findPrimary(ctx, candidates)
+	primary, err := s.findPrimary(ctx, candidates)
 	if err != nil {
 		return "", 0, "", "", fmt.Errorf("discover primary: %w", err)
 	}
@@ -44,20 +51,21 @@ func (s *Service) resolve(ctx context.Context, jobID string) (host string, port 
 
 // findPrimary probes each node's Patroni /master endpoint (port 8008) and
 // returns the first node that responds 200 — that is the current read-write leader.
-func findPrimary(ctx context.Context, candidates []string) (string, error) {
-	client := &http.Client{Timeout: 4 * time.Second}
+func (s *Service) findPrimary(ctx context.Context, candidates []string) (string, error) {
 	for _, ip := range candidates {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 			fmt.Sprintf("http://%s:8008/master", ip), nil)
 		if err != nil {
 			continue
 		}
-		resp, err := client.Do(req)
+		resp, err := s.httpClient.Do(req)
 		if err != nil {
 			continue
 		}
+		status := resp.StatusCode
+		_, _ = io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
+		if status == http.StatusOK {
 			return ip, nil
 		}
 	}
