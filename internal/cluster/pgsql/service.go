@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -353,40 +355,65 @@ func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJo
 		AdminPassword:      storedSecret.AdminPassword,
 	}
 	timeout := time.Duration(deployJob.Request.StepTimeoutSeconds) * time.Second
+	newIPs := memberJob.MemberOp.MemberIPs
 
-	for _, ip := range memberJob.MemberOp.MemberIPs {
-		memberJob.CurrentStep = ip
-		s.updateJobProgress(memberJob)
-		_ = s.store.Save(memberJob)
+	// Snapshot the current spec so all goroutines share the same read-only base.
+	baseSpec := deployJob.Request
+	baseSpec.StandbyIPs = append([]string{}, deployJob.Request.StandbyIPs...)
 
-		result := s.doAddMember(ctx, memberRunConfig{
-			jobID:    deployJob.ID,
-			spec:     deployJob.Request,
-			secret:   secret,
-			memberIP: ip,
-			timeout:  timeout,
-		})
+	// Mark all nodes as in-flight so the caller can see what's running.
+	memberJob.CurrentStep = strings.Join(newIPs, ",")
+	s.updateJobProgress(memberJob)
+	_ = s.store.Save(memberJob)
+
+	// Run each member addition in parallel — their Ansible runs are independent
+	// (separate temp dirs, inventories, and pg_basebackup streams from primary).
+	results := make([]StepResult, len(newIPs))
+	var wg sync.WaitGroup
+	for i, ip := range newIPs {
+		i, ip := i, ip
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = s.doAddMember(ctx, memberRunConfig{
+				jobID:    deployJob.ID,
+				spec:     baseSpec,
+				secret:   secret,
+				memberIP: ip,
+				timeout:  timeout,
+			})
+		}()
+	}
+	wg.Wait()
+
+	// Collect results; add successful nodes to the deploy job's standby list.
+	var failed []string
+	for i, result := range results {
 		memberJob.Steps = append(memberJob.Steps, result)
-
+		ip := newIPs[i]
 		if result.Status == JobStatusCompleted {
 			deployJob.Request.StandbyIPs = append(deployJob.Request.StandbyIPs, ip)
-			memberJob.Request.StandbyIPs = deployJob.Request.StandbyIPs
-			_ = s.store.Save(deployJob)
 		} else {
-			memberJob.Status = JobStatusFailed
-			memberJob.Error = result.Message
-			if memberJob.Error == "" {
-				memberJob.Error = fmt.Sprintf("add member %s failed", ip)
+			msg := result.Message
+			if msg == "" {
+				msg = fmt.Sprintf("add member %s failed", ip)
 			}
-			memberJob.CurrentStep = ""
-			s.updateJobProgress(memberJob)
-			_ = s.store.Save(memberJob)
-			return
+			failed = append(failed, msg)
 		}
+	}
+	memberJob.Request.StandbyIPs = deployJob.Request.StandbyIPs
+	_ = s.store.Save(deployJob)
+
+	memberJob.CurrentStep = ""
+	if len(failed) > 0 {
+		memberJob.Status = JobStatusFailed
+		memberJob.Error = strings.Join(failed, "; ")
+		s.updateJobProgress(memberJob)
+		_ = s.store.Save(memberJob)
+		return
 	}
 
 	memberJob.Status = JobStatusCompleted
-	memberJob.CurrentStep = ""
 	memberJob.Error = ""
 	s.updateJobProgress(memberJob)
 	_ = s.store.Save(memberJob)
