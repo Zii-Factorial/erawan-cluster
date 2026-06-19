@@ -205,7 +205,10 @@ func openDB(ctx context.Context, req MetricRequest) (*sql.DB, error) {
 	db.SetConnMaxLifetime(30 * time.Second)
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
-		return nil, err
+		// "invalid connection" typically means caching_sha2_password full-auth RSA
+		// exchange failed through MySQL Router. Fix: ALTER USER ... IDENTIFIED WITH
+		// mysql_native_password BY '...'; FLUSH PRIVILEGES;
+		return nil, fmt.Errorf("%w (addr=%s user=%s — if 'invalid connection', alter user to mysql_native_password)", err, cfg.Addr, cfg.User)
 	}
 	return db, nil
 }
