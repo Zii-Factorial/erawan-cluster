@@ -18,8 +18,16 @@ type Launcher struct {
 	wg  sync.WaitGroup
 }
 
-// NewLauncher returns a Launcher that runs at most maxConcurrent jobs at once
-// (<= 0 for unbounded).
+/**
+ * NewLauncher returns a Launcher that runs at most maxConcurrent jobs at once
+ * (<= 0 for unbounded).
+ *
+ * Params:
+ *   maxConcurrent int - the maxConcurrent value
+ *
+ * Returns:
+ *   *Launcher - the resulting *Launcher
+ */
 func NewLauncher(maxConcurrent int) *Launcher {
 	var sem chan struct{}
 	if maxConcurrent > 0 {
@@ -28,8 +36,16 @@ func NewLauncher(maxConcurrent int) *Launcher {
 	return &Launcher{sem: sem}
 }
 
-// Go runs fn in a tracked background goroutine, waiting (in that goroutine) for
-// a free concurrency slot first. Safe for concurrent use.
+/**
+ * Go runs fn in a tracked background goroutine, waiting (in that goroutine) for
+ * a free concurrency slot first. Safe for concurrent use.
+ *
+ * Receiver:
+ *   l *Launcher - pointer receiver; the method may mutate this Launcher instance
+ *
+ * Params:
+ *   fn func() - the fn (func())
+ */
 func (l *Launcher) Go(fn func()) {
 	l.wg.Add(1)
 	go func() {
@@ -42,8 +58,16 @@ func (l *Launcher) Go(fn func()) {
 	}()
 }
 
-// Wait blocks until all launched jobs finish or ctx is done, whichever comes
-// first. Used during graceful shutdown to drain in-flight jobs.
+/**
+ * Wait blocks until all launched jobs finish or ctx is done, whichever comes
+ * first. Used during graceful shutdown to drain in-flight jobs.
+ *
+ * Receiver:
+ *   l *Launcher - pointer receiver; the method may mutate this Launcher instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ */
 func (l *Launcher) Wait(ctx context.Context) {
 	done := make(chan struct{})
 	go func() {

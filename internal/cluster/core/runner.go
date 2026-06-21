@@ -36,10 +36,19 @@ type AnsibleSpec struct {
 	Env             []string       // extra environment appended to os.Environ()
 }
 
-// AnsibleRun executes one ansible-playbook invocation and maps its outcome to a
-// StepResult. Secrets travel via an on-disk vars.json (0600) passed with
-// `--extra-vars @file` — never on the command line or through a shell — so they
-// are not exposed in the process table and there is no shell-injection surface.
+/**
+ * AnsibleRun executes one ansible-playbook invocation and maps its outcome to a
+ * StepResult. Secrets travel via an on-disk vars.json (0600) passed with
+ * `--extra-vars @file` — never on the command line or through a shell — so they
+ * are not exposed in the process table and there is no shell-injection surface.
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   spec AnsibleSpec - the spec (AnsibleSpec)
+ *
+ * Returns:
+ *   result StepResult - the result (StepResult)
+ */
 func AnsibleRun(ctx context.Context, spec AnsibleSpec) (result StepResult) {
 	result = StepResult{
 		Name:      spec.StepName,
@@ -146,6 +155,19 @@ type cappedBuffer struct {
 	dropped bool
 }
 
+/**
+ * Write.
+ *
+ * Receiver:
+ *   b *cappedBuffer - pointer receiver; the method may mutate this cappedBuffer instance
+ *
+ * Params:
+ *   p []byte - the p bytes
+ *
+ * Returns:
+ *   int - the resulting integer
+ *   error - error value; non-nil when the operation fails
+ */
 func (b *cappedBuffer) Write(p []byte) (int, error) {
 	if b.limit > 0 {
 		avail := b.limit - b.buf.Len()
@@ -162,6 +184,15 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 	return b.buf.Write(p)
 }
 
+/**
+ * String.
+ *
+ * Receiver:
+ *   b *cappedBuffer - pointer receiver; the method may mutate this cappedBuffer instance
+ *
+ * Returns:
+ *   string - the resulting string
+ */
 func (b *cappedBuffer) String() string {
 	s := strings.TrimSpace(b.buf.String())
 	if b.dropped {

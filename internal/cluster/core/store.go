@@ -20,7 +20,16 @@ type Store[Spec any, Sec any] struct {
 	mu  sync.Mutex
 }
 
-// NewStore creates the state directory (0700) if needed and returns a Store.
+/**
+ * NewStore creates the state directory (0700) if needed and returns a Store.
+ *
+ * Params:
+ *   dir string - the dir string
+ *
+ * Returns:
+ *   *Store[Spec, Sec] - the resulting *Store[Spec, Sec]
+ *   error - error value; non-nil when the operation fails
+ */
 func NewStore[Spec any, Sec any](dir string) (*Store[Spec, Sec], error) {
 	if strings.TrimSpace(dir) == "" {
 		return nil, fmt.Errorf("state directory is required")
@@ -31,14 +40,36 @@ func NewStore[Spec any, Sec any](dir string) (*Store[Spec, Sec], error) {
 	return &Store[Spec, Sec]{dir: dir}, nil
 }
 
-// Save persists job, stamping UpdatedAt.
+/**
+ * Save persists job, stamping UpdatedAt.
+ *
+ * Receiver:
+ *   s *Store[Spec, Sec] - pointer receiver; the method may mutate this Store[Spec, Sec] instance
+ *
+ * Params:
+ *   job *Job[Spec] - the job (*Job[Spec])
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Store[Spec, Sec]) Save(job *Job[Spec]) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.saveLocked(job)
 }
 
-// saveLocked persists job; the caller must hold s.mu.
+/**
+ * saveLocked persists job; the caller must hold s.mu.
+ *
+ * Receiver:
+ *   s *Store[Spec, Sec] - pointer receiver; the method may mutate this Store[Spec, Sec] instance
+ *
+ * Params:
+ *   job *Job[Spec] - the job (*Job[Spec])
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Store[Spec, Sec]) saveLocked(job *Job[Spec]) error {
 	job.UpdatedAt = time.Now().UTC()
 	payload, err := json.MarshalIndent(job, "", "  ")
@@ -48,10 +79,22 @@ func (s *Store[Spec, Sec]) saveLocked(job *Job[Spec]) error {
 	return os.WriteFile(s.path(job.ID), payload, 0o600)
 }
 
-// Update atomically loads, mutates, and re-saves a job while holding the store
-// lock for the whole read-modify-write, so concurrent updates cannot clobber
-// one another (e.g. two member operations editing the same deploy job's
-// standby list).
+/**
+ * Update atomically loads, mutates, and re-saves a job while holding the store
+ * lock for the whole read-modify-write, so concurrent updates cannot clobber
+ * one another (e.g. two member operations editing the same deploy job's
+ * standby list).
+ *
+ * Receiver:
+ *   s *Store[Spec, Sec] - pointer receiver; the method may mutate this Store[Spec, Sec] instance
+ *
+ * Params:
+ *   jobID string - the jobID string
+ *   mutate func(*Job[Spec]) error - the mutate (func(*Job[Spec]) error)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Store[Spec, Sec]) Update(jobID string, mutate func(*Job[Spec]) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -65,7 +108,19 @@ func (s *Store[Spec, Sec]) Update(jobID string, mutate func(*Job[Spec]) error) e
 	return s.saveLocked(job)
 }
 
-// SaveSecret persists the secret sidecar for jobID.
+/**
+ * SaveSecret persists the secret sidecar for jobID.
+ *
+ * Receiver:
+ *   s *Store[Spec, Sec] - pointer receiver; the method may mutate this Store[Spec, Sec] instance
+ *
+ * Params:
+ *   jobID string - the jobID string
+ *   secret Sec - the secret (Sec)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Store[Spec, Sec]) SaveSecret(jobID string, secret Sec) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -77,14 +132,38 @@ func (s *Store[Spec, Sec]) SaveSecret(jobID string, secret Sec) error {
 	return os.WriteFile(s.secretPath(jobID), payload, 0o600)
 }
 
-// Load reads and decodes the job for jobID.
+/**
+ * Load reads and decodes the job for jobID.
+ *
+ * Receiver:
+ *   s *Store[Spec, Sec] - pointer receiver; the method may mutate this Store[Spec, Sec] instance
+ *
+ * Params:
+ *   jobID string - the jobID string
+ *
+ * Returns:
+ *   *Job[Spec] - the resulting *Job[Spec]
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Store[Spec, Sec]) Load(jobID string) (*Job[Spec], error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.loadLocked(jobID)
 }
 
-// loadLocked reads and decodes the job for jobID; the caller must hold s.mu.
+/**
+ * loadLocked reads and decodes the job for jobID; the caller must hold s.mu.
+ *
+ * Receiver:
+ *   s *Store[Spec, Sec] - pointer receiver; the method may mutate this Store[Spec, Sec] instance
+ *
+ * Params:
+ *   jobID string - the jobID string
+ *
+ * Returns:
+ *   *Job[Spec] - the resulting *Job[Spec]
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Store[Spec, Sec]) loadLocked(jobID string) (*Job[Spec], error) {
 	data, err := os.ReadFile(s.path(jobID))
 	if err != nil {
@@ -101,7 +180,19 @@ func (s *Store[Spec, Sec]) loadLocked(jobID string) (*Job[Spec], error) {
 	return &job, nil
 }
 
-// LoadSecret reads and decodes the secret sidecar for jobID.
+/**
+ * LoadSecret reads and decodes the secret sidecar for jobID.
+ *
+ * Receiver:
+ *   s *Store[Spec, Sec] - pointer receiver; the method may mutate this Store[Spec, Sec] instance
+ *
+ * Params:
+ *   jobID string - the jobID string
+ *
+ * Returns:
+ *   Sec - the resulting Sec
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Store[Spec, Sec]) LoadSecret(jobID string) (Sec, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -120,8 +211,20 @@ func (s *Store[Spec, Sec]) LoadSecret(jobID string) (Sec, error) {
 	return secret, nil
 }
 
-// List returns up to limit jobs, newest first by file modification time. A
-// non-positive limit returns all jobs. Unreadable/corrupt files are skipped.
+/**
+ * List returns up to limit jobs, newest first by file modification time. A
+ * non-positive limit returns all jobs. Unreadable/corrupt files are skipped.
+ *
+ * Receiver:
+ *   s *Store[Spec, Sec] - pointer receiver; the method may mutate this Store[Spec, Sec] instance
+ *
+ * Params:
+ *   limit int - the limit value
+ *
+ * Returns:
+ *   []Job[Spec] - the resulting []Job[Spec]
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Store[Spec, Sec]) List(limit int) ([]Job[Spec], error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -173,8 +276,13 @@ func (s *Store[Spec, Sec]) List(limit int) ([]Job[Spec], error) {
 	return jobs, nil
 }
 
-// MarkStaleRunningJobsFailed rewrites any job left in the "running" state (e.g.
-// after a crash mid-deploy) to "failed", so jobs are never stuck running.
+/**
+ * MarkStaleRunningJobsFailed rewrites any job left in the "running" state (e.g.
+ * after a crash mid-deploy) to "failed", so jobs are never stuck running.
+ *
+ * Receiver:
+ *   s *Store[Spec, Sec] - pointer receiver; the method may mutate this Store[Spec, Sec] instance
+ */
 func (s *Store[Spec, Sec]) MarkStaleRunningJobsFailed() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -210,15 +318,47 @@ func (s *Store[Spec, Sec]) MarkStaleRunningJobsFailed() {
 	}
 }
 
-// isJobFile reports whether name is a job state file (and not a secret sidecar).
+/**
+ * isJobFile reports whether name is a job state file (and not a secret sidecar).
+ *
+ * Params:
+ *   name string - the name string
+ *
+ * Returns:
+ *   bool - boolean result
+ */
 func isJobFile(name string) bool {
 	return strings.HasSuffix(name, ".json") && !strings.HasSuffix(name, ".secret.json")
 }
 
+/**
+ * path.
+ *
+ * Receiver:
+ *   s *Store[Spec, Sec] - pointer receiver; the method may mutate this Store[Spec, Sec] instance
+ *
+ * Params:
+ *   jobID string - the jobID string
+ *
+ * Returns:
+ *   string - the resulting string
+ */
 func (s *Store[Spec, Sec]) path(jobID string) string {
 	return filepath.Join(s.dir, jobID+".json")
 }
 
+/**
+ * secretPath.
+ *
+ * Receiver:
+ *   s *Store[Spec, Sec] - pointer receiver; the method may mutate this Store[Spec, Sec] instance
+ *
+ * Params:
+ *   jobID string - the jobID string
+ *
+ * Returns:
+ *   string - the resulting string
+ */
 func (s *Store[Spec, Sec]) secretPath(jobID string) string {
 	return filepath.Join(s.dir, jobID+".secret.json")
 }

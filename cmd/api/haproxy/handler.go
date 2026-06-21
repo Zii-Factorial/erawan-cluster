@@ -14,7 +14,15 @@ type Handler struct {
 	service *haproxy.Service
 }
 
-// New creates a Handler with the given service.
+/**
+ * New creates a Handler with the given service.
+ *
+ * Params:
+ *   svc *haproxy.Service - the svc (*haproxy.Service)
+ *
+ * Returns:
+ *   *Handler - the resulting *Handler
+ */
 func New(svc *haproxy.Service) *Handler {
 	return &Handler{service: svc}
 }
@@ -22,6 +30,18 @@ func New(svc *haproxy.Service) *Handler {
 // stringList accepts either a JSON string or an array of strings.
 type stringList []string
 
+/**
+ * UnmarshalJSON.
+ *
+ * Receiver:
+ *   s *stringList - pointer receiver; the method may mutate this stringList instance
+ *
+ * Params:
+ *   data []byte - the data bytes
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *stringList) UnmarshalJSON(data []byte) error {
 	var arr []string
 	if err := json.Unmarshal(data, &arr); err == nil {
@@ -60,6 +80,16 @@ type deleteRequest struct {
 	Port int `json:"port"`
 }
 
+/**
+ * resolveNodeIPs.
+ *
+ * Params:
+ *   list stringList - the list (stringList)
+ *   single string - the single string
+ *
+ * Returns:
+ *   []string - the resulting []string
+ */
 func resolveNodeIPs(list stringList, single string) []string {
 	if len(list) > 0 {
 		return []string(list)
@@ -70,6 +100,16 @@ func resolveNodeIPs(list stringList, single string) []string {
 	return []string{}
 }
 
+/**
+ * CreateMySQLConfig.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) CreateMySQLConfig(w http.ResponseWriter, r *http.Request) {
 	var req createMySQLRequest
 	if err := render.DecodeJSON(r, &req); err != nil {
@@ -95,6 +135,16 @@ func (h *Handler) CreateMySQLConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+/**
+ * AddMySQLMember.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) AddMySQLMember(w http.ResponseWriter, r *http.Request) {
 	var req addMemberRequest
 	if err := render.DecodeJSON(r, &req); err != nil {
@@ -116,6 +166,16 @@ func (h *Handler) AddMySQLMember(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+/**
+ * CreatePGSQLConfig.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) CreatePGSQLConfig(w http.ResponseWriter, r *http.Request) {
 	var req createPGSQLRequest
 	if err := render.DecodeJSON(r, &req); err != nil {
@@ -143,6 +203,16 @@ func (h *Handler) CreatePGSQLConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+/**
+ * AddPGSQLMember.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) AddPGSQLMember(w http.ResponseWriter, r *http.Request) {
 	var req addMemberRequest
 	if err := render.DecodeJSON(r, &req); err != nil {
@@ -164,6 +234,16 @@ func (h *Handler) AddPGSQLMember(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+/**
+ * DeleteConfig.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) DeleteConfig(w http.ResponseWriter, r *http.Request) {
 	var req deleteRequest
 	if err := render.DecodeJSON(r, &req); err != nil {
@@ -184,6 +264,16 @@ func (h *Handler) DeleteConfig(w http.ResponseWriter, r *http.Request) {
 	render.OK(w, "HAProxy config deleted and reloaded", map[string]any{"port": req.Port})
 }
 
+/**
+ * ListConfigs.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) ListConfigs(w http.ResponseWriter, r *http.Request) {
 	files, err := h.service.ListConfigs()
 	if err != nil {
@@ -193,6 +283,16 @@ func (h *Handler) ListConfigs(w http.ResponseWriter, r *http.Request) {
 	render.OK(w, "success", files)
 }
 
+/**
+ * DownloadZip.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) DownloadZip(w http.ResponseWriter, r *http.Request) {
 	data, err := h.service.ZipTenantsDir()
 	if err != nil {
@@ -205,6 +305,16 @@ func (h *Handler) DownloadZip(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
+/**
+ * Reload.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) Reload(w http.ResponseWriter, r *http.Request) {
 	if err := h.service.Reload(r.Context()); err != nil {
 		render.Error(w, http.StatusInternalServerError, err.Error())

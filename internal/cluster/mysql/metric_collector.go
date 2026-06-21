@@ -16,12 +16,29 @@ import (
 // Each category is collected independently — a failure in one never suppresses the others.
 type Collector struct{}
 
-// NewCollector returns a ready-to-use Collector.
+/**
+ * NewCollector returns a ready-to-use Collector.
+ *
+ * Returns:
+ *   *Collector - the resulting *Collector
+ */
 func NewCollector() *Collector {
 	return &Collector{}
 }
 
-// Collect gathers every requested category and returns a MetricResponse.
+/**
+ * Collect gathers every requested category and returns a MetricResponse.
+ *
+ * Receiver:
+ *   c *Collector - pointer receiver; the method may mutate this Collector instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req MetricRequest - the req (MetricRequest)
+ *
+ * Returns:
+ *   MetricResponse - the resulting MetricResponse
+ */
 func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricResponse {
 	resp := MetricResponse{
 		CollectedAt: time.Now().UTC(),
@@ -106,7 +123,15 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 	return resp
 }
 
-// ValidateMetricRequest applies defaults and validates required fields.
+/**
+ * ValidateMetricRequest applies defaults and validates required fields.
+ *
+ * Params:
+ *   req *MetricRequest - the req (*MetricRequest)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func ValidateMetricRequest(req *MetricRequest) error {
 	req.Host = strings.TrimSpace(req.Host)
 	if req.Port == 0 {
@@ -145,6 +170,16 @@ func ValidateMetricRequest(req *MetricRequest) error {
 // helpers
 // =============================================================================
 
+/**
+ * resolvePort.
+ *
+ * Params:
+ *   port int - the port value
+ *   def int - the def value
+ *
+ * Returns:
+ *   int - the resulting integer
+ */
 func resolvePort(port, def int) int {
 	if port <= 0 {
 		return def
@@ -152,6 +187,15 @@ func resolvePort(port, def int) int {
 	return port
 }
 
+/**
+ * resolveCategories.
+ *
+ * Params:
+ *   requested []string - the requested ([]string)
+ *
+ * Returns:
+ *   []string - the resulting []string
+ */
 func resolveCategories(requested []string) []string {
 	if len(requested) == 0 {
 		return allMetricCategories
@@ -170,6 +214,17 @@ func resolveCategories(requested []string) []string {
 	return out
 }
 
+/**
+ * openDB.
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req MetricRequest - the req (MetricRequest)
+ *
+ * Returns:
+ *   *sql.DB - the resulting *sql.DB
+ *   error - error value; non-nil when the operation fails
+ */
 func openDB(ctx context.Context, req MetricRequest) (*sql.DB, error) {
 	port := resolvePort(req.Port, 3306)
 	dbName := req.Database
@@ -216,7 +271,17 @@ func openDB(ctx context.Context, req MetricRequest) (*sql.DB, error) {
 	return db, nil
 }
 
-// collectDatabaseCount returns the number of user databases (excludes system schemas).
+/**
+ * collectDatabaseCount returns the number of user databases (excludes system schemas).
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *
+ * Returns:
+ *   int - the resulting integer
+ *   error - error value; non-nil when the operation fails
+ */
 func collectDatabaseCount(ctx context.Context, db *sql.DB) (int, error) {
 	var count int
 	err := db.QueryRowContext(ctx, `
@@ -225,7 +290,17 @@ func collectDatabaseCount(ctx context.Context, db *sql.DB) (int, error) {
 	return count, err
 }
 
-// collectUsers returns all non-system MySQL user accounts.
+/**
+ * collectUsers returns all non-system MySQL user accounts.
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *
+ * Returns:
+ *   []UserInfo - the resulting []UserInfo
+ *   error - error value; non-nil when the operation fails
+ */
 func collectUsers(ctx context.Context, db *sql.DB) ([]UserInfo, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT User, Host, Super_priv
@@ -252,7 +327,17 @@ func collectUsers(ctx context.Context, db *sql.DB) ([]UserInfo, error) {
 	return out, rows.Err()
 }
 
-// collectDatabases returns all non-system MySQL databases with size and charset info.
+/**
+ * collectDatabases returns all non-system MySQL databases with size and charset info.
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *
+ * Returns:
+ *   []DatabaseInfo - the resulting []DatabaseInfo
+ *   error - error value; non-nil when the operation fails
+ */
 func collectDatabases(ctx context.Context, db *sql.DB) ([]DatabaseInfo, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT
@@ -283,8 +368,16 @@ func collectDatabases(ctx context.Context, db *sql.DB) ([]DatabaseInfo, error) {
 	return out, rows.Err()
 }
 
-// dbSet builds a lookup set from a list of database names.
-// Returns nil when the list is empty, meaning "no filter — include all".
+/**
+ * dbSet builds a lookup set from a list of database names.
+ * Returns nil when the list is empty, meaning "no filter — include all".
+ *
+ * Params:
+ *   databases []string - the databases ([]string)
+ *
+ * Returns:
+ *   map[string]bool - the resulting map[string]bool
+ */
 func dbSet(databases []string) map[string]bool {
 	if len(databases) == 0 {
 		return nil
@@ -296,8 +389,17 @@ func dbSet(databases []string) map[string]bool {
 	return s
 }
 
-// inDBSet reports whether name passes the filter.
-// A nil set means no filter (always passes).
+/**
+ * inDBSet reports whether name passes the filter.
+ * A nil set means no filter (always passes).
+ *
+ * Params:
+ *   set map[string]bool - the set (map[string]bool)
+ *   name string - the name string
+ *
+ * Returns:
+ *   bool - boolean result
+ */
 func inDBSet(set map[string]bool, name string) bool {
 	if set == nil {
 		return true
@@ -305,7 +407,15 @@ func inDBSet(set map[string]bool, name string) bool {
 	return set[name]
 }
 
-// formatDuration converts seconds to "3d 14h 22m 5s".
+/**
+ * formatDuration converts seconds to "3d 14h 22m 5s".
+ *
+ * Params:
+ *   seconds int64 - the seconds value
+ *
+ * Returns:
+ *   string - the resulting string
+ */
 func formatDuration(seconds int64) string {
 	days := seconds / 86400
 	hours := (seconds % 86400) / 3600
@@ -329,6 +439,17 @@ func formatDuration(seconds int64) string {
 // cluster — Group Replication membership
 // =============================================================================
 
+/**
+ * collectCluster.
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *
+ * Returns:
+ *   *ClusterMetric - the resulting *ClusterMetric
+ *   error - error value; non-nil when the operation fails
+ */
 func collectCluster(ctx context.Context, db *sql.DB) (*ClusterMetric, error) {
 	m := &ClusterMetric{Members: []ClusterMember{}}
 
@@ -371,6 +492,17 @@ func collectCluster(ctx context.Context, db *sql.DB) (*ClusterMetric, error) {
 // uptime
 // =============================================================================
 
+/**
+ * collectUptime.
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *
+ * Returns:
+ *   *UptimeMetric - the resulting *UptimeMetric
+ *   error - error value; non-nil when the operation fails
+ */
 func collectUptime(ctx context.Context, db *sql.DB) (*UptimeMetric, error) {
 	var uptime int64
 	err := db.QueryRowContext(ctx, `
@@ -389,6 +521,18 @@ func collectUptime(ctx context.Context, db *sql.DB) (*UptimeMetric, error) {
 // connections — threads + processlist
 // =============================================================================
 
+/**
+ * collectConnections.
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *   databases []string - the databases ([]string)
+ *
+ * Returns:
+ *   *ConnectionMetric - the resulting *ConnectionMetric
+ *   error - error value; non-nil when the operation fails
+ */
 func collectConnections(ctx context.Context, db *sql.DB, databases []string) (*ConnectionMetric, error) {
 	m := &ConnectionMetric{ByDatabase: []DBConnStat{}}
 
@@ -452,6 +596,17 @@ func collectConnections(ctx context.Context, db *sql.DB, databases []string) (*C
 // replication — GR member stats + applier workers
 // =============================================================================
 
+/**
+ * collectReplication.
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *
+ * Returns:
+ *   *ReplicationMetric - the resulting *ReplicationMetric
+ *   error - error value; non-nil when the operation fails
+ */
 func collectReplication(ctx context.Context, db *sql.DB) (*ReplicationMetric, error) {
 	m := &ReplicationMetric{Members: []GRMemberStat{}, Appliers: []ApplierStat{}}
 
@@ -532,6 +687,17 @@ func collectReplication(ctx context.Context, db *sql.DB) (*ReplicationMetric, er
 // performance — InnoDB buffer pool, QPS/TPS, temp tables, sort
 // =============================================================================
 
+/**
+ * collectPerformance.
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *
+ * Returns:
+ *   *PerformanceMetric - the resulting *PerformanceMetric
+ *   error - error value; non-nil when the operation fails
+ */
 func collectPerformance(ctx context.Context, db *sql.DB) (*PerformanceMetric, error) {
 	m := &PerformanceMetric{}
 
@@ -635,6 +801,21 @@ func collectPerformance(ctx context.Context, db *sql.DB) (*PerformanceMetric, er
 // performance_schema TIMER_WAIT is in picoseconds: 1 ms = 1,000,000,000 ps.
 const psPerMs = 1_000_000_000.0
 
+/**
+ * collectQuery.
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *   limit int - the limit value
+ *   from *time.Time - the from (*time.Time)
+ *   to *time.Time - the to (*time.Time)
+ *   databases []string - the databases ([]string)
+ *
+ * Returns:
+ *   *QueryMetric - the resulting *QueryMetric
+ *   error - error value; non-nil when the operation fails
+ */
 func collectQuery(ctx context.Context, db *sql.DB, limit int, from, to *time.Time, databases []string) (*QueryMetric, error) {
 	m := &QueryMetric{
 		SlowQueryThresholdMs: 1000,
@@ -776,6 +957,19 @@ func collectQuery(ctx context.Context, db *sql.DB, limit int, from, to *time.Tim
 	return m, nil
 }
 
+/**
+ * scanQueryStats.
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *   q string - the q string
+ *   args ...any - the args (...any)
+ *
+ * Returns:
+ *   []QueryStat - the resulting []QueryStat
+ *   error - error value; non-nil when the operation fails
+ */
 func scanQueryStats(ctx context.Context, db *sql.DB, q string, args ...any) ([]QueryStat, error) {
 	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -792,7 +986,15 @@ func scanQueryStats(ctx context.Context, db *sql.DB, q string, args ...any) ([]Q
 	return out, rows.Err()
 }
 
-// nullTimeStr returns nil when t is nil (for IS NULL checks in MySQL).
+/**
+ * nullTimeStr returns nil when t is nil (for IS NULL checks in MySQL).
+ *
+ * Params:
+ *   t *time.Time - the t (*time.Time)
+ *
+ * Returns:
+ *   any - the resulting any
+ */
 func nullTimeStr(t *time.Time) any {
 	if t == nil {
 		return nil
@@ -804,6 +1006,19 @@ func nullTimeStr(t *time.Time) any {
 // maintenance — InnoDB purge lag, fragmentation, metadata locks
 // =============================================================================
 
+/**
+ * collectMaintenance.
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *   limit int - the limit value
+ *   databases []string - the databases ([]string)
+ *
+ * Returns:
+ *   *MaintenanceMetric - the resulting *MaintenanceMetric
+ *   error - error value; non-nil when the operation fails
+ */
 func collectMaintenance(ctx context.Context, db *sql.DB, limit int, databases []string) (*MaintenanceMetric, error) {
 	m := &MaintenanceMetric{
 		FragmentedTables: []FragmentedTable{},

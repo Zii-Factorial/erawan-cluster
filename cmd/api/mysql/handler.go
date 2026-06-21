@@ -18,11 +18,31 @@ type Handler struct {
 	proxyHost string
 }
 
-// New creates a Handler with the given services.
+/**
+ * New creates a Handler with the given services.
+ *
+ * Params:
+ *   cluster *mysqlcluster.Service - the cluster (*mysqlcluster.Service)
+ *   db *mysqldbmanager.Service - the db (*mysqldbmanager.Service)
+ *   proxyHost string - the proxyHost string
+ *
+ * Returns:
+ *   *Handler - the resulting *Handler
+ */
 func New(cluster *mysqlcluster.Service, db *mysqldbmanager.Service, proxyHost string) *Handler {
 	return &Handler{cluster: cluster, dbmanager: db, proxyHost: proxyHost}
 }
 
+/**
+ * Deploy.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) Deploy(w http.ResponseWriter, r *http.Request) {
 	var req mysqlcluster.DeployRequest
 	if err := render.DecodeJSON(r, &req); err != nil {
@@ -51,6 +71,16 @@ func (h *Handler) Deploy(w http.ResponseWriter, r *http.Request) {
 	}{job, secret})
 }
 
+/**
+ * GetJob.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) GetJob(w http.ResponseWriter, r *http.Request) {
 	jobID := chi.URLParam(r, "jobID")
 	job, err := h.cluster.Get(jobID)
@@ -66,6 +96,16 @@ func (h *Handler) GetJob(w http.ResponseWriter, r *http.Request) {
 	}{job, secret})
 }
 
+/**
+ * ListJobs.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) ListJobs(w http.ResponseWriter, r *http.Request) {
 	limit := 20
 	if raw := r.URL.Query().Get("limit"); raw != "" {
@@ -81,6 +121,16 @@ func (h *Handler) ListJobs(w http.ResponseWriter, r *http.Request) {
 	render.OK(w, "success", jobs)
 }
 
+/**
+ * ResumeJob.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) ResumeJob(w http.ResponseWriter, r *http.Request) {
 	jobID := chi.URLParam(r, "jobID")
 	var req mysqlcluster.ResumeRequest
@@ -110,6 +160,16 @@ func (h *Handler) ResumeJob(w http.ResponseWriter, r *http.Request) {
 	}{job, secret})
 }
 
+/**
+ * RollbackJob.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) RollbackJob(w http.ResponseWriter, r *http.Request) {
 	jobID := chi.URLParam(r, "jobID")
 	var req mysqlcluster.RollbackRequest
@@ -126,6 +186,16 @@ func (h *Handler) RollbackJob(w http.ResponseWriter, r *http.Request) {
 	render.OK(w, "MySQL cluster rollback executed", job)
 }
 
+/**
+ * AddMember.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) AddMember(w http.ResponseWriter, r *http.Request) {
 	var req mysqlcluster.AddMemberRequest
 	if err := render.DecodeJSON(r, &req); err != nil {
@@ -141,6 +211,16 @@ func (h *Handler) AddMember(w http.ResponseWriter, r *http.Request) {
 	render.Accepted(w, "MySQL cluster member addition started", job)
 }
 
+/**
+ * RemoveMember.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 	var req mysqlcluster.RemoveMemberRequest
 	if err := render.DecodeJSON(r, &req); err != nil {
@@ -156,6 +236,16 @@ func (h *Handler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 	render.Accepted(w, "MySQL cluster member removal started", job)
 }
 
+/**
+ * Metrics.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
 	var req mysqlcluster.MetricRequest
 	if err := render.DecodeJSON(r, &req); err != nil {
@@ -185,6 +275,16 @@ func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
 	render.OK(w, "metrics collected", result)
 }
 
+/**
+ * CreateUser.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	var req mysqldbmanager.CreateUserRequest
 	if err := render.DecodeJSON(r, &req); err != nil {
@@ -198,6 +298,16 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	render.OK(w, "user created", nil)
 }
 
+/**
+ * UpdateUser.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	var req mysqldbmanager.UpdateUserRequest
 	if err := render.DecodeJSON(r, &req); err != nil {
@@ -211,6 +321,16 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	render.OK(w, "user renamed", nil)
 }
 
+/**
+ * ResetPassword.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	var req mysqldbmanager.ResetPasswordRequest
 	if err := render.DecodeJSON(r, &req); err != nil {
@@ -224,6 +344,16 @@ func (h *Handler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	render.OK(w, "password reset", nil)
 }
 
+/**
+ * DeleteUser.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	var req mysqldbmanager.DeleteUserRequest
 	if err := render.DecodeJSON(r, &req); err != nil {
@@ -237,6 +367,16 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	render.OK(w, "user deleted", nil)
 }
 
+/**
+ * CreateDatabase.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) CreateDatabase(w http.ResponseWriter, r *http.Request) {
 	var req mysqldbmanager.CreateDatabaseRequest
 	if err := render.DecodeJSON(r, &req); err != nil {
@@ -250,6 +390,16 @@ func (h *Handler) CreateDatabase(w http.ResponseWriter, r *http.Request) {
 	render.OK(w, "database created", nil)
 }
 
+/**
+ * UpdateDatabase.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) UpdateDatabase(w http.ResponseWriter, r *http.Request) {
 	var req mysqldbmanager.UpdateDatabaseRequest
 	if err := render.DecodeJSON(r, &req); err != nil {
@@ -263,6 +413,16 @@ func (h *Handler) UpdateDatabase(w http.ResponseWriter, r *http.Request) {
 	render.OK(w, "database renamed", nil)
 }
 
+/**
+ * DeleteDatabase.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
 func (h *Handler) DeleteDatabase(w http.ResponseWriter, r *http.Request) {
 	var req mysqldbmanager.DeleteDatabaseRequest
 	if err := render.DecodeJSON(r, &req); err != nil {

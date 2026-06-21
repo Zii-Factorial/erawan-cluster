@@ -43,6 +43,15 @@ type DeployRequest struct {
 	StepTimeoutSeconds int      `json:"step_timeout_seconds"`
 }
 
+/**
+ * BootstrapRouterEnabled.
+ *
+ * Receiver:
+ *   r DeployRequest - value receiver; the method operates on a copy of the DeployRequest
+ *
+ * Returns:
+ *   bool - boolean result
+ */
 func (r DeployRequest) BootstrapRouterEnabled() bool {
 	if r.BootstrapRouter == nil {
 		return true
@@ -90,6 +99,18 @@ type StoredSecret struct {
 	AdminPassword string `json:"admin_password"`
 }
 
+/**
+ * UnmarshalJSON.
+ *
+ * Receiver:
+ *   s *StoredSpec - pointer receiver; the method may mutate this StoredSpec instance
+ *
+ * Params:
+ *   data []byte - the data bytes
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *StoredSpec) UnmarshalJSON(data []byte) error {
 	type alias StoredSpec
 	aux := struct {
@@ -111,6 +132,18 @@ func (s *StoredSpec) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+/**
+ * UnmarshalJSON.
+ *
+ * Receiver:
+ *   s *StoredSecret - pointer receiver; the method may mutate this StoredSecret instance
+ *
+ * Params:
+ *   data []byte - the data bytes
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *StoredSecret) UnmarshalJSON(data []byte) error {
 	type alias StoredSecret
 	aux := struct {

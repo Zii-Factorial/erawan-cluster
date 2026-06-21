@@ -15,6 +15,15 @@ var (
 	dbPattern   = regexp.MustCompile(`^[a-zA-Z0-9_]{1,64}$`)
 )
 
+/**
+ * ValidateDeployRequest.
+ *
+ * Params:
+ *   req *DeployRequest - the req (*DeployRequest)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func ValidateDeployRequest(req *DeployRequest) error {
 	req.AdminUsername = strings.TrimSpace(req.AdminUsername)
 	req.ClusterName = strings.TrimSpace(req.ClusterName)
@@ -104,6 +113,16 @@ func ValidateDeployRequest(req *DeployRequest) error {
 	return nil
 }
 
+/**
+ * ValidateResumeSecrets.
+ *
+ * Params:
+ *   req ResumeRequest - the req (ResumeRequest)
+ *
+ * Returns:
+ *   SecretInput - the resulting SecretInput
+ *   error - error value; non-nil when the operation fails
+ */
 func ValidateResumeSecrets(req ResumeRequest) (SecretInput, error) {
 	secret := SecretInput{
 		RootPassword:    strings.TrimSpace(req.RootPassword),
@@ -113,6 +132,16 @@ func ValidateResumeSecrets(req ResumeRequest) (SecretInput, error) {
 	return secret, nil
 }
 
+/**
+ * ValidateRollbackSecrets.
+ *
+ * Params:
+ *   req RollbackRequest - the req (RollbackRequest)
+ *
+ * Returns:
+ *   SecretInput - the resulting SecretInput
+ *   error - error value; non-nil when the operation fails
+ */
 func ValidateRollbackSecrets(req RollbackRequest) (SecretInput, error) {
 	secret := SecretInput{
 		RootPassword:  strings.TrimSpace(req.RootPassword),
@@ -121,6 +150,15 @@ func ValidateRollbackSecrets(req RollbackRequest) (SecretInput, error) {
 	return secret, nil
 }
 
+/**
+ * ValidateAddMemberRequest.
+ *
+ * Params:
+ *   req *AddMemberRequest - the req (*AddMemberRequest)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func ValidateAddMemberRequest(req *AddMemberRequest) error {
 	req.JobID = strings.TrimSpace(req.JobID)
 	if req.JobID == "" {
@@ -144,6 +182,15 @@ func ValidateAddMemberRequest(req *AddMemberRequest) error {
 	return nil
 }
 
+/**
+ * ValidateRemoveMemberRequest.
+ *
+ * Params:
+ *   req *RemoveMemberRequest - the req (*RemoveMemberRequest)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func ValidateRemoveMemberRequest(req *RemoveMemberRequest) error {
 	req.JobID = strings.TrimSpace(req.JobID)
 	if req.JobID == "" {
@@ -156,6 +203,18 @@ func ValidateRemoveMemberRequest(req *RemoveMemberRequest) error {
 	return nil
 }
 
+/**
+ * ValidateServiceSSHConfig.
+ *
+ * Params:
+ *   user string - the user string
+ *   privateKeyPath string - the privateKeyPath string
+ *
+ * Returns:
+ *   string - the resulting string
+ *   string - the resulting string
+ *   error - error value; non-nil when the operation fails
+ */
 func ValidateServiceSSHConfig(user, privateKeyPath string) (string, string, error) {
 	normalizedUser := strings.TrimSpace(user)
 	if !userPattern.MatchString(normalizedUser) {
@@ -171,6 +230,16 @@ func ValidateServiceSSHConfig(user, privateKeyPath string) (string, string, erro
 	return normalizedUser, normalizedKeyPath, nil
 }
 
+/**
+ * normalizeSSHPrivateKeyPath.
+ *
+ * Params:
+ *   raw string - the raw string
+ *
+ * Returns:
+ *   string - the resulting string
+ *   error - error value; non-nil when the operation fails
+ */
 func normalizeSSHPrivateKeyPath(raw string) (string, error) {
 	path := strings.TrimSpace(raw)
 	if path == "" {

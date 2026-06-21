@@ -73,15 +73,28 @@ type Job[Spec any] struct {
 	MemberOp          *MemberOperation `json:"member_op,omitempty"`
 }
 
-// NewJobID returns a random 24-hex-character job identifier.
+/**
+ * NewJobID returns a random 24-hex-character job identifier.
+ *
+ * Returns:
+ *   string - the resulting string
+ */
 func NewJobID() string {
 	raw := make([]byte, 12)
 	_, _ = rand.Read(raw)
 	return hex.EncodeToString(raw)
 }
 
-// OrRandomSecret returns value when non-empty, otherwise a fresh random
-// 48-hex-character secret. Used to default unset passwords.
+/**
+ * OrRandomSecret returns value when non-empty, otherwise a fresh random
+ * 48-hex-character secret. Used to default unset passwords.
+ *
+ * Params:
+ *   value string - the value string
+ *
+ * Returns:
+ *   string - the resulting string
+ */
 func OrRandomSecret(value string) string {
 	if value != "" {
 		return value

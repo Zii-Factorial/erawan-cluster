@@ -1,6 +1,14 @@
 package core
 
-// CountCompletedSteps returns how many recorded steps completed successfully.
+/**
+ * CountCompletedSteps returns how many recorded steps completed successfully.
+ *
+ * Params:
+ *   steps []StepResult - the steps ([]StepResult)
+ *
+ * Returns:
+ *   int - the resulting integer
+ */
 func CountCompletedSteps(steps []StepResult) int {
 	count := 0
 	for _, st := range steps {
@@ -11,9 +19,15 @@ func CountCompletedSteps(steps []StepResult) int {
 	return count
 }
 
-// ApplyProgress fills CompletedSteps, TotalSteps, and ProgressPercent on job
-// given the already-computed number of applicable steps (totalSteps). A
-// completed job always reports 100%; counts are clamped to [0, totalSteps].
+/**
+ * ApplyProgress fills CompletedSteps, TotalSteps, and ProgressPercent on job
+ * given the already-computed number of applicable steps (totalSteps). A
+ * completed job always reports 100%; counts are clamped to [0, totalSteps].
+ *
+ * Params:
+ *   job *Job[Spec] - the job (*Job[Spec])
+ *   totalSteps int - the totalSteps value
+ */
 func ApplyProgress[Spec any](job *Job[Spec], totalSteps int) {
 	job.TotalSteps = totalSteps
 	job.CompletedSteps = CountCompletedSteps(job.Steps)

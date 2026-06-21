@@ -15,6 +15,12 @@ import (
 	"syscall"
 )
 
+/**
+ * main is the process entry point. It establishes a cancellable context tied to
+ * SIGINT/SIGTERM, loads configuration from the environment, assembles every
+ * subsystem, and runs the HTTP server until the context is cancelled. On any
+ * fatal start-up error it logs and exits non-zero.
+ */
 func main() {
 	// Tie the process lifetime to OS shutdown signals: cancelling ctx triggers
 	// graceful HTTP shutdown and stops in-flight cluster jobs.

@@ -11,6 +11,15 @@ var (
 	dbPattern   = regexp.MustCompile(`^[a-zA-Z0-9_]{1,64}$`)
 )
 
+/**
+ * validate.
+ *
+ * Receiver:
+ *   req *CreateUserRequest - pointer receiver; the method may mutate this CreateUserRequest instance
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (req *CreateUserRequest) validate() error {
 	req.Username = strings.TrimSpace(req.Username)
 	req.DatabaseName = strings.TrimSpace(req.DatabaseName)
@@ -29,6 +38,15 @@ func (req *CreateUserRequest) validate() error {
 	return nil
 }
 
+/**
+ * validate.
+ *
+ * Receiver:
+ *   req *ResetPasswordRequest - pointer receiver; the method may mutate this ResetPasswordRequest instance
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (req *ResetPasswordRequest) validate() error {
 	req.Username = strings.TrimSpace(req.Username)
 	if strings.TrimSpace(req.JobID) == "" {
@@ -43,6 +61,15 @@ func (req *ResetPasswordRequest) validate() error {
 	return nil
 }
 
+/**
+ * validate.
+ *
+ * Receiver:
+ *   req *UpdateUserRequest - pointer receiver; the method may mutate this UpdateUserRequest instance
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (req *UpdateUserRequest) validate() error {
 	req.Username = strings.TrimSpace(req.Username)
 	req.NewUsername = strings.TrimSpace(req.NewUsername)
@@ -58,6 +85,15 @@ func (req *UpdateUserRequest) validate() error {
 	return nil
 }
 
+/**
+ * validate.
+ *
+ * Receiver:
+ *   req *DeleteUserRequest - pointer receiver; the method may mutate this DeleteUserRequest instance
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (req *DeleteUserRequest) validate() error {
 	req.Username = strings.TrimSpace(req.Username)
 	if strings.TrimSpace(req.JobID) == "" {
@@ -69,6 +105,15 @@ func (req *DeleteUserRequest) validate() error {
 	return nil
 }
 
+/**
+ * validate.
+ *
+ * Receiver:
+ *   req *CreateDatabaseRequest - pointer receiver; the method may mutate this CreateDatabaseRequest instance
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (req *CreateDatabaseRequest) validate() error {
 	req.DBName = strings.TrimSpace(req.DBName)
 	if strings.TrimSpace(req.JobID) == "" {
@@ -80,6 +125,15 @@ func (req *CreateDatabaseRequest) validate() error {
 	return nil
 }
 
+/**
+ * validate.
+ *
+ * Receiver:
+ *   req *UpdateDatabaseRequest - pointer receiver; the method may mutate this UpdateDatabaseRequest instance
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (req *UpdateDatabaseRequest) validate() error {
 	req.DBName = strings.TrimSpace(req.DBName)
 	req.NewDBName = strings.TrimSpace(req.NewDBName)
@@ -95,6 +149,15 @@ func (req *UpdateDatabaseRequest) validate() error {
 	return nil
 }
 
+/**
+ * validate.
+ *
+ * Receiver:
+ *   req *DeleteDatabaseRequest - pointer receiver; the method may mutate this DeleteDatabaseRequest instance
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (req *DeleteDatabaseRequest) validate() error {
 	req.DBName = strings.TrimSpace(req.DBName)
 	if strings.TrimSpace(req.JobID) == "" {

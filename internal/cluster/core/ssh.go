@@ -16,8 +16,16 @@ type SSHPolicy struct {
 	KnownHostsFile string
 }
 
-// AnsibleEnv returns the environment overrides that switch Ansible's global host
-// key checking on or off to match the policy.
+/**
+ * AnsibleEnv returns the environment overrides that switch Ansible's global host
+ * key checking on or off to match the policy.
+ *
+ * Receiver:
+ *   p SSHPolicy - value receiver; the method operates on a copy of the SSHPolicy
+ *
+ * Returns:
+ *   []string - the resulting []string
+ */
 func (p SSHPolicy) AnsibleEnv() []string {
 	if p.VerifyHostKeys {
 		return []string{"ANSIBLE_HOST_KEY_CHECKING=True"}
@@ -25,9 +33,17 @@ func (p SSHPolicy) AnsibleEnv() []string {
 	return []string{"ANSIBLE_HOST_KEY_CHECKING=False"}
 }
 
-// SSHCommonArgs returns the value for a host's ansible_ssh_common_args. When
-// verification is on it enforces StrictHostKeyChecking=yes (optionally pinning a
-// known_hosts file); when off it preserves the previous permissive behavior.
+/**
+ * SSHCommonArgs returns the value for a host's ansible_ssh_common_args. When
+ * verification is on it enforces StrictHostKeyChecking=yes (optionally pinning a
+ * known_hosts file); when off it preserves the previous permissive behavior.
+ *
+ * Receiver:
+ *   p SSHPolicy - value receiver; the method operates on a copy of the SSHPolicy
+ *
+ * Returns:
+ *   string - the resulting string
+ */
 func (p SSHPolicy) SSHCommonArgs() string {
 	if !p.VerifyHostKeys {
 		return "-o IdentitiesOnly=yes -o StrictHostKeyChecking=no"

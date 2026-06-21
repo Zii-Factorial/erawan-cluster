@@ -34,6 +34,16 @@ type step = core.Step
 // defaultMaxConcurrentJobs bounds concurrent background jobs until configured.
 const defaultMaxConcurrentJobs = 4
 
+/**
+ * NewService.
+ *
+ * Params:
+ *   store *Store - the store (*Store)
+ *   runner *Runner - the runner (*Runner)
+ *
+ * Returns:
+ *   *Service - the resulting *Service
+ */
 func NewService(store *Store, runner *Runner) *Service {
 	svc := &Service{
 		ctx:       context.Background(),
@@ -60,23 +70,61 @@ func NewService(store *Store, runner *Runner) *Service {
 	return svc
 }
 
+/**
+ * SetContext.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ */
 func (s *Service) SetContext(ctx context.Context) {
 	s.ctx = ctx
 }
 
-// SetMaxConcurrentJobs bounds how many background jobs run at once. It must be
-// called at start-up, before any job is launched.
+/**
+ * SetMaxConcurrentJobs bounds how many background jobs run at once. It must be
+ * called at start-up, before any job is launched.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   n int - the n value
+ */
 func (s *Service) SetMaxConcurrentJobs(n int) {
 	s.launcher = core.NewLauncher(n)
 	s.start = s.launcher.Go
 }
 
-// Wait blocks until all in-flight background jobs finish or ctx is done. Used
-// during graceful shutdown to drain running jobs.
+/**
+ * Wait blocks until all in-flight background jobs finish or ctx is done. Used
+ * during graceful shutdown to drain running jobs.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ */
 func (s *Service) Wait(ctx context.Context) {
 	s.launcher.Wait(ctx)
 }
 
+/**
+ * SetSSHConfig.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   user string - the user string
+ *   privateKeyPath string - the privateKeyPath string
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) SetSSHConfig(user, privateKeyPath string) error {
 	normalizedUser, normalizedKeyPath, err := ValidateServiceSSHConfig(user, privateKeyPath)
 	if err != nil {
@@ -87,6 +135,20 @@ func (s *Service) SetSSHConfig(user, privateKeyPath string) error {
 	return nil
 }
 
+/**
+ * Deploy.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req DeployRequest - the req (DeployRequest)
+ *
+ * Returns:
+ *   *Job - the resulting *Job
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 	_ = ctx
 	if err := ValidateDeployRequest(&req); err != nil {
@@ -151,6 +213,21 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 	return job, nil
 }
 
+/**
+ * Resume.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   jobID string - the jobID string
+ *   req ResumeRequest - the req (ResumeRequest)
+ *
+ * Returns:
+ *   *Job - the resulting *Job
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (*Job, error) {
 	_ = ctx
 	secret, err := ValidateResumeSecrets(req)
@@ -232,6 +309,20 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 	return job, nil
 }
 
+/**
+ * AddMember.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req AddMemberRequest - the req (AddMemberRequest)
+ *
+ * Returns:
+ *   *Job - the resulting *Job
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) AddMember(ctx context.Context, req AddMemberRequest) (*Job, error) {
 	_ = ctx
 	if err := ValidateAddMemberRequest(&req); err != nil {
@@ -293,6 +384,20 @@ func (s *Service) AddMember(ctx context.Context, req AddMemberRequest) (*Job, er
 	return memberJob, nil
 }
 
+/**
+ * RemoveMember.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req RemoveMemberRequest - the req (RemoveMemberRequest)
+ *
+ * Returns:
+ *   *Job - the resulting *Job
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) RemoveMember(ctx context.Context, req RemoveMemberRequest) (*Job, error) {
 	_ = ctx
 	if err := ValidateRemoveMemberRequest(&req); err != nil {
@@ -358,6 +463,17 @@ func (s *Service) RemoveMember(ctx context.Context, req RemoveMemberRequest) (*J
 	return memberJob, nil
 }
 
+/**
+ * executeMemberAdd.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   memberJob *Job - the memberJob (*Job)
+ *   deployJob *Job - the deployJob (*Job)
+ */
 func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJob *Job) {
 	storedSecret, err := s.store.LoadSecret(deployJob.ID)
 	if err != nil {
@@ -443,6 +559,18 @@ func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJo
 	_ = s.store.Save(memberJob)
 }
 
+/**
+ * executeMemberRemove.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   memberJob *Job - the memberJob (*Job)
+ *   deployJob *Job - the deployJob (*Job)
+ *   force bool - the force flag
+ */
 func (s *Service) executeMemberRemove(ctx context.Context, memberJob *Job, deployJob *Job, force bool) {
 	storedSecret, err := s.store.LoadSecret(deployJob.ID)
 	if err != nil {
@@ -497,6 +625,19 @@ func (s *Service) executeMemberRemove(ctx context.Context, memberJob *Job, deplo
 	_ = s.store.Save(memberJob)
 }
 
+/**
+ * doAddMember.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   cfg memberRunConfig - the cfg (memberRunConfig)
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
 func (s *Service) doAddMember(ctx context.Context, cfg memberRunConfig) StepResult {
 	if s.runAddMemberStep == nil {
 		return StepResult{
@@ -511,6 +652,19 @@ func (s *Service) doAddMember(ctx context.Context, cfg memberRunConfig) StepResu
 	return s.runAddMemberStep(ctx, cfg)
 }
 
+/**
+ * doRemoveMember.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   cfg memberRunConfig - the cfg (memberRunConfig)
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
 func (s *Service) doRemoveMember(ctx context.Context, cfg memberRunConfig) StepResult {
 	if s.runRemMemberStep == nil {
 		return StepResult{
@@ -525,6 +679,19 @@ func (s *Service) doRemoveMember(ctx context.Context, cfg memberRunConfig) StepR
 	return s.runRemMemberStep(ctx, cfg)
 }
 
+/**
+ * Get.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   jobID string - the jobID string
+ *
+ * Returns:
+ *   *Job - the resulting *Job
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) Get(jobID string) (*Job, error) {
 	job, err := s.store.Load(jobID)
 	if err != nil {
@@ -534,6 +701,19 @@ func (s *Service) Get(jobID string) (*Job, error) {
 	return job, nil
 }
 
+/**
+ * GetSecret.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   jobID string - the jobID string
+ *
+ * Returns:
+ *   *StoredSecret - the resulting *StoredSecret
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) GetSecret(jobID string) (*StoredSecret, error) {
 	secret, err := s.store.LoadSecret(jobID)
 	if err != nil {
@@ -542,6 +722,19 @@ func (s *Service) GetSecret(jobID string) (*StoredSecret, error) {
 	return &secret, nil
 }
 
+/**
+ * List.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   limit int - the limit value
+ *
+ * Returns:
+ *   []Job - the resulting []Job
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) List(limit int) ([]Job, error) {
 	jobs, err := s.store.List(limit)
 	if err != nil {
@@ -553,6 +746,18 @@ func (s *Service) List(limit int) ([]Job, error) {
 	return jobs, nil
 }
 
+/**
+ * hydrateStoredSSHConfig.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   job *Job - the job (*Job)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) hydrateStoredSSHConfig(job *Job) error {
 	if s.sshUser == "" || s.sshKeyPath == "" {
 		return fmt.Errorf("ssh service configuration is incomplete")
@@ -568,6 +773,21 @@ func (s *Service) hydrateStoredSSHConfig(job *Job) error {
 	return nil
 }
 
+/**
+ * executeFrom.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   job *Job - the job (*Job)
+ *   startIndex int - the startIndex value
+ *   secret SecretInput - the secret (SecretInput)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) executeFrom(ctx context.Context, job *Job, startIndex int, secret SecretInput) error {
 	timeout := time.Duration(job.Request.StepTimeoutSeconds) * time.Second
 	for i := startIndex; i < len(s.steps); i++ {
@@ -634,6 +854,19 @@ func (s *Service) executeFrom(ctx context.Context, job *Job, startIndex int, sec
 	return nil
 }
 
+/**
+ * runDeploy.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   cfg runConfig - the cfg (runConfig)
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
 func (s *Service) runDeploy(ctx context.Context, cfg runConfig) StepResult {
 	if s.runDeployStep == nil {
 		return StepResult{
@@ -648,10 +881,41 @@ func (s *Service) runDeploy(ctx context.Context, cfg runConfig) StepResult {
 	return s.runDeployStep(ctx, cfg)
 }
 
+/**
+ * CollectMetrics.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req MetricRequest - the req (MetricRequest)
+ *
+ * Returns:
+ *   MetricResponse - the resulting MetricResponse
+ */
 func (s *Service) CollectMetrics(ctx context.Context, req MetricRequest) MetricResponse {
 	return s.collector.Collect(ctx, req)
 }
 
+/**
+ * ConnectionInfo.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   jobID string - the jobID string
+ *
+ * Returns:
+ *   host string - the host string
+ *   port int - the port value
+ *   user string - the user string
+ *   password string - the password string
+ *   nodeIPs []string - the nodeIPs ([]string)
+ *   err error - error value; non-nil when the operation fails
+ */
 func (s *Service) ConnectionInfo(ctx context.Context, jobID string) (host string, port int, user, password string, nodeIPs []string, err error) {
 	job, err := s.store.Load(jobID)
 	if err != nil {
@@ -669,6 +933,15 @@ func (s *Service) ConnectionInfo(ctx context.Context, jobID string) (host string
 	return job.Request.PrimaryIP, p, secret.PostgresUser, secret.PostgresPassword, ips, nil
 }
 
+/**
+ * updateJobProgress.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   job *Job - the job (*Job)
+ */
 func (s *Service) updateJobProgress(job *Job) {
 	total := s.totalStepsFor(job.Request)
 	if job.MemberOp != nil {
@@ -677,6 +950,18 @@ func (s *Service) updateJobProgress(job *Job) {
 	core.ApplyProgress(job, total)
 }
 
+/**
+ * totalStepsFor.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   spec StoredSpec - the spec (StoredSpec)
+ *
+ * Returns:
+ *   int - the resulting integer
+ */
 func (s *Service) totalStepsFor(spec StoredSpec) int {
 	total := 0
 	for _, st := range s.steps {
@@ -688,6 +973,17 @@ func (s *Service) totalStepsFor(spec StoredSpec) int {
 	return total
 }
 
+/**
+ * shouldSkipStep.
+ *
+ * Params:
+ *   st step - the st (step)
+ *   spec StoredSpec - the spec (StoredSpec)
+ *
+ * Returns:
+ *   string - the resulting string
+ *   bool - boolean result
+ */
 func shouldSkipStep(st step, spec StoredSpec) (string, bool) {
 	if st.Name == "standby_config" && len(spec.StandbyIPs) == 0 {
 		return "standby_ips is empty", true
@@ -698,7 +994,16 @@ func shouldSkipStep(st step, spec StoredSpec) (string, bool) {
 	return "", false
 }
 
-// without returns slice with every occurrence of target removed.
+/**
+ * without returns slice with every occurrence of target removed.
+ *
+ * Params:
+ *   slice []string - the slice ([]string)
+ *   target string - the target string
+ *
+ * Returns:
+ *   []string - the resulting []string
+ */
 func without(slice []string, target string) []string {
 	out := make([]string, 0, len(slice))
 	for _, v := range slice {
@@ -709,6 +1014,21 @@ func without(slice []string, target string) []string {
 	return out
 }
 
+/**
+ * newJobID.
+ *
+ * Returns:
+ *   string - the resulting string
+ */
 func newJobID() string { return core.NewJobID() }
 
+/**
+ * stringOrGenerated.
+ *
+ * Params:
+ *   value string - the value string
+ *
+ * Returns:
+ *   string - the resulting string
+ */
 func stringOrGenerated(value string) string { return core.OrRandomSecret(value) }

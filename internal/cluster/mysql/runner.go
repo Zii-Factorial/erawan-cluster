@@ -22,6 +22,17 @@ type Runner struct {
 	sshPolicy            core.SSHPolicy
 }
 
+/**
+ * NewRunner.
+ *
+ * Params:
+ *   ansibleBin string - the ansibleBin string
+ *   deployPlaybook string - the deployPlaybook string
+ *   rollbackPlaybook string - the rollbackPlaybook string
+ *
+ * Returns:
+ *   *Runner - the resulting *Runner
+ */
 func NewRunner(ansibleBin, deployPlaybook, rollbackPlaybook string) *Runner {
 	if strings.TrimSpace(ansibleBin) == "" {
 		ansibleBin = "ansible-playbook"
@@ -36,12 +47,50 @@ func NewRunner(ansibleBin, deployPlaybook, rollbackPlaybook string) *Runner {
 	}
 }
 
-func (r *Runner) SetAddMemberPlaybook(path string)    { r.addMemberPlaybook = path }
+/**
+ * SetAddMemberPlaybook.
+ *
+ * Receiver:
+ *   r *Runner - pointer receiver; the method may mutate this Runner instance
+ *
+ * Params:
+ *   path string - the path string
+ */
+func (r *Runner) SetAddMemberPlaybook(path string) { r.addMemberPlaybook = path }
+
+/**
+ * SetRemoveMemberPlaybook.
+ *
+ * Receiver:
+ *   r *Runner - pointer receiver; the method may mutate this Runner instance
+ *
+ * Params:
+ *   path string - the path string
+ */
 func (r *Runner) SetRemoveMemberPlaybook(path string) { r.removeMemberPlaybook = path }
 
-// SetSSHPolicy configures how Ansible verifies node SSH host keys.
+/**
+ * SetSSHPolicy configures how Ansible verifies node SSH host keys.
+ *
+ * Receiver:
+ *   r *Runner - pointer receiver; the method may mutate this Runner instance
+ *
+ * Params:
+ *   p core.SSHPolicy - the p (core.SSHPolicy)
+ */
 func (r *Runner) SetSSHPolicy(p core.SSHPolicy) { r.sshPolicy = p }
 
+/**
+ * SetDebug.
+ *
+ * Receiver:
+ *   r *Runner - pointer receiver; the method may mutate this Runner instance
+ *
+ * Params:
+ *   verbosity int - the verbosity value
+ *   streamLogs bool - the streamLogs flag
+ *   maxOutputChars int - the maxOutputChars value
+ */
 func (r *Runner) SetDebug(verbosity int, streamLogs bool, maxOutputChars int) {
 	if verbosity < 0 {
 		verbosity = 0
@@ -70,10 +119,39 @@ type memberRunConfig struct {
 	timeout  time.Duration
 }
 
+/**
+ * RunDeployStep.
+ *
+ * Receiver:
+ *   r *Runner - pointer receiver; the method may mutate this Runner instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   cfg runConfig - the cfg (runConfig)
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
 func (r *Runner) RunDeployStep(ctx context.Context, cfg runConfig) StepResult {
 	return r.run(ctx, cfg, r.deployPlaybook)
 }
 
+/**
+ * RunRollback.
+ *
+ * Receiver:
+ *   r *Runner - pointer receiver; the method may mutate this Runner instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   jobID string - the jobID string
+ *   spec StoredSpec - the spec (StoredSpec)
+ *   secret SecretInput - the secret (SecretInput)
+ *   timeout time.Duration - the timeout (time.Duration)
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
 func (r *Runner) RunRollback(ctx context.Context, jobID string, spec StoredSpec, secret SecretInput, timeout time.Duration) StepResult {
 	cfg := runConfig{
 		jobID:   jobID,
@@ -85,15 +163,54 @@ func (r *Runner) RunRollback(ctx context.Context, jobID string, spec StoredSpec,
 	return r.run(ctx, cfg, r.rollbackPlaybook)
 }
 
+/**
+ * RunAddMember.
+ *
+ * Receiver:
+ *   r *Runner - pointer receiver; the method may mutate this Runner instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   cfg memberRunConfig - the cfg (memberRunConfig)
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
 func (r *Runner) RunAddMember(ctx context.Context, cfg memberRunConfig) StepResult {
 	return r.runMember(ctx, cfg, r.addMemberPlaybook, "add_member")
 }
 
+/**
+ * RunRemoveMember.
+ *
+ * Receiver:
+ *   r *Runner - pointer receiver; the method may mutate this Runner instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   cfg memberRunConfig - the cfg (memberRunConfig)
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
 func (r *Runner) RunRemoveMember(ctx context.Context, cfg memberRunConfig) StepResult {
 	return r.runMember(ctx, cfg, r.removeMemberPlaybook, "remove_member")
 }
 
-// run executes one tagged step of a deploy/rollback playbook.
+/**
+ * run executes one tagged step of a deploy/rollback playbook.
+ *
+ * Receiver:
+ *   r *Runner - pointer receiver; the method may mutate this Runner instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   cfg runConfig - the cfg (runConfig)
+ *   playbook string - the playbook string
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
 func (r *Runner) run(ctx context.Context, cfg runConfig, playbook string) StepResult {
 	stepTimeout := cfg.spec.StepTimeoutSeconds
 	if stepTimeout <= 0 {
@@ -132,7 +249,21 @@ func (r *Runner) run(ctx context.Context, cfg runConfig, playbook string) StepRe
 	})
 }
 
-// runMember executes the add/remove-member playbook for a single node.
+/**
+ * runMember executes the add/remove-member playbook for a single node.
+ *
+ * Receiver:
+ *   r *Runner - pointer receiver; the method may mutate this Runner instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   cfg memberRunConfig - the cfg (memberRunConfig)
+ *   playbook string - the playbook string
+ *   stepName string - the stepName string
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
 func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, stepName string) StepResult {
 	stepTimeout := cfg.spec.StepTimeoutSeconds
 	if stepTimeout <= 0 {
@@ -191,6 +322,17 @@ func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, s
 	})
 }
 
+/**
+ * buildAddMemberInventoryYAML.
+ *
+ * Params:
+ *   spec StoredSpec - the spec (StoredSpec)
+ *   newMemberIP string - the newMemberIP string
+ *   sshCommonArgs string - the sshCommonArgs string
+ *
+ * Returns:
+ *   string - the resulting string
+ */
 func buildAddMemberInventoryYAML(spec StoredSpec, newMemberIP, sshCommonArgs string) string {
 	var b strings.Builder
 	b.WriteString("all:\n")
@@ -229,6 +371,16 @@ func buildAddMemberInventoryYAML(spec StoredSpec, newMemberIP, sshCommonArgs str
 	return b.String()
 }
 
+/**
+ * buildInventoryYAML.
+ *
+ * Params:
+ *   spec StoredSpec - the spec (StoredSpec)
+ *   sshCommonArgs string - the sshCommonArgs string
+ *
+ * Returns:
+ *   string - the resulting string
+ */
 func buildInventoryYAML(spec StoredSpec, sshCommonArgs string) string {
 	var b strings.Builder
 	b.WriteString("all:\n")

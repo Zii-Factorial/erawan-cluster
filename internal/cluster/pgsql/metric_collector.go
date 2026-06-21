@@ -23,14 +23,31 @@ type Collector struct {
 	httpClient *http.Client
 }
 
-// NewCollector returns a ready-to-use Collector.
+/**
+ * NewCollector returns a ready-to-use Collector.
+ *
+ * Returns:
+ *   *Collector - the resulting *Collector
+ */
 func NewCollector() *Collector {
 	return &Collector{
 		httpClient: &http.Client{Timeout: 15 * time.Second},
 	}
 }
 
-// Collect gathers every requested category and returns a MetricResponse.
+/**
+ * Collect gathers every requested category and returns a MetricResponse.
+ *
+ * Receiver:
+ *   c *Collector - pointer receiver; the method may mutate this Collector instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req MetricRequest - the req (MetricRequest)
+ *
+ * Returns:
+ *   MetricResponse - the resulting MetricResponse
+ */
 func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricResponse {
 	resp := MetricResponse{
 		CollectedAt: time.Now().UTC(),
@@ -127,7 +144,15 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 	return resp
 }
 
-// ValidateMetricRequest applies defaults and validates required fields.
+/**
+ * ValidateMetricRequest applies defaults and validates required fields.
+ *
+ * Params:
+ *   req *MetricRequest - the req (*MetricRequest)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func ValidateMetricRequest(req *MetricRequest) error {
 	req.Host = strings.TrimSpace(req.Host)
 	if req.Port == 0 {
@@ -166,6 +191,16 @@ func ValidateMetricRequest(req *MetricRequest) error {
 // helpers
 // =============================================================================
 
+/**
+ * resolvePort.
+ *
+ * Params:
+ *   port int - the port value
+ *   def int - the def value
+ *
+ * Returns:
+ *   int - the resulting integer
+ */
 func resolvePort(port, def int) int {
 	if port <= 0 {
 		return def
@@ -173,9 +208,22 @@ func resolvePort(port, def int) int {
 	return port
 }
 
-// discoverLeader probes each node in req.NodeIPs and returns the IP of the
-// node that responds 200 to GET /leader (i.e. the current Patroni primary).
-// Returns an error if no node responds as leader.
+/**
+ * discoverLeader probes each node in req.NodeIPs and returns the IP of the
+ * node that responds 200 to GET /leader (i.e. the current Patroni primary).
+ * Returns an error if no node responds as leader.
+ *
+ * Receiver:
+ *   c *Collector - pointer receiver; the method may mutate this Collector instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req MetricRequest - the req (MetricRequest)
+ *
+ * Returns:
+ *   string - the resulting string
+ *   error - error value; non-nil when the operation fails
+ */
 func (c *Collector) discoverLeader(ctx context.Context, req MetricRequest) (string, error) {
 	patroniPort := resolvePort(req.PatroniPort, 8008)
 	if len(req.NodeIPs) == 0 {
@@ -205,11 +253,28 @@ func (c *Collector) discoverLeader(ctx context.Context, req MetricRequest) (stri
 	return "", fmt.Errorf("no Patroni leader found among node_ips %v (port %d) — cluster may be unhealthy", req.NodeIPs, patroniPort)
 }
 
-// requiresNoDB returns true for categories that use Patroni REST only (no DB connection needed).
+/**
+ * requiresNoDB returns true for categories that use Patroni REST only (no DB connection needed).
+ *
+ * Params:
+ *   cat string - the cat string
+ *
+ * Returns:
+ *   bool - boolean result
+ */
 func requiresNoDB(cat string) bool {
 	return cat == MetricCategoryCluster || cat == MetricCategoryFailover
 }
 
+/**
+ * categoriesNeedDB.
+ *
+ * Params:
+ *   cats []string - the cats ([]string)
+ *
+ * Returns:
+ *   bool - boolean result
+ */
 func categoriesNeedDB(cats []string) bool {
 	for _, c := range cats {
 		if !requiresNoDB(c) {
@@ -219,6 +284,15 @@ func categoriesNeedDB(cats []string) bool {
 	return false
 }
 
+/**
+ * resolveCategories.
+ *
+ * Params:
+ *   requested []string - the requested ([]string)
+ *
+ * Returns:
+ *   []string - the resulting []string
+ */
 func resolveCategories(requested []string) []string {
 	if len(requested) == 0 {
 		return allMetricCategories
@@ -237,6 +311,16 @@ func resolveCategories(requested []string) []string {
 	return out
 }
 
+/**
+ * openDB.
+ *
+ * Params:
+ *   req MetricRequest - the req (MetricRequest)
+ *
+ * Returns:
+ *   *sql.DB - the resulting *sql.DB
+ *   error - error value; non-nil when the operation fails
+ */
 func openDB(req MetricRequest) (*sql.DB, error) {
 	port := resolvePort(req.Port, 5432)
 	dbName := req.Database
@@ -282,8 +366,16 @@ func openDB(req MetricRequest) (*sql.DB, error) {
 	return db, nil
 }
 
-// nullTime converts *time.Time to an interface{} suitable for database/sql params
-// (nil → SQL NULL, non-nil → time value).
+/**
+ * nullTime converts *time.Time to an interface{} suitable for database/sql params
+ * (nil → SQL NULL, non-nil → time value).
+ *
+ * Params:
+ *   t *time.Time - the t (*time.Time)
+ *
+ * Returns:
+ *   any - the resulting any
+ */
 func nullTime(t *time.Time) any {
 	if t == nil {
 		return nil
@@ -291,7 +383,17 @@ func nullTime(t *time.Time) any {
 	return *t
 }
 
-// collectDatabaseCount returns the number of user databases (excludes templates).
+/**
+ * collectDatabaseCount returns the number of user databases (excludes templates).
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *
+ * Returns:
+ *   int - the resulting integer
+ *   error - error value; non-nil when the operation fails
+ */
 func collectDatabaseCount(ctx context.Context, db *sql.DB) (int, error) {
 	var count int
 	err := db.QueryRowContext(ctx, `
@@ -300,7 +402,17 @@ func collectDatabaseCount(ctx context.Context, db *sql.DB) (int, error) {
 	return count, err
 }
 
-// collectUsers returns all PostgreSQL roles (excluding internal pg_* system roles).
+/**
+ * collectUsers returns all PostgreSQL roles (excluding internal pg_* system roles).
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *
+ * Returns:
+ *   []UserInfo - the resulting []UserInfo
+ *   error - error value; non-nil when the operation fails
+ */
 func collectUsers(ctx context.Context, db *sql.DB) ([]UserInfo, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT rolname, rolsuper, rolcreatedb, rolcanlogin
@@ -325,7 +437,17 @@ func collectUsers(ctx context.Context, db *sql.DB) ([]UserInfo, error) {
 	return out, rows.Err()
 }
 
-// collectDatabases returns all non-template PostgreSQL databases with owner, size, and encoding.
+/**
+ * collectDatabases returns all non-template PostgreSQL databases with owner, size, and encoding.
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *
+ * Returns:
+ *   []DatabaseInfo - the resulting []DatabaseInfo
+ *   error - error value; non-nil when the operation fails
+ */
 func collectDatabases(ctx context.Context, db *sql.DB) ([]DatabaseInfo, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT
@@ -354,8 +476,16 @@ func collectDatabases(ctx context.Context, db *sql.DB) ([]DatabaseInfo, error) {
 	return out, rows.Err()
 }
 
-// dbSet builds a lookup set from a list of database names.
-// Returns nil when the list is empty, meaning "no filter — include all".
+/**
+ * dbSet builds a lookup set from a list of database names.
+ * Returns nil when the list is empty, meaning "no filter — include all".
+ *
+ * Params:
+ *   databases []string - the databases ([]string)
+ *
+ * Returns:
+ *   map[string]bool - the resulting map[string]bool
+ */
 func dbSet(databases []string) map[string]bool {
 	if len(databases) == 0 {
 		return nil
@@ -367,8 +497,17 @@ func dbSet(databases []string) map[string]bool {
 	return s
 }
 
-// inDBSet reports whether name passes the filter.
-// A nil set means no filter (always passes).
+/**
+ * inDBSet reports whether name passes the filter.
+ * A nil set means no filter (always passes).
+ *
+ * Params:
+ *   set map[string]bool - the set (map[string]bool)
+ *   name string - the name string
+ *
+ * Returns:
+ *   bool - boolean result
+ */
 func inDBSet(set map[string]bool, name string) bool {
 	if set == nil {
 		return true
@@ -382,6 +521,20 @@ func inDBSet(set map[string]bool, name string) bool {
 
 const patroniBodyLimit = 1 << 20 // 1 MB — sufficient for any Patroni response
 
+/**
+ * patroniRequest.
+ *
+ * Receiver:
+ *   c *Collector - pointer receiver; the method may mutate this Collector instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   rawURL string - the rawURL string
+ *   out any - the out (any)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (c *Collector) patroniRequest(ctx context.Context, rawURL string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -401,11 +554,39 @@ func (c *Collector) patroniRequest(ctx context.Context, rawURL string, out any) 
 	return nil
 }
 
+/**
+ * patroniGET.
+ *
+ * Receiver:
+ *   c *Collector - pointer receiver; the method may mutate this Collector instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   rawURL string - the rawURL string
+ *
+ * Returns:
+ *   map[string]any - the resulting map[string]any
+ *   error - error value; non-nil when the operation fails
+ */
 func (c *Collector) patroniGET(ctx context.Context, rawURL string) (map[string]any, error) {
 	var out map[string]any
 	return out, c.patroniRequest(ctx, rawURL, &out)
 }
 
+/**
+ * patroniGETArray.
+ *
+ * Receiver:
+ *   c *Collector - pointer receiver; the method may mutate this Collector instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   rawURL string - the rawURL string
+ *
+ * Returns:
+ *   []any - the resulting []any
+ *   error - error value; non-nil when the operation fails
+ */
 func (c *Collector) patroniGETArray(ctx context.Context, rawURL string) ([]any, error) {
 	var out []any
 	return out, c.patroniRequest(ctx, rawURL, &out)
@@ -415,6 +596,20 @@ func (c *Collector) patroniGETArray(ctx context.Context, rawURL string) ([]any, 
 // cluster — Patroni /, /cluster, /config
 // =============================================================================
 
+/**
+ * collectCluster.
+ *
+ * Receiver:
+ *   c *Collector - pointer receiver; the method may mutate this Collector instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req MetricRequest - the req (MetricRequest)
+ *
+ * Returns:
+ *   *ClusterMetric - the resulting *ClusterMetric
+ *   error - error value; non-nil when the operation fails
+ */
 func (c *Collector) collectCluster(ctx context.Context, req MetricRequest) (*ClusterMetric, error) {
 	leaderIP, err := c.discoverLeader(ctx, req)
 	if err != nil {
@@ -483,6 +678,17 @@ func (c *Collector) collectCluster(ctx context.Context, req MetricRequest) (*Clu
 // uptime — pg_postmaster_start_time()
 // =============================================================================
 
+/**
+ * collectUptime.
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *
+ * Returns:
+ *   *UptimeMetric - the resulting *UptimeMetric
+ *   error - error value; non-nil when the operation fails
+ */
 func collectUptime(ctx context.Context, db *sql.DB) (*UptimeMetric, error) {
 	const q = `
 		SELECT
@@ -502,6 +708,20 @@ func collectUptime(ctx context.Context, db *sql.DB) (*UptimeMetric, error) {
 // failover — Patroni /history (time-range aware)
 // =============================================================================
 
+/**
+ * collectFailover.
+ *
+ * Receiver:
+ *   c *Collector - pointer receiver; the method may mutate this Collector instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req MetricRequest - the req (MetricRequest)
+ *
+ * Returns:
+ *   *FailoverMetric - the resulting *FailoverMetric
+ *   error - error value; non-nil when the operation fails
+ */
 func (c *Collector) collectFailover(ctx context.Context, req MetricRequest) (*FailoverMetric, error) {
 	leaderIP, err := c.discoverLeader(ctx, req)
 	if err != nil {
@@ -568,6 +788,18 @@ func (c *Collector) collectFailover(ctx context.Context, req MetricRequest) (*Fa
 // connections — pg_stat_activity
 // =============================================================================
 
+/**
+ * collectConnections.
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *   databases []string - the databases ([]string)
+ *
+ * Returns:
+ *   *ConnectionMetric - the resulting *ConnectionMetric
+ *   error - error value; non-nil when the operation fails
+ */
 func collectConnections(ctx context.Context, db *sql.DB, databases []string) (*ConnectionMetric, error) {
 	const qSummary = `
 		SELECT
@@ -654,6 +886,17 @@ func collectConnections(ctx context.Context, db *sql.DB, databases []string) (*C
 // replication — pg_stat_replication + pg_replication_slots + pg_settings
 // =============================================================================
 
+/**
+ * collectReplication.
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *
+ * Returns:
+ *   *ReplicationMetric - the resulting *ReplicationMetric
+ *   error - error value; non-nil when the operation fails
+ */
 func collectReplication(ctx context.Context, db *sql.DB) (*ReplicationMetric, error) {
 	m := &ReplicationMetric{Members: []ReplicationMember{}, Slots: []ReplicationSlot{}}
 
@@ -756,6 +999,17 @@ func collectReplication(ctx context.Context, db *sql.DB) (*ReplicationMetric, er
 // performance — throughput, cache hit, checkpoints, bgwriter
 // =============================================================================
 
+/**
+ * collectPerformance.
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *
+ * Returns:
+ *   *PerformanceMetric - the resulting *PerformanceMetric
+ *   error - error value; non-nil when the operation fails
+ */
 func collectPerformance(ctx context.Context, db *sql.DB) (*PerformanceMetric, error) {
 	const qDB = `
 		SELECT
@@ -829,6 +1083,21 @@ func collectPerformance(ctx context.Context, db *sql.DB) (*PerformanceMetric, er
 // query — latency, slow queries, locks, scans, row throughput
 // =============================================================================
 
+/**
+ * collectQuery.
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *   limit int - the limit value
+ *   from *time.Time - the from (*time.Time)
+ *   to *time.Time - the to (*time.Time)
+ *   databases []string - the databases ([]string)
+ *
+ * Returns:
+ *   *QueryMetric - the resulting *QueryMetric
+ *   error - error value; non-nil when the operation fails
+ */
 func collectQuery(ctx context.Context, db *sql.DB, limit int, from, to *time.Time, databases []string) (*QueryMetric, error) {
 	m := &QueryMetric{
 		SlowQueryThresholdMs: 1000,
@@ -965,6 +1234,19 @@ func collectQuery(ctx context.Context, db *sql.DB, limit int, from, to *time.Tim
 	return m, nil
 }
 
+/**
+ * scanQueryStats.
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *   q string - the q string
+ *   limit int - the limit value
+ *
+ * Returns:
+ *   []QueryStat - the resulting []QueryStat
+ *   error - error value; non-nil when the operation fails
+ */
 func scanQueryStats(ctx context.Context, db *sql.DB, q string, limit int) ([]QueryStat, error) {
 	rows, err := db.QueryContext(ctx, q, limit)
 	if err != nil {
@@ -990,6 +1272,19 @@ func scanQueryStats(ctx context.Context, db *sql.DB, q string, limit int) ([]Que
 // maintenance — autovacuum, XID age, logical slots, lock grants
 // =============================================================================
 
+/**
+ * collectMaintenance.
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *   limit int - the limit value
+ *   databases []string - the databases ([]string)
+ *
+ * Returns:
+ *   *MaintenanceMetric - the resulting *MaintenanceMetric
+ *   error - error value; non-nil when the operation fails
+ */
 func collectMaintenance(ctx context.Context, db *sql.DB, limit int, databases []string) (*MaintenanceMetric, error) {
 	m := &MaintenanceMetric{
 		Workers:        []VacuumWorker{},
@@ -1120,11 +1415,31 @@ func collectMaintenance(ctx context.Context, db *sql.DB, limit int, databases []
 // string / map helpers
 // =============================================================================
 
+/**
+ * getString.
+ *
+ * Params:
+ *   m map[string]any - the m (map[string]any)
+ *   key string - the key string
+ *
+ * Returns:
+ *   string - the resulting string
+ */
 func getString(m map[string]any, key string) string {
 	v, _ := m[key].(string)
 	return v
 }
 
+/**
+ * getInt.
+ *
+ * Params:
+ *   m map[string]any - the m (map[string]any)
+ *   key string - the key string
+ *
+ * Returns:
+ *   int - the resulting integer
+ */
 func getInt(m map[string]any, key string) int {
 	switch v := m[key].(type) {
 	case float64:
@@ -1135,6 +1450,17 @@ func getInt(m map[string]any, key string) int {
 	return 0
 }
 
+/**
+ * splitHostPort.
+ *
+ * Params:
+ *   hostport string - the hostport string
+ *   defaultPort int - the defaultPort value
+ *
+ * Returns:
+ *   string - the resulting string
+ *   int - the resulting integer
+ */
 func splitHostPort(hostport string, defaultPort int) (string, int) {
 	idx := strings.LastIndex(hostport, ":")
 	if idx < 0 {
@@ -1145,7 +1471,15 @@ func splitHostPort(hostport string, defaultPort int) (string, int) {
 	return hostport[:idx], port
 }
 
-// formatDuration converts seconds to a human-readable string like "3d 14h 22m 5s".
+/**
+ * formatDuration converts seconds to a human-readable string like "3d 14h 22m 5s".
+ *
+ * Params:
+ *   seconds int64 - the seconds value
+ *
+ * Returns:
+ *   string - the resulting string
+ */
 func formatDuration(seconds int64) string {
 	days := seconds / 86400
 	hours := (seconds % 86400) / 3600
@@ -1166,7 +1500,15 @@ func formatDuration(seconds int64) string {
 	return strings.Join(parts, " ")
 }
 
-// parsePatroniTime handles the several time formats Patroni uses in /history.
+/**
+ * parsePatroniTime handles the several time formats Patroni uses in /history.
+ *
+ * Params:
+ *   s string - the s string
+ *
+ * Returns:
+ *   time.Time - the resulting time.Time
+ */
 func parsePatroniTime(s string) time.Time {
 	for _, f := range []string{
 		time.RFC3339Nano,

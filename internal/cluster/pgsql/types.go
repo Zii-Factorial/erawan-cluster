@@ -89,6 +89,15 @@ type RemoveMemberRequest struct {
 	Force    bool   `json:"force,omitempty"`
 }
 
+/**
+ * NewUserSSLRequiredEnabled.
+ *
+ * Receiver:
+ *   r DeployRequest - value receiver; the method operates on a copy of the DeployRequest
+ *
+ * Returns:
+ *   bool - boolean result
+ */
 func (r DeployRequest) NewUserSSLRequiredEnabled() bool {
 	if r.NewUserSSLRequired == nil {
 		return true
@@ -96,6 +105,18 @@ func (r DeployRequest) NewUserSSLRequiredEnabled() bool {
 	return *r.NewUserSSLRequired
 }
 
+/**
+ * UnmarshalJSON.
+ *
+ * Receiver:
+ *   s *StoredSpec - pointer receiver; the method may mutate this StoredSpec instance
+ *
+ * Params:
+ *   data []byte - the data bytes
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *StoredSpec) UnmarshalJSON(data []byte) error {
 	type alias StoredSpec
 	aux := struct {

@@ -27,6 +27,18 @@ type Service struct {
 	mainConfigFiles []string // optional; enables pre-validation before every reload
 }
 
+/**
+ * NewService.
+ *
+ * Params:
+ *   tenantsDir string - the tenantsDir string
+ *   reloadCmd []string - the reloadCmd ([]string)
+ *   reloadTimeout time.Duration - the reloadTimeout (time.Duration)
+ *
+ * Returns:
+ *   *Service - the resulting *Service
+ *   error - error value; non-nil when the operation fails
+ */
 func NewService(tenantsDir string, reloadCmd []string, reloadTimeout time.Duration) (*Service, error) {
 	if strings.TrimSpace(tenantsDir) == "" {
 		return nil, fmt.Errorf("tenants directory is required")
@@ -43,10 +55,18 @@ func NewService(tenantsDir string, reloadCmd []string, reloadTimeout time.Durati
 	return &Service{tenantsDir: tenantsDir, reloadCmd: reloadCmd, reloadTimeout: reloadTimeout}, nil
 }
 
-// SetMainConfigs sets the main HAProxy config file paths used for pre-validation.
-// When set, every applyConfig call validates the new tenant config against the full
-// config set (main files + all existing tenant files + new file) before writing,
-// so a bad config for one cluster never blocks reloads for other clusters.
+/**
+ * SetMainConfigs sets the main HAProxy config file paths used for pre-validation.
+ * When set, every applyConfig call validates the new tenant config against the full
+ * config set (main files + all existing tenant files + new file) before writing,
+ * so a bad config for one cluster never blocks reloads for other clusters.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   paths []string - the paths ([]string)
+ */
 func (s *Service) SetMainConfigs(paths []string) {
 	filtered := make([]string, 0, len(paths))
 	for _, p := range paths {
@@ -73,11 +93,24 @@ defaults
     timeout server 30s
 `
 
-// validateConfigSyntax runs haproxy -c against the new content combined with all
-// existing tenant configs. Returns an error if haproxy reports a config problem,
-// preventing the broken config from ever reaching disk or causing a reload failure.
-// excludeFile is the path of an existing tenant config to skip during validation
-// (used when replacing an existing port config to avoid duplicate-bind errors).
+/**
+ * validateConfigSyntax runs haproxy -c against the new content combined with all
+ * existing tenant configs. Returns an error if haproxy reports a config problem,
+ * preventing the broken config from ever reaching disk or causing a reload failure.
+ * excludeFile is the path of an existing tenant config to skip during validation
+ * (used when replacing an existing port config to avoid duplicate-bind errors).
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   content string - the content string
+ *   excludeFile string - the excludeFile string
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) validateConfigSyntax(ctx context.Context, content string, excludeFile string) error {
 	stubFile, err := os.CreateTemp("", "haproxy-stub-*.cfg")
 	if err != nil {
@@ -145,6 +178,19 @@ type cappedBytes struct {
 	full bool
 }
 
+/**
+ * Write.
+ *
+ * Receiver:
+ *   b *cappedBytes - pointer receiver; the method may mutate this cappedBytes instance
+ *
+ * Params:
+ *   p []byte - the p bytes
+ *
+ * Returns:
+ *   int - the resulting integer
+ *   error - error value; non-nil when the operation fails
+ */
 func (b *cappedBytes) Write(p []byte) (int, error) {
 	const limit = 8 << 10
 	avail := limit - b.buf.Len()
@@ -159,6 +205,15 @@ func (b *cappedBytes) Write(p []byte) (int, error) {
 	return b.buf.Write(p)
 }
 
+/**
+ * String.
+ *
+ * Receiver:
+ *   b *cappedBytes - pointer receiver; the method may mutate this cappedBytes instance
+ *
+ * Returns:
+ *   string - the resulting string
+ */
 func (b *cappedBytes) String() string {
 	s := b.buf.String()
 	if b.full {
@@ -188,6 +243,16 @@ type DeleteConfigInput struct {
 	Port int `json:"port"`
 }
 
+/**
+ * ValidatePort.
+ *
+ * Params:
+ *   port int - the port value
+ *   field string - the field string
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func ValidatePort(port int, field string) error {
 	if port < minPort || port > maxPort {
 		return fmt.Errorf("%s must be between %d and %d", field, minPort, maxPort)
@@ -195,6 +260,16 @@ func ValidatePort(port int, field string) error {
 	return nil
 }
 
+/**
+ * NormalizeNodeIPs.
+ *
+ * Params:
+ *   raw []string - the raw ([]string)
+ *
+ * Returns:
+ *   []string - the resulting []string
+ *   error - error value; non-nil when the operation fails
+ */
 func NormalizeNodeIPs(raw []string) ([]string, error) {
 	if len(raw) == 0 {
 		return nil, fmt.Errorf("node_ips must contain at least one IP address or hostname")
@@ -225,6 +300,15 @@ func NormalizeNodeIPs(raw []string) ([]string, error) {
 	return normalized, nil
 }
 
+/**
+ * isValidBackendHost.
+ *
+ * Params:
+ *   host string - the host string
+ *
+ * Returns:
+ *   bool - boolean result
+ */
 func isValidBackendHost(host string) bool {
 	if net.ParseIP(host) != nil {
 		return true
@@ -251,6 +335,19 @@ func isValidBackendHost(host string) bool {
 	return true
 }
 
+/**
+ * CreateMySQLConfig.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   in CreateMySQLConfigInput - the in (CreateMySQLConfigInput)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) CreateMySQLConfig(ctx context.Context, in CreateMySQLConfigInput) error {
 	if err := ValidatePort(in.Port, "port"); err != nil {
 		return err
@@ -265,6 +362,19 @@ func (s *Service) CreateMySQLConfig(ctx context.Context, in CreateMySQLConfigInp
 	return s.applyConfig(ctx, in.Port, BuildMySQLConfig(in.Port, nodes, in.DBPort))
 }
 
+/**
+ * CreatePGSQLConfig.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   in CreatePGSQLConfigInput - the in (CreatePGSQLConfigInput)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) CreatePGSQLConfig(ctx context.Context, in CreatePGSQLConfigInput) error {
 	if err := ValidatePort(in.Port, "port"); err != nil {
 		return err
@@ -283,6 +393,20 @@ func (s *Service) CreatePGSQLConfig(ctx context.Context, in CreatePGSQLConfigInp
 	return s.applyConfig(ctx, in.Port, BuildPGSQLConfig(in.Port, nodes, in.DBPort, patroniPort))
 }
 
+/**
+ * applyConfig.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   port int - the port value
+ *   content string - the content string
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) applyConfig(ctx context.Context, port int, content string) error {
 	excludeFile := ""
 	if existing := s.filename(port); fileExists(existing) {
@@ -330,6 +454,20 @@ func (s *Service) applyConfig(ctx context.Context, port int, content string) err
 	return nil
 }
 
+/**
+ * DeleteConfig.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   in DeleteConfigInput - the in (DeleteConfigInput)
+ *
+ * Returns:
+ *   bool - boolean result
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) DeleteConfig(ctx context.Context, in DeleteConfigInput) (bool, error) {
 	if err := ValidatePort(in.Port, "port"); err != nil {
 		return false, err
@@ -365,6 +503,16 @@ func (s *Service) DeleteConfig(ctx context.Context, in DeleteConfigInput) (bool,
 	return true, nil
 }
 
+/**
+ * ZipTenantsDir.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Returns:
+ *   []byte - the resulting bytes
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) ZipTenantsDir() ([]byte, error) {
 	entries, err := os.ReadDir(s.tenantsDir)
 	if err != nil {
@@ -395,6 +543,16 @@ func (s *Service) ZipTenantsDir() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+/**
+ * ListConfigs.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Returns:
+ *   []string - the resulting []string
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) ListConfigs() ([]string, error) {
 	entries, err := os.ReadDir(s.tenantsDir)
 	if err != nil {
@@ -413,6 +571,18 @@ func (s *Service) ListConfigs() ([]string, error) {
 	return files, nil
 }
 
+/**
+ * Reload.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) Reload(ctx context.Context) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, s.reloadTimeout)
 	defer cancel()
@@ -436,10 +606,34 @@ func (s *Service) Reload(ctx context.Context) error {
 	return nil
 }
 
+/**
+ * filename.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   port int - the port value
+ *
+ * Returns:
+ *   string - the resulting string
+ */
 func (s *Service) filename(port int) string {
 	return filepath.Join(s.tenantsDir, fmt.Sprintf("%d.cfg", port))
 }
 
+/**
+ * verifyRuntimeAfterCreate.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   port int - the port value
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) verifyRuntimeAfterCreate(port int) error {
 	if err := s.ensureHaproxyLoadsTenantsDir(); err != nil {
 		return err
@@ -450,6 +644,18 @@ func (s *Service) verifyRuntimeAfterCreate(port int) error {
 	return nil
 }
 
+/**
+ * verifyRuntimeAfterDelete.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   port int - the port value
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) verifyRuntimeAfterDelete(port int) error {
 	if err := s.ensureHaproxyLoadsTenantsDir(); err != nil {
 		return err
@@ -460,6 +666,15 @@ func (s *Service) verifyRuntimeAfterDelete(port int) error {
 	return nil
 }
 
+/**
+ * ensureHaproxyLoadsTenantsDir.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) ensureHaproxyLoadsTenantsDir() error {
 	cmdlines, err := haproxyCmdlines()
 	if err != nil {
@@ -473,6 +688,13 @@ func (s *Service) ensureHaproxyLoadsTenantsDir() error {
 	return fmt.Errorf("running haproxy is not loading tenants dir: %s", s.tenantsDir)
 }
 
+/**
+ * haproxyCmdlines.
+ *
+ * Returns:
+ *   []string - the resulting []string
+ *   error - error value; non-nil when the operation fails
+ */
 func haproxyCmdlines() ([]string, error) {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
@@ -513,6 +735,17 @@ func haproxyCmdlines() ([]string, error) {
 	return cmdlines, nil
 }
 
+/**
+ * waitForPortState.
+ *
+ * Params:
+ *   port int - the port value
+ *   shouldListen bool - the shouldListen flag
+ *   timeout time.Duration - the timeout (time.Duration)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func waitForPortState(port int, shouldListen bool, timeout time.Duration) error {
 	if timeout <= 0 {
 		timeout = 5 * time.Second
@@ -544,9 +777,19 @@ func waitForPortState(port int, shouldListen bool, timeout time.Duration) error 
 	}
 }
 
-// BuildMySQLConfig renders the HAProxy `listen` section for a MySQL Router
-// cluster on the given frontend port, routing to nodeIPs on dbPort. It is a
-// pure function (no I/O); CreateMySQLConfig writes and reloads the result.
+/**
+ * BuildMySQLConfig renders the HAProxy `listen` section for a MySQL Router
+ * cluster on the given frontend port, routing to nodeIPs on dbPort. It is a
+ * pure function (no I/O); CreateMySQLConfig writes and reloads the result.
+ *
+ * Params:
+ *   port int - the port value
+ *   nodeIPs []string - the nodeIPs ([]string)
+ *   dbPort int - the dbPort value
+ *
+ * Returns:
+ *   string - the resulting string
+ */
 func BuildMySQLConfig(port int, nodeIPs []string, dbPort int) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("listen node_%d\n", port))
@@ -599,10 +842,21 @@ func BuildMySQLConfig(port int, nodeIPs []string, dbPort int) string {
 	return b.String()
 }
 
-// BuildPGSQLConfig renders the HAProxy `listen` section for a PostgreSQL/Patroni
-// cluster on the given frontend port, routing to nodeIPs on dbPort and using the
-// Patroni REST API on patroniPort for leader health checks. It is a pure
-// function (no I/O); CreatePGSQLConfig writes and reloads the result.
+/**
+ * BuildPGSQLConfig renders the HAProxy `listen` section for a PostgreSQL/Patroni
+ * cluster on the given frontend port, routing to nodeIPs on dbPort and using the
+ * Patroni REST API on patroniPort for leader health checks. It is a pure
+ * function (no I/O); CreatePGSQLConfig writes and reloads the result.
+ *
+ * Params:
+ *   port int - the port value
+ *   nodeIPs []string - the nodeIPs ([]string)
+ *   dbPort int - the dbPort value
+ *   patroniPort int - the patroniPort value
+ *
+ * Returns:
+ *   string - the resulting string
+ */
 func BuildPGSQLConfig(port int, nodeIPs []string, dbPort int, patroniPort int) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("listen node_%d\n", port))
@@ -661,8 +915,20 @@ type AddMemberConfigInput struct {
 	NodeIP string `json:"node_ip"`
 }
 
-// AddMySQLMember reads the existing MySQL config for the given port, appends the new
-// node IP, rebuilds the config, and applies it (validates + writes + reloads HAProxy).
+/**
+ * AddMySQLMember reads the existing MySQL config for the given port, appends the new
+ * node IP, rebuilds the config, and applies it (validates + writes + reloads HAProxy).
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   in AddMemberConfigInput - the in (AddMemberConfigInput)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) AddMySQLMember(ctx context.Context, in AddMemberConfigInput) error {
 	if err := ValidatePort(in.Port, "port"); err != nil {
 		return err
@@ -695,8 +961,20 @@ func (s *Service) AddMySQLMember(ctx context.Context, in AddMemberConfigInput) e
 	return s.applyConfig(ctx, in.Port, BuildMySQLConfig(in.Port, ips, dbPort))
 }
 
-// AddPGSQLMember reads the existing PostgreSQL config for the given port, appends the new
-// node IP, rebuilds the config, and applies it (validates + writes + reloads HAProxy).
+/**
+ * AddPGSQLMember reads the existing PostgreSQL config for the given port, appends the new
+ * node IP, rebuilds the config, and applies it (validates + writes + reloads HAProxy).
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   in AddMemberConfigInput - the in (AddMemberConfigInput)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) AddPGSQLMember(ctx context.Context, in AddMemberConfigInput) error {
 	if err := ValidatePort(in.Port, "port"); err != nil {
 		return err
@@ -735,8 +1013,17 @@ func (s *Service) AddPGSQLMember(ctx context.Context, in AddMemberConfigInput) e
 	return s.applyConfig(ctx, in.Port, BuildPGSQLConfig(in.Port, ips, dbPort, patroniPort))
 }
 
-// parseConfigServers extracts backend server IPs and the db port from a rendered config.
-// It reads lines of the form: `    server dbN {ip}:{port} check [backup]`
+/**
+ * parseConfigServers extracts backend server IPs and the db port from a rendered config.
+ * It reads lines of the form: `    server dbN {ip}:{port} check [backup]`
+ *
+ * Params:
+ *   content string - the content string
+ *
+ * Returns:
+ *   ips []string - the ips ([]string)
+ *   dbPort int - the dbPort value
+ */
 func parseConfigServers(content string) (ips []string, dbPort int) {
 	for _, line := range strings.Split(content, "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -765,8 +1052,16 @@ func parseConfigServers(content string) (ips []string, dbPort int) {
 	return
 }
 
-// parsePatroniPort extracts the patroni check port from the default-server line.
-// It reads: `    default-server ... check port {n}`
+/**
+ * parsePatroniPort extracts the patroni check port from the default-server line.
+ * It reads: `    default-server ... check port {n}`
+ *
+ * Params:
+ *   content string - the content string
+ *
+ * Returns:
+ *   int - the resulting integer
+ */
 func parsePatroniPort(content string) int {
 	for _, line := range strings.Split(content, "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -786,11 +1081,29 @@ func parsePatroniPort(content string) int {
 	return 0
 }
 
+/**
+ * fileExists.
+ *
+ * Params:
+ *   path string - the path string
+ *
+ * Returns:
+ *   bool - boolean result
+ */
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
 
+/**
+ * mysqlPortDesc.
+ *
+ * Params:
+ *   port int - the port value
+ *
+ * Returns:
+ *   string - the resulting string
+ */
 func mysqlPortDesc(port int) string {
 	switch port {
 	case 6446:
@@ -802,6 +1115,16 @@ func mysqlPortDesc(port int) string {
 	}
 }
 
+/**
+ * copyFile.
+ *
+ * Params:
+ *   src string - the src string
+ *   dst string - the dst string
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
