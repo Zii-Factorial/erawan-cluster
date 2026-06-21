@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -406,7 +407,10 @@ func (s *Service) connect(ctx context.Context, host string, port int, dbname, us
 	cfg.WriteTimeout = 30 * time.Second
 	cfg.ParseTime = true
 	cfg.AllowNativePasswords = true
-	cfg.TLSConfig = "preferred"
+	// Secure by default: require TLS with full verification on admin connections.
+	// Opt out for self-signed/IP-SAN clusters via CLUSTER_DB_TLS_MODE
+	// (true|skip-verify|false).
+	cfg.TLSConfig = adminTLSMode()
 
 	db, err := sql.Open("mysql", cfg.FormatDSN())
 	if err != nil {
@@ -418,6 +422,20 @@ func (s *Service) connect(ctx context.Context, host string, port int, dbname, us
 		return nil, fmt.Errorf("connect %s:%d: %w", host, port, err)
 	}
 	return db, nil
+}
+
+// adminTLSMode resolves the go-sql-driver TLS mode for admin connections.
+// Defaults to "true" (TLS with full verification); operators may relax it via
+// CLUSTER_DB_TLS_MODE for clusters using self-signed or IP-SAN certificates.
+func adminTLSMode() string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CLUSTER_DB_TLS_MODE"))) {
+	case "skip-verify":
+		return "skip-verify"
+	case "false", "disable", "off":
+		return "false"
+	default:
+		return "true"
+	}
 }
 
 func mysqlID(name string) string {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -368,8 +369,10 @@ func (s *Service) DeleteDatabase(ctx context.Context, req DeleteDatabaseRequest)
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 func (s *Service) connect(ctx context.Context, host string, port int, dbname, user, password string) (*sql.DB, error) {
-	dsn := fmt.Sprintf("host=%s port=%d dbname=%s user=%s password=%s sslmode=require",
-		host, port, pgConnVal(dbname), pgConnVal(user), pgConnVal(password))
+	// Secure by default: verify-full validates the server certificate and host
+	// name (anti-MITM). Relax via CLUSTER_DB_SSL_MODE for self-signed clusters.
+	dsn := fmt.Sprintf("host=%s port=%d dbname=%s user=%s password=%s sslmode=%s",
+		host, port, pgConnVal(dbname), pgConnVal(user), pgConnVal(password), adminSSLMode())
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, err
@@ -380,6 +383,18 @@ func (s *Service) connect(ctx context.Context, host string, port int, dbname, us
 		return nil, fmt.Errorf("connect %s:%d/%s: %w", host, port, dbname, err)
 	}
 	return db, nil
+}
+
+// adminSSLMode resolves the lib/pq sslmode for admin connections. Defaults to
+// "verify-full"; operators may relax it via CLUSTER_DB_SSL_MODE (e.g. require,
+// verify-ca, disable) for clusters using self-signed certificates.
+func adminSSLMode() string {
+	switch m := strings.ToLower(strings.TrimSpace(os.Getenv("CLUSTER_DB_SSL_MODE"))); m {
+	case "disable", "require", "verify-ca", "verify-full", "prefer", "allow":
+		return m
+	default:
+		return "verify-full"
+	}
 }
 
 func pgConnVal(v string) string {

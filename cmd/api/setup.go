@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	mysqlcluster "erawan-cluster/internal/cluster/mysql"
 	mysqldbmanager "erawan-cluster/internal/cluster/mysql/dbmanager"
@@ -23,6 +24,10 @@ import (
 // config.go, add a buildXCluster helper below, and attach the resulting service
 // to the application here — no change to main's control flow.
 func buildApplication(ctx context.Context, cfg runtimeConfig) (*application, error) {
+	if err := validateSecurityConfig(cfg); err != nil {
+		return nil, err
+	}
+
 	haproxySvc, err := buildHAProxy(cfg.haproxy)
 	if err != nil {
 		return nil, err
@@ -54,6 +59,17 @@ func buildApplication(ctx context.Context, cfg runtimeConfig) (*application, err
 		baseDir:      cfg.baseDir,
 		enablePprof:  cfg.enablePprof,
 	}, nil
+}
+
+// validateSecurityConfig fails start-up closed when the API is unauthenticated
+// outside development. An empty API_KEY disables auth entirely, which is only
+// acceptable for local dev (ENV=dev); in any other environment the process
+// refuses to start rather than expose an open control plane.
+func validateSecurityConfig(cfg runtimeConfig) error {
+	if strings.TrimSpace(cfg.server.apiKey) == "" && !strings.EqualFold(cfg.server.env, "dev") {
+		return fmt.Errorf("API_KEY is required when ENV != dev: refusing to start an unauthenticated control plane")
+	}
+	return nil
 }
 
 // buildHAProxy constructs the HAProxy service that renders per-tenant config
@@ -89,6 +105,7 @@ func buildMySQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConf
 	runner.SetAddMemberPlaybook(cfg.addMemberPlaybook)
 	runner.SetRemoveMemberPlaybook(cfg.removeMemberPlaybook)
 	runner.SetDebug(cfg.ansible.verbosity, cfg.ansible.debug, cfg.ansible.stepOutputMaxChars)
+	runner.SetSSHPolicy(ssh.policy())
 
 	svc := mysqlcluster.NewService(store, runner)
 	svc.SetMaxConcurrentJobs(maxConcurrentJobs)
@@ -116,6 +133,7 @@ func buildPGSQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConf
 	runner.SetAddMemberPlaybook(cfg.addMemberPlaybook)
 	runner.SetRemoveMemberPlaybook(cfg.removeMemberPlaybook)
 	runner.SetDebug(cfg.ansible.verbosity, cfg.ansible.debug, cfg.ansible.stepOutputMaxChars)
+	runner.SetSSHPolicy(ssh.policy())
 
 	svc := pgsqlcluster.NewService(store, runner)
 	svc.SetMaxConcurrentJobs(maxConcurrentJobs)

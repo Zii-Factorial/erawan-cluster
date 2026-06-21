@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"erawan-cluster/internal/cluster/core"
 	"erawan-cluster/internal/env"
 )
 
@@ -60,6 +61,14 @@ type haproxyConfig struct {
 type sshConfig struct {
 	user           string
 	privateKeyPath string
+	verifyHostKeys bool
+	knownHostsFile string
+}
+
+// policy maps the resolved SSH settings to the engine-agnostic host-key policy
+// used by the Ansible runners.
+func (s sshConfig) policy() core.SSHPolicy {
+	return core.SSHPolicy{VerifyHostKeys: s.verifyHostKeys, KnownHostsFile: s.knownHostsFile}
 }
 
 // hasCredentials reports whether any explicit SSH credential was provided and
@@ -168,9 +177,14 @@ func loadHAProxyConfig() haproxyConfig {
 // loadSSHConfig resolves the shared SSH credentials used by every cluster
 // engine's Ansible runner.
 func loadSSHConfig() sshConfig {
+	// Secure by default: verify node SSH host keys unless explicitly disabled
+	// (e.g. for greenfield bootstrap) via CLUSTER_SSH_INSECURE_HOST_KEY=true.
+	insecure := env.GetBool("CLUSTER_SSH_INSECURE_HOST_KEY", false)
 	return sshConfig{
 		user:           env.GetString("CLUSTER_SSH_USER", ""),
 		privateKeyPath: env.GetString("CLUSTER_SSH_PRIVATE_KEY_PATH", ""),
+		verifyHostKeys: !insecure,
+		knownHostsFile: env.GetString("CLUSTER_SSH_KNOWN_HOSTS", ""),
 	}
 }
 

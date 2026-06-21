@@ -136,7 +136,7 @@ func TestBuildInventoryYAMLUsesSSHKeyWhenProvided(t *testing.T) {
 		SSHUser:           "clusterops",
 		SSHPrivateKeyPath: "/tmp/test-key",
 		SSHPort:           22,
-	})
+	}, "-o IdentitiesOnly=yes -o StrictHostKeyChecking=yes")
 
 	if strings.Contains(inventory, "ansible_password") {
 		t.Fatalf("expected ssh key auth to omit ansible_password, inventory=%s", inventory)

@@ -25,6 +25,7 @@ type Runner struct {
 	ansibleVerbosity     int
 	streamLogs           bool
 	maxOutputChars       int
+	sshPolicy            core.SSHPolicy
 }
 
 func NewRunner(ansibleBin, deployPlaybook string) *Runner {
@@ -35,11 +36,16 @@ func NewRunner(ansibleBin, deployPlaybook string) *Runner {
 		ansibleBin:     ansibleBin,
 		deployPlaybook: deployPlaybook,
 		maxOutputChars: 8000,
+		// Secure by default: verify node SSH host keys.
+		sshPolicy: core.SSHPolicy{VerifyHostKeys: true},
 	}
 }
 
 func (r *Runner) SetAddMemberPlaybook(path string)    { r.addMemberPlaybook = path }
 func (r *Runner) SetRemoveMemberPlaybook(path string) { r.removeMemberPlaybook = path }
+
+// SetSSHPolicy configures how Ansible verifies node SSH host keys.
+func (r *Runner) SetSSHPolicy(p core.SSHPolicy) { r.sshPolicy = p }
 
 func (r *Runner) SetDebug(verbosity int, streamLogs bool, maxOutputChars int) {
 	if verbosity < 0 {
@@ -118,7 +124,7 @@ func (r *Runner) run(ctx context.Context, cfg runConfig) StepResult {
 	return core.AnsibleRun(ctx, core.AnsibleSpec{
 		Bin:             r.ansibleBin,
 		Playbook:        r.deployPlaybook,
-		Inventory:       buildInventoryYAML(cfg.spec),
+		Inventory:       buildInventoryYAML(cfg.spec, r.sshPolicy.SSHCommonArgs()),
 		ExtraVars:       extraVars,
 		Tags:            []string{cfg.step.Tag},
 		Verbosity:       r.ansibleVerbosity,
@@ -127,7 +133,7 @@ func (r *Runner) run(ctx context.Context, cfg runConfig) StepResult {
 		Timeout:         cfg.timeout,
 		StepName:        cfg.step.Name,
 		WorkspacePrefix: "pgsql-cluster-job-",
-		Env:             ansibleEnv(),
+		Env:             r.sshPolicy.AnsibleEnv(),
 	})
 }
 
@@ -139,18 +145,19 @@ func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, s
 	}
 
 	var inventory string
+	sshArgs := r.sshPolicy.SSHCommonArgs()
 	// effectiveStandbys reflects the expected post-operation standby list so that
 	// verify_cluster's member count assertions are correct for both add and remove.
 	effectiveStandbys := make([]string, len(cfg.spec.StandbyIPs))
 	copy(effectiveStandbys, cfg.spec.StandbyIPs)
 	if stepName == "add_member" {
-		inventory = buildAddMemberInventoryYAML(cfg.spec, cfg.memberIP)
+		inventory = buildAddMemberInventoryYAML(cfg.spec, cfg.memberIP, sshArgs)
 		effectiveStandbys = append(effectiveStandbys, cfg.memberIP)
 	} else {
 		// Removed node must NOT appear in pgsql_standby so the verify play
 		// (hosts: pgsql_primary:pgsql_standby) does not try to SSH to a stopped node.
 		// It is still present in the `all` group so Play 1 can attempt a graceful stop.
-		inventory = buildRemoveMemberInventoryYAML(cfg.spec, cfg.memberIP)
+		inventory = buildRemoveMemberInventoryYAML(cfg.spec, cfg.memberIP, sshArgs)
 		filtered := effectiveStandbys[:0]
 		for _, ip := range effectiveStandbys {
 			if ip != cfg.memberIP {
@@ -199,17 +206,11 @@ func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, s
 		Timeout:         cfg.timeout,
 		StepName:        stepName,
 		WorkspacePrefix: "pgsql-member-job-",
-		Env:             ansibleEnv(),
+		Env:             r.sshPolicy.AnsibleEnv(),
 	})
 }
 
-// ansibleEnv returns the environment overrides applied to every ansible-playbook
-// invocation for this engine.
-func ansibleEnv() []string {
-	return []string{"ANSIBLE_HOST_KEY_CHECKING=False"}
-}
-
-func buildAddMemberInventoryYAML(spec StoredSpec, newMemberIP string) string {
+func buildAddMemberInventoryYAML(spec StoredSpec, newMemberIP, sshCommonArgs string) string {
 	var b strings.Builder
 	b.WriteString("all:\n")
 	b.WriteString("  hosts:\n")
@@ -223,7 +224,7 @@ func buildAddMemberInventoryYAML(spec StoredSpec, newMemberIP string) string {
 		b.WriteString("      ansible_become_user: root\n")
 		b.WriteString("      ansible_become_flags: " + strconv.Quote("-n") + "\n")
 		b.WriteString("      ansible_ssh_private_key_file: " + strconv.Quote(spec.SSHPrivateKeyPath) + "\n")
-		b.WriteString("      ansible_ssh_common_args: " + strconv.Quote("-o IdentitiesOnly=yes -o StrictHostKeyChecking=no") + "\n")
+		b.WriteString("      ansible_ssh_common_args: " + strconv.Quote(sshCommonArgs) + "\n")
 	}
 
 	writeHost("primary", spec.PrimaryIP)
@@ -251,7 +252,7 @@ func buildAddMemberInventoryYAML(spec StoredSpec, newMemberIP string) string {
 // The removed node appears in `all` (so Play 1 can stop its services) but NOT in
 // `pgsql_standby`, so the verify play (hosts: pgsql_primary:pgsql_standby) never
 // tries to SSH to a node that has already been stopped.
-func buildRemoveMemberInventoryYAML(spec StoredSpec, removedIP string) string {
+func buildRemoveMemberInventoryYAML(spec StoredSpec, removedIP, sshCommonArgs string) string {
 	var b strings.Builder
 	b.WriteString("all:\n")
 	b.WriteString("  hosts:\n")
@@ -265,7 +266,7 @@ func buildRemoveMemberInventoryYAML(spec StoredSpec, removedIP string) string {
 		b.WriteString("      ansible_become_user: root\n")
 		b.WriteString("      ansible_become_flags: " + strconv.Quote("-n") + "\n")
 		b.WriteString("      ansible_ssh_private_key_file: " + strconv.Quote(spec.SSHPrivateKeyPath) + "\n")
-		b.WriteString("      ansible_ssh_common_args: " + strconv.Quote("-o IdentitiesOnly=yes -o StrictHostKeyChecking=no") + "\n")
+		b.WriteString("      ansible_ssh_common_args: " + strconv.Quote(sshCommonArgs) + "\n")
 	}
 
 	writeHost("primary", spec.PrimaryIP)
@@ -293,7 +294,7 @@ func buildRemoveMemberInventoryYAML(spec StoredSpec, removedIP string) string {
 	return b.String()
 }
 
-func buildInventoryYAML(spec StoredSpec) string {
+func buildInventoryYAML(spec StoredSpec, sshCommonArgs string) string {
 	var b strings.Builder
 	b.WriteString("all:\n")
 	b.WriteString("  hosts:\n")
@@ -307,7 +308,7 @@ func buildInventoryYAML(spec StoredSpec) string {
 		b.WriteString("      ansible_become_user: root\n")
 		b.WriteString("      ansible_become_flags: " + strconv.Quote("-n") + "\n")
 		b.WriteString("      ansible_ssh_private_key_file: " + strconv.Quote(spec.SSHPrivateKeyPath) + "\n")
-		b.WriteString("      ansible_ssh_common_args: " + strconv.Quote("-o IdentitiesOnly=yes -o StrictHostKeyChecking=no") + "\n")
+		b.WriteString("      ansible_ssh_common_args: " + strconv.Quote(sshCommonArgs) + "\n")
 	}
 
 	writeHost("primary", spec.PrimaryIP)

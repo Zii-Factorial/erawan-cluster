@@ -122,8 +122,8 @@ func ValidateMetricRequest(req *MetricRequest) error {
 	if req.SSLMode == "" {
 		req.SSLMode = "disable"
 	}
-	if req.SSLMode != "disable" && req.SSLMode != "require" {
-		return fmt.Errorf("ssl_mode must be 'disable' or 'require'")
+	if req.SSLMode != "disable" && req.SSLMode != "require" && req.SSLMode != "skip-verify" {
+		return fmt.Errorf("ssl_mode must be 'disable', 'require' (verified TLS), or 'skip-verify' (unverified TLS)")
 	}
 	if req.From != nil && req.To != nil && req.From.After(*req.To) {
 		return fmt.Errorf("from must be before to")
@@ -192,8 +192,11 @@ func openDB(ctx context.Context, req MetricRequest) (*sql.DB, error) {
 	cfg.WriteTimeout = 30 * time.Second
 	cfg.ParseTime = true
 	cfg.AllowNativePasswords = true
-	if req.SSLMode == "require" {
-		cfg.TLSConfig = "skip-verify"
+	switch req.SSLMode {
+	case "require":
+		cfg.TLSConfig = "true" // TLS with full certificate verification (anti-MITM)
+	case "skip-verify":
+		cfg.TLSConfig = "skip-verify" // explicit opt-out: TLS without verification
 	}
 
 	db, err := sql.Open("mysql", cfg.FormatDSN())
