@@ -12,7 +12,7 @@
 
 | Component | Technology | Purpose |
 |-----------|------------|---------|
-| Language | Go 1.22+ | API server, job orchestration, metrics collection |
+| Language | Go 1.25+ | API server, job orchestration, metrics collection |
 | HTTP Router | [go-chi/chi](https://github.com/go-chi/chi) | Request routing and middleware |
 | Build | Makefile | Build, test, and run targets |
 | Automation | Ansible | Cluster deploy, configuration, and member management via SSH |
@@ -33,7 +33,9 @@
 
 See [doc/api.md](doc/api.md) for the full API reference.  
 See [doc/proxy-architecture.md](doc/proxy-architecture.md) for the system design.  
-See [doc/mysql.md](doc/mysql.md) and [doc/pgsql.md](doc/pgsql.md) for cluster detail.
+See [doc/mysql.md](doc/mysql.md) and [doc/pgsql.md](doc/pgsql.md) for cluster detail.  
+See [doc/security.md](doc/security.md) for the security posture and hardening knobs.  
+See [doc/adding-an-engine.md](doc/adding-an-engine.md) to add a new database engine.
 
 ---
 
