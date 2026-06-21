@@ -59,7 +59,7 @@ type MetricRequest struct {
 	Host string `json:"-"`
 	Port int    `json:"-"`
 
-	User     string `json:"user"`     // needs PROCESS, SELECT on performance_schema
+	User           string `json:"user"` // needs PROCESS, SELECT on performance_schema
 	Password       string `json:"password"`
 	Database       string `json:"database"`        // for table/query stats; default "information_schema"
 	SSLMode        string `json:"ssl_mode"`        // "disable" | "require"; default "disable"
@@ -107,7 +107,7 @@ type DatabaseInfo struct {
 // ClusterMetric holds InnoDB Cluster / Group Replication membership state.
 type ClusterMetric struct {
 	GroupName   string          `json:"group_name"`
-	GRStatus    string          `json:"gr_status"`              // ONLINE | OFFLINE
+	GRStatus    string          `json:"gr_status"` // ONLINE | OFFLINE
 	PrimaryHost string          `json:"primary_host,omitempty"`
 	PrimaryPort int             `json:"primary_port,omitempty"`
 	MemberCount int             `json:"member_count"`
@@ -165,9 +165,9 @@ type DBConnStat struct {
 
 // ReplicationMetric consolidates GR member certification stats and applier lag.
 type ReplicationMetric struct {
-	GREnabled bool            `json:"gr_enabled"`
-	Members   []GRMemberStat  `json:"members"`
-	Appliers  []ApplierStat   `json:"appliers"`
+	GREnabled bool           `json:"gr_enabled"`
+	Members   []GRMemberStat `json:"members"`
+	Appliers  []ApplierStat  `json:"appliers"`
 }
 
 // GRMemberStat describes per-member Group Replication certification stats.
@@ -229,30 +229,30 @@ type PerformanceMetric struct {
 // QueryMetric consolidates query latency (from events_statements_summary_by_digest),
 // active slow queries, lock waits, and full-table-scan digest stats.
 type QueryMetric struct {
-	StatementsAvailable  bool           `json:"performance_schema_available"`
-	AvgExecMs            float64        `json:"avg_exec_ms"`
-	P95ExecMs            float64        `json:"p95_exec_ms"`
-	P99ExecMs            float64        `json:"p99_exec_ms"`
-	TopByMeanExecMs      []QueryStat    `json:"top_by_mean_exec_ms,omitempty"`
-	TopByTotalExecMs     []QueryStat    `json:"top_by_total_exec_ms,omitempty"`
-	SlowQueryThresholdMs float64        `json:"slow_query_threshold_ms"`
-	SlowQueryCount       int            `json:"slow_query_count"`
-	LongestRunningMs     float64        `json:"longest_running_ms"`
-	SlowQueries          []SlowQuery    `json:"slow_queries"`
-	LockWaitCount        int            `json:"lock_wait_count"`
-	DeadlockCount        int64          `json:"deadlock_count"`
-	HighFullScanTables   []ScanDigest   `json:"high_full_scan_tables"`
+	StatementsAvailable  bool         `json:"performance_schema_available"`
+	AvgExecMs            float64      `json:"avg_exec_ms"`
+	P95ExecMs            float64      `json:"p95_exec_ms"`
+	P99ExecMs            float64      `json:"p99_exec_ms"`
+	TopByMeanExecMs      []QueryStat  `json:"top_by_mean_exec_ms,omitempty"`
+	TopByTotalExecMs     []QueryStat  `json:"top_by_total_exec_ms,omitempty"`
+	SlowQueryThresholdMs float64      `json:"slow_query_threshold_ms"`
+	SlowQueryCount       int          `json:"slow_query_count"`
+	LongestRunningMs     float64      `json:"longest_running_ms"`
+	SlowQueries          []SlowQuery  `json:"slow_queries"`
+	LockWaitCount        int          `json:"lock_wait_count"`
+	DeadlockCount        int64        `json:"deadlock_count"`
+	HighFullScanTables   []ScanDigest `json:"high_full_scan_tables"`
 }
 
 // QueryStat is one row from events_statements_summary_by_digest.
 type QueryStat struct {
-	Query       string  `json:"query"`
-	Calls       int64   `json:"calls"`
-	MeanExecMs  float64 `json:"mean_exec_ms"`
-	MaxExecMs   float64 `json:"max_exec_ms"`
-	TotalExecMs float64 `json:"total_exec_ms"`
-	RowsExamined int64  `json:"rows_examined"`
-	Errors      int64   `json:"errors"`
+	Query        string  `json:"query"`
+	Calls        int64   `json:"calls"`
+	MeanExecMs   float64 `json:"mean_exec_ms"`
+	MaxExecMs    float64 `json:"max_exec_ms"`
+	TotalExecMs  float64 `json:"total_exec_ms"`
+	RowsExamined int64   `json:"rows_examined"`
+	Errors       int64   `json:"errors"`
 }
 
 // SlowQuery is a currently-running query exceeding the slow threshold.
@@ -268,11 +268,11 @@ type SlowQuery struct {
 
 // ScanDigest is a digest entry that required full-table scans.
 type ScanDigest struct {
-	Schema       string  `json:"schema"`
-	Query        string  `json:"query"`
-	FullScans    int64   `json:"full_scans"`   // SUM_NO_INDEX_USED + SUM_NO_GOOD_INDEX_USED
-	TotalCalls   int64   `json:"total_calls"`
-	FullScanPct  float64 `json:"full_scan_pct"`
+	Schema      string  `json:"schema"`
+	Query       string  `json:"query"`
+	FullScans   int64   `json:"full_scans"` // SUM_NO_INDEX_USED + SUM_NO_GOOD_INDEX_USED
+	TotalCalls  int64   `json:"total_calls"`
+	FullScanPct float64 `json:"full_scan_pct"`
 }
 
 // ---------------------------------------------------------------------------
@@ -282,13 +282,13 @@ type ScanDigest struct {
 // MaintenanceMetric consolidates InnoDB purge lag, table fragmentation,
 // metadata lock contention, and open-table counts.
 type MaintenanceMetric struct {
-	PurgeLagTransactions int64            `json:"purge_lag_transactions"` // InnoDB history list length
-	PurgeLagRiskLevel    string           `json:"purge_lag_risk_level"`   // ok | warning | danger
+	PurgeLagTransactions int64             `json:"purge_lag_transactions"` // InnoDB history list length
+	PurgeLagRiskLevel    string            `json:"purge_lag_risk_level"`   // ok | warning | danger
 	FragmentedTables     []FragmentedTable `json:"fragmented_tables"`
-	OpenTables           int64            `json:"open_tables"`
-	OpenedTables         int64            `json:"opened_tables"`
-	TotalMetaLocks       int              `json:"total_metadata_locks"`
-	BlockedMetaLocks     int              `json:"blocked_metadata_locks"`
+	OpenTables           int64             `json:"open_tables"`
+	OpenedTables         int64             `json:"opened_tables"`
+	TotalMetaLocks       int               `json:"total_metadata_locks"`
+	BlockedMetaLocks     int               `json:"blocked_metadata_locks"`
 }
 
 // FragmentedTable is a table with significant free-space fragmentation.

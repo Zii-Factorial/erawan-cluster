@@ -78,7 +78,7 @@ type MetricRequest struct {
 	Host string `json:"-"`
 	Port int    `json:"-"`
 
-	User     string `json:"user"`     // superuser recommended for full metrics
+	User           string `json:"user"` // superuser recommended for full metrics
 	Password       string `json:"password"`
 	Database       string `json:"database"`        // for table/query queries; default "postgres"
 	SSLMode        string `json:"ssl_mode"`        // "disable" | "require"; default "disable"
@@ -137,16 +137,16 @@ type DatabaseInfo struct {
 
 // ClusterMetric holds Patroni node and cluster state including DCS health.
 type ClusterMetric struct {
-	Scope          string        `json:"scope"`
-	Role           string        `json:"role"`    // primary | replica
-	State          string        `json:"state"`   // running | stopped | …
-	Timeline       int           `json:"timeline"`
-	PatroniVersion string        `json:"patroni_version"`
-	ServerVersion  int           `json:"server_version,omitempty"`
-	DCSLastSeen    *time.Time    `json:"dcs_last_seen,omitempty"`
-	TTL            int           `json:"ttl,omitempty"`
-	LoopWait       int           `json:"loop_wait,omitempty"`
-	RetryTimeout   int           `json:"retry_timeout,omitempty"`
+	Scope          string          `json:"scope"`
+	Role           string          `json:"role"`  // primary | replica
+	State          string          `json:"state"` // running | stopped | …
+	Timeline       int             `json:"timeline"`
+	PatroniVersion string          `json:"patroni_version"`
+	ServerVersion  int             `json:"server_version,omitempty"`
+	DCSLastSeen    *time.Time      `json:"dcs_last_seen,omitempty"`
+	TTL            int             `json:"ttl,omitempty"`
+	LoopWait       int             `json:"loop_wait,omitempty"`
+	RetryTimeout   int             `json:"retry_timeout,omitempty"`
 	Members        []ClusterMember `json:"members"`
 }
 

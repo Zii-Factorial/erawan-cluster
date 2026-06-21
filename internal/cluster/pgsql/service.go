@@ -502,16 +502,6 @@ func (s *Service) doRemoveMember(ctx context.Context, cfg memberRunConfig) StepR
 	return s.runRemMemberStep(ctx, cfg)
 }
 
-func stepError(result StepResult) error {
-	if result.Status != JobStatusCompleted {
-		if result.Message != "" {
-			return fmt.Errorf("%s", result.Message)
-		}
-		return fmt.Errorf("step %s failed", result.Name)
-	}
-	return nil
-}
-
 func (s *Service) Get(jobID string) (*Job, error) {
 	job, err := s.store.Load(jobID)
 	if err != nil {

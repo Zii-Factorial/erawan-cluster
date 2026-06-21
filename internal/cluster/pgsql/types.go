@@ -26,7 +26,7 @@ type DeployRequest struct {
 	NewDB              string   `json:"new_db"`
 	SSHPort            int      `json:"ssh_port"`
 	PostgresPort       int      `json:"postgres_port"`
-	PostgresVersion    int      `json:"postgres_version"`    // major version; default 16
+	PostgresVersion    int      `json:"postgres_version"` // major version; default 16
 	StepTimeoutSeconds int      `json:"step_timeout_seconds"`
 }
 
@@ -107,7 +107,7 @@ type RemoveMemberRequest struct {
 }
 
 type MemberOperation struct {
-	Type        string   `json:"type"`         // "add" or "remove"
+	Type        string   `json:"type"` // "add" or "remove"
 	MemberIPs   []string `json:"member_ips"`
 	SourceJobID string   `json:"source_job_id"`
 }

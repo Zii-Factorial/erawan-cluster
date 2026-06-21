@@ -443,26 +443,3 @@ var systemUsers = map[string]bool{
 	"mysql.session":    true,
 	"mysql.infoschema": true,
 }
-
-func appUsers(ctx context.Context, db *sql.DB) ([]string, error) {
-	rows, err := db.QueryContext(ctx,
-		`SELECT User FROM mysql.user
-		  WHERE Host = '%'
-		    AND User NOT IN ('root','mysql.sys','mysql.session','mysql.infoschema')
-		    AND Super_priv = 'N'
-		    AND User != ''
-		  ORDER BY User`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
-		}
-		out = append(out, name)
-	}
-	return out, rows.Err()
-}

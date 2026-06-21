@@ -9,18 +9,18 @@ import (
 )
 
 type Service struct {
-	ctx               context.Context
-	store             *Store
-	runner            *Runner
-	collector         *Collector
-	steps             []step
-	sshUser           string
-	sshKeyPath        string
-	start             func(func())
-	runDeployStep     func(context.Context, runConfig) StepResult
-	runRollbackStep   func(context.Context, string, StoredSpec, SecretInput, time.Duration) StepResult
-	runAddMemberStep  func(context.Context, memberRunConfig) StepResult
-	runRemMemberStep  func(context.Context, memberRunConfig) StepResult
+	ctx              context.Context
+	store            *Store
+	runner           *Runner
+	collector        *Collector
+	steps            []step
+	sshUser          string
+	sshKeyPath       string
+	start            func(func())
+	runDeployStep    func(context.Context, runConfig) StepResult
+	runRollbackStep  func(context.Context, string, StoredSpec, SecretInput, time.Duration) StepResult
+	runAddMemberStep func(context.Context, memberRunConfig) StepResult
+	runRemMemberStep func(context.Context, memberRunConfig) StepResult
 }
 
 type step struct {
@@ -87,21 +87,21 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 		UpdatedAt:         time.Now().UTC(),
 		LastCompletedStep: -1,
 		Request: StoredSpec{
-			AdminUsername: req.AdminUsername,
-			ClusterName:          req.ClusterName,
-			PrimaryIP:            req.PrimaryIP,
-			StandbyIPs:           req.StandbyIPs,
-			NewUser:              req.NewUser,
-			NewUserSSLRequired:   req.NewUserSSLRequired,
-			NewDB:                req.NewDB,
-			AssumePrepared:       req.AssumePrepared,
-			BootstrapRouter:      req.BootstrapRouterEnabled(),
-			SSHUser:              s.sshUser,
-			SSHPrivateKeyPath:    s.sshKeyPath,
-			SSHPort:              req.SSHPort,
-			MySQLPort:            req.MySQLPort,
-			MySQLVersion:         req.MySQLVersion,
-			StepTimeoutSeconds:   req.StepTimeoutSeconds,
+			AdminUsername:      req.AdminUsername,
+			ClusterName:        req.ClusterName,
+			PrimaryIP:          req.PrimaryIP,
+			StandbyIPs:         req.StandbyIPs,
+			NewUser:            req.NewUser,
+			NewUserSSLRequired: req.NewUserSSLRequired,
+			NewDB:              req.NewDB,
+			AssumePrepared:     req.AssumePrepared,
+			BootstrapRouter:    req.BootstrapRouterEnabled(),
+			SSHUser:            s.sshUser,
+			SSHPrivateKeyPath:  s.sshKeyPath,
+			SSHPort:            req.SSHPort,
+			MySQLPort:          req.MySQLPort,
+			MySQLVersion:       req.MySQLVersion,
+			StepTimeoutSeconds: req.StepTimeoutSeconds,
 		},
 		Steps: make([]StepResult, 0, len(s.steps)+1),
 	}
@@ -112,9 +112,9 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 	}
 
 	secrets := SecretInput{
-		RootPassword:         req.RootPassword,
-		AdminPassword: stringOrGenerated(req.AdminPassword),
-		NewUserPassword:      req.NewUserPassword,
+		RootPassword:    req.RootPassword,
+		AdminPassword:   stringOrGenerated(req.AdminPassword),
+		NewUserPassword: req.NewUserPassword,
 	}
 	if err := s.store.SaveSecret(job.ID, StoredSecret{AdminUser: req.AdminUsername, AdminPassword: secrets.AdminPassword}); err != nil {
 		return nil, err
@@ -481,16 +481,6 @@ func (s *Service) doRemoveMember(ctx context.Context, cfg memberRunConfig) StepR
 		}
 	}
 	return s.runRemMemberStep(ctx, cfg)
-}
-
-func stepError(result StepResult) error {
-	if result.Status != JobStatusCompleted {
-		if result.Message != "" {
-			return fmt.Errorf("%s", result.Message)
-		}
-		return fmt.Errorf("step %s failed", result.Name)
-	}
-	return nil
 }
 
 func (s *Service) Get(jobID string) (*Job, error) {

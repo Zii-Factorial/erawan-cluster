@@ -106,16 +106,16 @@ func ValidateDeployRequest(req *DeployRequest) error {
 
 func ValidateResumeSecrets(req ResumeRequest) (SecretInput, error) {
 	secret := SecretInput{
-		RootPassword:         strings.TrimSpace(req.RootPassword),
-		AdminPassword: strings.TrimSpace(req.AdminPassword),
-		NewUserPassword:      strings.TrimSpace(req.NewUserPassword),
+		RootPassword:    strings.TrimSpace(req.RootPassword),
+		AdminPassword:   strings.TrimSpace(req.AdminPassword),
+		NewUserPassword: strings.TrimSpace(req.NewUserPassword),
 	}
 	return secret, nil
 }
 
 func ValidateRollbackSecrets(req RollbackRequest) (SecretInput, error) {
 	secret := SecretInput{
-		RootPassword:         strings.TrimSpace(req.RootPassword),
+		RootPassword:  strings.TrimSpace(req.RootPassword),
 		AdminPassword: strings.TrimSpace(req.AdminPassword),
 	}
 	return secret, nil

@@ -137,14 +137,14 @@ func TestResumeSchedulesBackgroundExecution(t *testing.T) {
 		UpdatedAt:         time.Now().UTC(),
 		LastCompletedStep: 0,
 		Request: StoredSpec{
-			AdminUsername: "clusteradmin",
-			ClusterName:          "prodCluster",
-			PrimaryIP:            "10.0.0.1",
-			SSHUser:              "clusterops",
-			SSHPrivateKeyPath:    "/tmp/test-key",
-			SSHPort:              22,
-			MySQLPort:            3306,
-			StepTimeoutSeconds:   30,
+			AdminUsername:      "clusteradmin",
+			ClusterName:        "prodCluster",
+			PrimaryIP:          "10.0.0.1",
+			SSHUser:            "clusterops",
+			SSHPrivateKeyPath:  "/tmp/test-key",
+			SSHPort:            22,
+			MySQLPort:          3306,
+			StepTimeoutSeconds: 30,
 		},
 	}
 	if err := store.Save(job); err != nil {
