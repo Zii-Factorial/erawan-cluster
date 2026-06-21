@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strings"
 
 	mysqlcluster "erawan-cluster/internal/cluster/mysql"
 	mysqldbmanager "erawan-cluster/internal/cluster/mysql/dbmanager"
@@ -62,14 +61,9 @@ func buildApplication(ctx context.Context, cfg runtimeConfig) (*application, err
 }
 
 // validateSecurityConfig fails start-up closed when the API is unauthenticated
-// outside development. An empty API_KEY disables auth entirely, which is only
-// acceptable for local dev (ENV=dev); in any other environment the process
-// refuses to start rather than expose an open control plane.
+// outside development (see security.ValidateAuthConfig).
 func validateSecurityConfig(cfg runtimeConfig) error {
-	if strings.TrimSpace(cfg.server.apiKey) == "" && !strings.EqualFold(cfg.server.env, "dev") {
-		return fmt.Errorf("API_KEY is required when ENV != dev: refusing to start an unauthenticated control plane")
-	}
-	return nil
+	return security.ValidateAuthConfig(cfg.server.env, cfg.server.apiKey)
 }
 
 // buildHAProxy constructs the HAProxy service that renders per-tenant config
@@ -118,6 +112,9 @@ func buildMySQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConf
 	return store, svc, nil
 }
 
+/**
+*
+ */
 // buildPGSQLCluster assembles the PostgreSQL cluster engine. It mirrors
 // buildMySQLCluster but its runner has no rollback playbook, because the
 // PostgreSQL deploy flow does not support rollback. The store is returned for

@@ -17,6 +17,16 @@ build:
 test:
 	@go test ./...
 
+# Run only the black-box unit suite under tests/unit.
+.PHONY: test-unit
+test-unit:
+	@go test ./tests/unit/...
+
+# Unit suite with coverage attributed to the production packages it exercises.
+.PHONY: cover
+cover:
+	@go test -coverpkg=./internal/...,./cmd/... ./tests/unit/...
+
 .PHONY: fmt
 fmt:
 	@gofmt -w cmd internal

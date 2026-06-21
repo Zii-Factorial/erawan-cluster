@@ -262,7 +262,7 @@ func (s *Service) CreateMySQLConfig(ctx context.Context, in CreateMySQLConfigInp
 	if err != nil {
 		return err
 	}
-	return s.applyConfig(ctx, in.Port, buildMySQLConfig(in.Port, nodes, in.DBPort))
+	return s.applyConfig(ctx, in.Port, BuildMySQLConfig(in.Port, nodes, in.DBPort))
 }
 
 func (s *Service) CreatePGSQLConfig(ctx context.Context, in CreatePGSQLConfigInput) error {
@@ -280,7 +280,7 @@ func (s *Service) CreatePGSQLConfig(ctx context.Context, in CreatePGSQLConfigInp
 	if patroniPort == 0 {
 		patroniPort = defaultPatroniPort
 	}
-	return s.applyConfig(ctx, in.Port, buildPGSQLConfig(in.Port, nodes, in.DBPort, patroniPort))
+	return s.applyConfig(ctx, in.Port, BuildPGSQLConfig(in.Port, nodes, in.DBPort, patroniPort))
 }
 
 func (s *Service) applyConfig(ctx context.Context, port int, content string) error {
@@ -544,7 +544,10 @@ func waitForPortState(port int, shouldListen bool, timeout time.Duration) error 
 	}
 }
 
-func buildMySQLConfig(port int, nodeIPs []string, dbPort int) string {
+// BuildMySQLConfig renders the HAProxy `listen` section for a MySQL Router
+// cluster on the given frontend port, routing to nodeIPs on dbPort. It is a
+// pure function (no I/O); CreateMySQLConfig writes and reloads the result.
+func BuildMySQLConfig(port int, nodeIPs []string, dbPort int) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("listen node_%d\n", port))
 	b.WriteString(fmt.Sprintf("    bind *:%d\n", port))
@@ -596,7 +599,11 @@ func buildMySQLConfig(port int, nodeIPs []string, dbPort int) string {
 	return b.String()
 }
 
-func buildPGSQLConfig(port int, nodeIPs []string, dbPort int, patroniPort int) string {
+// BuildPGSQLConfig renders the HAProxy `listen` section for a PostgreSQL/Patroni
+// cluster on the given frontend port, routing to nodeIPs on dbPort and using the
+// Patroni REST API on patroniPort for leader health checks. It is a pure
+// function (no I/O); CreatePGSQLConfig writes and reloads the result.
+func BuildPGSQLConfig(port int, nodeIPs []string, dbPort int, patroniPort int) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("listen node_%d\n", port))
 	b.WriteString(fmt.Sprintf("    bind *:%d\n", port))
@@ -685,7 +692,7 @@ func (s *Service) AddMySQLMember(ctx context.Context, in AddMemberConfigInput) e
 	}
 
 	ips = append(ips, nodeIP)
-	return s.applyConfig(ctx, in.Port, buildMySQLConfig(in.Port, ips, dbPort))
+	return s.applyConfig(ctx, in.Port, BuildMySQLConfig(in.Port, ips, dbPort))
 }
 
 // AddPGSQLMember reads the existing PostgreSQL config for the given port, appends the new
@@ -725,7 +732,7 @@ func (s *Service) AddPGSQLMember(ctx context.Context, in AddMemberConfigInput) e
 	}
 
 	ips = append(ips, nodeIP)
-	return s.applyConfig(ctx, in.Port, buildPGSQLConfig(in.Port, ips, dbPort, patroniPort))
+	return s.applyConfig(ctx, in.Port, BuildPGSQLConfig(in.Port, ips, dbPort, patroniPort))
 }
 
 // parseConfigServers extracts backend server IPs and the db port from a rendered config.
