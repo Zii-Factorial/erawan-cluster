@@ -25,9 +25,10 @@ coverage.txt
 /tmp/
 /.cache/
 
-# Editor/IDE
+# Editor/IDE and local agent config
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 *~
@@ -35,6 +36,3 @@ coverage.txt
 # OS files
 .DS_Store
 Thumbs.db
-
-/.vscode
-/.claude
