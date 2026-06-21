@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
+	_ "net/http/pprof" // registers /debug/pprof handlers on the loopback pprof server
 	"path/filepath"
 	"time"
 
@@ -36,6 +38,7 @@ type application struct {
 	mysqlDB      *mysqldbmanager.Service
 	cipher       *security.Cipher
 	baseDir      string
+	enablePprof  bool
 }
 
 // mount builds the chi router: it installs the cross-cutting middleware chain
@@ -125,17 +128,42 @@ func (app *application) run(ctx context.Context, mux *chi.Mux) error {
 		IdleTimeout:  time.Minute,
 	}
 
+	if app.enablePprof {
+		app.startPprof()
+	}
+
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutCtx)
+		// Drain in-flight background cluster jobs (their Ansible runs are already
+		// being cancelled via the root context) so their final state is persisted
+		// before the process exits.
+		app.mysqlCluster.Wait(shutCtx)
+		app.pgsqlCluster.Wait(shutCtx)
 	}()
 
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
+}
+
+// startPprof serves the net/http/pprof endpoints on the loopback interface only,
+// so profiling data is never exposed on the public listener. Enabled via
+// ENABLE_PPROF; intended for diagnosing leaks/CPU in a controlled environment.
+func (app *application) startPprof() {
+	go func() {
+		log.Printf("pprof listening on 127.0.0.1:6060 (loopback only)")
+		pprofSrv := &http.Server{
+			Addr:              "127.0.0.1:6060",
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		if err := pprofSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("pprof server: %v", err)
+		}
+	}()
 }
 
 // bodyLimit returns middleware that caps the request body at limit bytes,

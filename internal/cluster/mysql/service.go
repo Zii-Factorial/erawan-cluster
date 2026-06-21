@@ -9,6 +9,10 @@ import (
 )
 
 type Service struct {
+	// ctx is the long-lived base context for background jobs, which intentionally
+	// outlive the originating HTTP request. It is set once at start-up via
+	// SetContext to the process signal context, so a shutdown cancels in-flight
+	// Ansible runs. It is never derived from a per-request context.
 	ctx              context.Context
 	store            *Store
 	runner           *Runner
@@ -16,12 +20,16 @@ type Service struct {
 	steps            []step
 	sshUser          string
 	sshKeyPath       string
+	launcher         *core.Launcher
 	start            func(func())
 	runDeployStep    func(context.Context, runConfig) StepResult
 	runRollbackStep  func(context.Context, string, StoredSpec, SecretInput, time.Duration) StepResult
 	runAddMemberStep func(context.Context, memberRunConfig) StepResult
 	runRemMemberStep func(context.Context, memberRunConfig) StepResult
 }
+
+// defaultMaxConcurrentJobs bounds concurrent background jobs until configured.
+const defaultMaxConcurrentJobs = 4
 
 type step = core.Step
 
@@ -43,7 +51,8 @@ func NewService(store *Store, runner *Runner) *Service {
 			{Name: "bootstrap_router", Tag: "bootstrap_router", Skippable: true},
 		},
 	}
-	svc.start = func(fn func()) { go fn() }
+	svc.launcher = core.NewLauncher(defaultMaxConcurrentJobs)
+	svc.start = svc.launcher.Go
 	if runner != nil {
 		svc.runDeployStep = runner.RunDeployStep
 		svc.runRollbackStep = runner.RunRollback
@@ -55,6 +64,19 @@ func NewService(store *Store, runner *Runner) *Service {
 
 func (s *Service) SetContext(ctx context.Context) {
 	s.ctx = ctx
+}
+
+// SetMaxConcurrentJobs bounds how many background jobs run at once. It must be
+// called at start-up, before any job is launched.
+func (s *Service) SetMaxConcurrentJobs(n int) {
+	s.launcher = core.NewLauncher(n)
+	s.start = s.launcher.Go
+}
+
+// Wait blocks until all in-flight background jobs finish or ctx is done. Used
+// during graceful shutdown to drain running jobs.
+func (s *Service) Wait(ctx context.Context) {
+	s.launcher.Wait(ctx)
 }
 
 func (s *Service) SetSSHConfig(user, privateKeyPath string) error {
@@ -377,9 +399,15 @@ func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJo
 		memberJob.Steps = append(memberJob.Steps, result)
 
 		if result.Status == JobStatusCompleted {
-			deployJob.Request.StandbyIPs = append(deployJob.Request.StandbyIPs, ip)
+			// Re-read and persist the deploy job under the store lock so a
+			// concurrent member operation on the same cluster cannot clobber the
+			// standby list.
+			_ = s.store.Update(deployJob.ID, func(j *Job) error {
+				j.Request.StandbyIPs = append(j.Request.StandbyIPs, ip)
+				deployJob.Request.StandbyIPs = j.Request.StandbyIPs
+				return nil
+			})
 			memberJob.Request.StandbyIPs = deployJob.Request.StandbyIPs
-			_ = s.store.Save(deployJob)
 		} else {
 			memberJob.Status = JobStatusFailed
 			memberJob.Error = result.Message
@@ -428,15 +456,14 @@ func (s *Service) executeMemberRemove(ctx context.Context, memberJob *Job, deplo
 	memberJob.Steps = append(memberJob.Steps, result)
 
 	if result.Status == JobStatusCompleted {
-		updated := make([]string, 0, len(deployJob.Request.StandbyIPs))
-		for _, existingIP := range deployJob.Request.StandbyIPs {
-			if existingIP != ip {
-				updated = append(updated, existingIP)
-			}
-		}
-		deployJob.Request.StandbyIPs = updated
-		memberJob.Request.StandbyIPs = updated
-		_ = s.store.Save(deployJob)
+		// Re-read and persist the deploy job under the store lock so a concurrent
+		// member operation on the same cluster cannot clobber the standby list.
+		_ = s.store.Update(deployJob.ID, func(j *Job) error {
+			j.Request.StandbyIPs = without(j.Request.StandbyIPs, ip)
+			deployJob.Request.StandbyIPs = j.Request.StandbyIPs
+			return nil
+		})
+		memberJob.Request.StandbyIPs = deployJob.Request.StandbyIPs
 		memberJob.Status = JobStatusCompleted
 		memberJob.Error = ""
 	} else {
@@ -669,6 +696,17 @@ func shouldSkipStep(st step, spec StoredSpec) (string, bool) {
 		return "assume_prepared is true", true
 	}
 	return "", false
+}
+
+// without returns slice with every occurrence of target removed.
+func without(slice []string, target string) []string {
+	out := make([]string, 0, len(slice))
+	for _, v := range slice {
+		if v != target {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func newJobID() string { return core.NewJobID() }

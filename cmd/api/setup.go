@@ -28,12 +28,12 @@ func buildApplication(ctx context.Context, cfg runtimeConfig) (*application, err
 		return nil, err
 	}
 
-	mysqlStore, mysqlSvc, err := buildMySQLCluster(ctx, cfg.mysql, cfg.ssh)
+	mysqlStore, mysqlSvc, err := buildMySQLCluster(ctx, cfg.mysql, cfg.ssh, cfg.maxConcurrentJobs)
 	if err != nil {
 		return nil, err
 	}
 
-	pgsqlStore, pgsqlSvc, err := buildPGSQLCluster(ctx, cfg.pgsql, cfg.ssh)
+	pgsqlStore, pgsqlSvc, err := buildPGSQLCluster(ctx, cfg.pgsql, cfg.ssh, cfg.maxConcurrentJobs)
 	if err != nil {
 		return nil, err
 	}
@@ -52,6 +52,7 @@ func buildApplication(ctx context.Context, cfg runtimeConfig) (*application, err
 		mysqlDB:      mysqldbmanager.NewService(mysqlStore),
 		cipher:       cipher,
 		baseDir:      cfg.baseDir,
+		enablePprof:  cfg.enablePprof,
 	}, nil
 }
 
@@ -77,7 +78,7 @@ func buildHAProxy(cfg haproxyConfig) (*haproxy.Service, error) {
 //
 // The store's stale jobs are marked failed on boot so that a crash mid-deploy
 // does not leave jobs stuck in a perpetual "running" state.
-func buildMySQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConfig) (*mysqlcluster.Store, *mysqlcluster.Service, error) {
+func buildMySQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConfig, maxConcurrentJobs int) (*mysqlcluster.Store, *mysqlcluster.Service, error) {
 	store, err := mysqlcluster.NewStore(cfg.stateDir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("init mysql cluster store: %w", err)
@@ -90,6 +91,7 @@ func buildMySQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConf
 	runner.SetDebug(cfg.ansible.verbosity, cfg.ansible.debug, cfg.ansible.stepOutputMaxChars)
 
 	svc := mysqlcluster.NewService(store, runner)
+	svc.SetMaxConcurrentJobs(maxConcurrentJobs)
 	svc.SetContext(ctx)
 	if err := applySSHConfig(ssh, svc.SetSSHConfig); err != nil {
 		return nil, nil, fmt.Errorf("init mysql ssh config: %w", err)
@@ -103,7 +105,7 @@ func buildMySQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConf
 // buildMySQLCluster but its runner has no rollback playbook, because the
 // PostgreSQL deploy flow does not support rollback. The store is returned for
 // reuse by the PostgreSQL database manager.
-func buildPGSQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConfig) (*pgsqlcluster.Store, *pgsqlcluster.Service, error) {
+func buildPGSQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConfig, maxConcurrentJobs int) (*pgsqlcluster.Store, *pgsqlcluster.Service, error) {
 	store, err := pgsqlcluster.NewStore(cfg.stateDir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("init pgsql cluster store: %w", err)
@@ -116,6 +118,7 @@ func buildPGSQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConf
 	runner.SetDebug(cfg.ansible.verbosity, cfg.ansible.debug, cfg.ansible.stepOutputMaxChars)
 
 	svc := pgsqlcluster.NewService(store, runner)
+	svc.SetMaxConcurrentJobs(maxConcurrentJobs)
 	svc.SetContext(ctx)
 	if err := applySSHConfig(ssh, svc.SetSSHConfig); err != nil {
 		return nil, nil, fmt.Errorf("init pgsql ssh config: %w", err)

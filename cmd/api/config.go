@@ -31,13 +31,15 @@ type config struct {
 // environment ad hoc throughout main) keeps configuration in one auditable
 // place and makes adding a new engine a matter of adding one more field.
 type runtimeConfig struct {
-	server        config
-	haproxy       haproxyConfig
-	ssh           sshConfig
-	mysql         clusterEngineConfig
-	pgsql         clusterEngineConfig
-	encryptionKey string
-	baseDir       string
+	server            config
+	haproxy           haproxyConfig
+	ssh               sshConfig
+	mysql             clusterEngineConfig
+	pgsql             clusterEngineConfig
+	encryptionKey     string
+	baseDir           string
+	maxConcurrentJobs int  // cap on concurrent background cluster jobs (ansible runs)
+	enablePprof       bool // expose /debug/pprof on the loopback interface
 }
 
 // haproxyConfig describes how the HAProxy service writes tenant fragments and
@@ -114,13 +116,15 @@ func loadConfig() runtimeConfig {
 	pgsqlCfg := loadClusterEngineConfig("pgsql", baseDir, sharedStateDir, ansibleBin)
 
 	return runtimeConfig{
-		server:        loadServerConfig(),
-		haproxy:       loadHAProxyConfig(),
-		ssh:           loadSSHConfig(),
-		mysql:         mysqlCfg,
-		pgsql:         pgsqlCfg,
-		encryptionKey: env.GetString("ENCRYPTION_KEY", ""),
-		baseDir:       baseDir,
+		server:            loadServerConfig(),
+		haproxy:           loadHAProxyConfig(),
+		ssh:               loadSSHConfig(),
+		mysql:             mysqlCfg,
+		pgsql:             pgsqlCfg,
+		encryptionKey:     env.GetString("ENCRYPTION_KEY", ""),
+		baseDir:           baseDir,
+		maxConcurrentJobs: env.GetInt("CLUSTER_MAX_CONCURRENT_JOBS", 4),
+		enablePprof:       env.GetBool("ENABLE_PPROF", false),
 	}
 }
 
