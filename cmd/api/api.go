@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -23,6 +22,11 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
+// application is the long-lived dependency container shared by every HTTP
+// handler. It holds the request-time config plus one service per subsystem:
+// the HAProxy renderer, the two SQL cluster engines and their database
+// managers, and the optional payload cipher. It is built once, in
+// buildApplication (setup.go), and never mutated after start-up.
 type application struct {
 	config       config
 	haproxy      *haproxy.Service
@@ -34,14 +38,12 @@ type application struct {
 	baseDir      string
 }
 
-type config struct {
-	addr      string
-	env       string
-	apiKey    string
-	version   string
-	proxyHost string // HAProxy host for metric connections; from PROXY_HOST env (default 127.0.0.1)
-}
-
+// mount builds the chi router: it installs the cross-cutting middleware chain
+// (request IDs, logging, recovery, timeout, API-key auth, and the optional
+// encrypt/decrypt + body-limit pipeline) and then registers the route groups
+// for docs, HAProxy, and each cluster engine. Returning the assembled router
+// keeps routing declarative and engine-scoped — a new engine adds one Route
+// block here.
 func (app *application) mount() *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -109,6 +111,11 @@ func (app *application) mount() *chi.Mux {
 	return r
 }
 
+// run starts the HTTP server and blocks until it stops. A background goroutine
+// watches ctx; when it is cancelled (on SIGINT/SIGTERM) the server is given a
+// 30-second window to drain in-flight requests before exiting. The long write
+// timeout accommodates streaming Ansible deploy output. ErrServerClosed from a
+// clean shutdown is treated as success.
 func (app *application) run(ctx context.Context, mux *chi.Mux) error {
 	srv := &http.Server{
 		Addr:         app.config.addr,
@@ -131,6 +138,9 @@ func (app *application) run(ctx context.Context, mux *chi.Mux) error {
 	return nil
 }
 
+// bodyLimit returns middleware that caps the request body at limit bytes,
+// rejecting larger payloads. It guards against memory exhaustion from oversized
+// (or maliciously large) requests before the body is read or decrypted.
 func bodyLimit(limit int64) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -140,14 +150,8 @@ func bodyLimit(limit int64) func(http.Handler) http.Handler {
 	}
 }
 
+// docsHandler serves the static API documentation page (index.html) from the
+// project base directory.
 func (app *application) docsHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, filepath.Join(app.baseDir, "index.html"))
-}
-
-func projectBaseDir() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "."
-	}
-	return wd
 }
