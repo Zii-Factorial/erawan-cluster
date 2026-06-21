@@ -2,12 +2,12 @@ package pgsql
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
+
+	"erawan-cluster/internal/cluster/core"
 )
 
 type Service struct {
@@ -24,11 +24,7 @@ type Service struct {
 	runRemMemberStep func(context.Context, memberRunConfig) StepResult
 }
 
-type step struct {
-	Name      string
-	Tag       string
-	Skippable bool
-}
+type step = core.Step
 
 func NewService(store *Store, runner *Runner) *Service {
 	svc := &Service{
@@ -647,23 +643,11 @@ func (s *Service) ConnectionInfo(ctx context.Context, jobID string) (host string
 }
 
 func (s *Service) updateJobProgress(job *Job) {
+	total := s.totalStepsFor(job.Request)
 	if job.MemberOp != nil {
-		job.TotalSteps = len(job.MemberOp.MemberIPs)
-	} else {
-		job.TotalSteps = s.totalStepsFor(job.Request)
+		total = len(job.MemberOp.MemberIPs)
 	}
-	job.CompletedSteps = completedSteps(job)
-	if job.Status == JobStatusCompleted && job.TotalSteps > 0 {
-		job.CompletedSteps = job.TotalSteps
-	}
-	if job.CompletedSteps > job.TotalSteps {
-		job.CompletedSteps = job.TotalSteps
-	}
-	if job.CompletedSteps < 0 || job.TotalSteps == 0 {
-		job.ProgressPercent = 0
-		return
-	}
-	job.ProgressPercent = job.CompletedSteps * 100 / job.TotalSteps
+	core.ApplyProgress(job, total)
 }
 
 func (s *Service) totalStepsFor(spec StoredSpec) int {
@@ -677,16 +661,6 @@ func (s *Service) totalStepsFor(spec StoredSpec) int {
 	return total
 }
 
-func completedSteps(job *Job) int {
-	count := 0
-	for _, step := range job.Steps {
-		if step.Status == JobStatusCompleted {
-			count++
-		}
-	}
-	return count
-}
-
 func shouldSkipStep(st step, spec StoredSpec) (string, bool) {
 	if st.Name == "standby_config" && len(spec.StandbyIPs) == 0 {
 		return "standby_ips is empty", true
@@ -697,17 +671,6 @@ func shouldSkipStep(st step, spec StoredSpec) (string, bool) {
 	return "", false
 }
 
-func newJobID() string {
-	raw := make([]byte, 12)
-	_, _ = rand.Read(raw)
-	return hex.EncodeToString(raw)
-}
+func newJobID() string { return core.NewJobID() }
 
-func stringOrGenerated(value string) string {
-	if value != "" {
-		return value
-	}
-	raw := make([]byte, 24)
-	_, _ = rand.Read(raw)
-	return hex.EncodeToString(raw)
-}
+func stringOrGenerated(value string) string { return core.OrRandomSecret(value) }

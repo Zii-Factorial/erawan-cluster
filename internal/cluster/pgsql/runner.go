@@ -1,17 +1,13 @@
 package pgsql
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"erawan-cluster/internal/cluster/core"
 )
 
 const (
@@ -85,58 +81,76 @@ func (r *Runner) RunRemoveMember(ctx context.Context, cfg memberRunConfig) StepR
 	return r.runMember(ctx, cfg, r.removeMemberPlaybook, "remove_member")
 }
 
-func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, stepName string) (result StepResult) {
-	result = StepResult{
-		Name:      stepName,
-		Status:    JobStatusRunning,
-		StartedAt: time.Now().UTC(),
-		ExitCode:  -1,
-	}
-	defer func() { result.EndedAt = time.Now().UTC() }()
-
-	if strings.TrimSpace(playbook) == "" {
-		result.Status = JobStatusFailed
-		result.Message = "playbook path is not configured"
-		return
-	}
-
-	workspace, err := os.MkdirTemp("", "pgsql-member-job-")
-	if err != nil {
-		result.Status = JobStatusFailed
-		result.Message = fmt.Sprintf("create temp dir: %v", err)
-		return
-	}
-	defer os.RemoveAll(workspace)
-
-	inventoryPath := filepath.Join(workspace, "inventory.yml")
-	varsPath := filepath.Join(workspace, "vars.json")
-
-	var inventory string
-	if stepName == "add_member" {
-		inventory = buildAddMemberInventoryYAML(cfg.spec, cfg.memberIP)
-	} else {
-		// Removed node must NOT appear in pgsql_standby so the verify play
-		// (hosts: pgsql_primary:pgsql_standby) does not try to SSH to a stopped node.
-		// It is still present in the `all` group so Play 1 can attempt a graceful stop.
-		inventory = buildRemoveMemberInventoryYAML(cfg.spec, cfg.memberIP)
-	}
-	if err := os.WriteFile(inventoryPath, []byte(inventory), 0o600); err != nil {
-		result.Status = JobStatusFailed
-		result.Message = fmt.Sprintf("write inventory: %v", err)
-		return
-	}
-
+// run executes one tagged step of the deploy playbook.
+func (r *Runner) run(ctx context.Context, cfg runConfig) StepResult {
 	stepTimeout := cfg.spec.StepTimeoutSeconds
 	if stepTimeout <= 0 {
 		stepTimeout = 900
 	}
+	extraVars := map[string]any{
+		"deployment_job_id":           cfg.jobID,
+		"cluster_name":                cfg.spec.ClusterName,
+		"primary_ip":                  cfg.spec.PrimaryIP,
+		"standby_ips":                 cfg.spec.StandbyIPs,
+		"postgres_superuser":          defaultPostgresSuperuser,
+		"postgres_superuser_password": cfg.secret.PostgresPassword,
+		"replication_user":            defaultReplicationUser,
+		"replication_password":        cfg.secret.ReplicatorPassword,
+		"patroni_admin_user":          cfg.spec.AdminUsername,
+		"patroni_admin_password":      cfg.secret.AdminPassword,
+		"new_user":                    cfg.spec.NewUser,
+		"new_user_password":           cfg.secret.NewUserPassword,
+		"new_user_ssl_required":       cfg.spec.NewUserSSLRequired,
+		"new_db":                      cfg.spec.NewDB,
+		"postgres_port":               cfg.spec.PostgresPort,
+		"erawan_pg_major_version":     cfg.spec.PostgresVersion,
+		"postgresql_cluster_name":     defaultPostgreSQLCluster,
+		"patroni_namespace":           "/db/",
+		"patroni_rest_port":           8008,
+		"patroni_config_path":         "/etc/patroni/patroni.yml",
+		"patroni_pgpass_path":         "/etc/patroni/patroni.pgpass",
+		"etcd_config_path":            "/etc/etcd/etcd.conf",
+		"etcd_cluster_token":          cfg.spec.ClusterName + "-etcd-cluster-token",
+		"etcd_client_port":            2379,
+		"etcd_peer_port":              2380,
+		"step_timeout_seconds":        stepTimeout,
+	}
+	return core.AnsibleRun(ctx, core.AnsibleSpec{
+		Bin:             r.ansibleBin,
+		Playbook:        r.deployPlaybook,
+		Inventory:       buildInventoryYAML(cfg.spec),
+		ExtraVars:       extraVars,
+		Tags:            []string{cfg.step.Tag},
+		Verbosity:       r.ansibleVerbosity,
+		StreamLogs:      r.streamLogs,
+		MaxOutputChars:  r.maxOutputChars,
+		Timeout:         cfg.timeout,
+		StepName:        cfg.step.Name,
+		WorkspacePrefix: "pgsql-cluster-job-",
+		Env:             ansibleEnv(),
+	})
+}
+
+// runMember executes the add/remove-member playbook for a single node.
+func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, stepName string) StepResult {
+	stepTimeout := cfg.spec.StepTimeoutSeconds
+	if stepTimeout <= 0 {
+		stepTimeout = 900
+	}
+
+	var inventory string
 	// effectiveStandbys reflects the expected post-operation standby list so that
 	// verify_cluster's member count assertions are correct for both add and remove.
 	effectiveStandbys := make([]string, len(cfg.spec.StandbyIPs))
 	copy(effectiveStandbys, cfg.spec.StandbyIPs)
 	if stepName == "add_member" {
+		inventory = buildAddMemberInventoryYAML(cfg.spec, cfg.memberIP)
 		effectiveStandbys = append(effectiveStandbys, cfg.memberIP)
 	} else {
+		// Removed node must NOT appear in pgsql_standby so the verify play
+		// (hosts: pgsql_primary:pgsql_standby) does not try to SSH to a stopped node.
+		// It is still present in the `all` group so Play 1 can attempt a graceful stop.
+		inventory = buildRemoveMemberInventoryYAML(cfg.spec, cfg.memberIP)
 		filtered := effectiveStandbys[:0]
 		for _, ip := range effectiveStandbys {
 			if ip != cfg.memberIP {
@@ -145,6 +159,7 @@ func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, s
 		}
 		effectiveStandbys = filtered
 	}
+
 	extraVars := map[string]any{
 		"deployment_job_id":           cfg.jobID,
 		"cluster_name":                cfg.spec.ClusterName,
@@ -173,72 +188,25 @@ func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, s
 		"expected_cluster_nodes":      len(effectiveStandbys) + 1,
 		"step_timeout_seconds":        stepTimeout,
 	}
+	return core.AnsibleRun(ctx, core.AnsibleSpec{
+		Bin:             r.ansibleBin,
+		Playbook:        playbook,
+		Inventory:       inventory,
+		ExtraVars:       extraVars,
+		Verbosity:       r.ansibleVerbosity,
+		StreamLogs:      r.streamLogs,
+		MaxOutputChars:  r.maxOutputChars,
+		Timeout:         cfg.timeout,
+		StepName:        stepName,
+		WorkspacePrefix: "pgsql-member-job-",
+		Env:             ansibleEnv(),
+	})
+}
 
-	sanitized, err := json.Marshal(extraVars)
-	if err != nil {
-		result.Status = JobStatusFailed
-		result.Message = fmt.Sprintf("marshal vars: %v", err)
-		return
-	}
-	if err := os.WriteFile(varsPath, sanitized, 0o600); err != nil {
-		result.Status = JobStatusFailed
-		result.Message = fmt.Sprintf("write vars: %v", err)
-		return
-	}
-
-	runTimeout := cfg.timeout
-	if runTimeout <= 0 {
-		runTimeout = 15 * time.Minute
-	}
-	stepCtx, cancel := context.WithTimeout(ctx, runTimeout)
-	defer cancel()
-
-	args := []string{
-		"-i", inventoryPath,
-		playbook,
-		"--extra-vars", "@" + varsPath,
-	}
-	if r.ansibleVerbosity > 0 {
-		args = append(args, "-"+strings.Repeat("v", r.ansibleVerbosity))
-	}
-
-	cmd := exec.CommandContext(stepCtx, r.ansibleBin, args...)
-	cmd.Env = append(os.Environ(), "ANSIBLE_HOST_KEY_CHECKING=False")
-
-	var stdout cappedBuffer
-	var stderr cappedBuffer
-	stdout.limit = r.maxOutputChars
-	stderr.limit = r.maxOutputChars
-	if r.streamLogs {
-		cmd.Stdout = io.MultiWriter(&stdout, os.Stdout)
-		cmd.Stderr = io.MultiWriter(&stderr, os.Stderr)
-	} else {
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-	}
-
-	err = cmd.Run()
-	result.Stdout = stdout.String()
-	result.Stderr = stderr.String()
-
-	if err == nil {
-		result.Status = JobStatusCompleted
-		result.ExitCode = 0
-		return
-	}
-
-	result.Status = JobStatusFailed
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		result.ExitCode = exitErr.ExitCode()
-	} else {
-		result.ExitCode = 1
-	}
-	if stepCtx.Err() == context.DeadlineExceeded {
-		result.Message = "step execution timed out"
-		return
-	}
-	result.Message = fmt.Sprintf("ansible step failed: %v", err)
-	return
+// ansibleEnv returns the environment overrides applied to every ansible-playbook
+// invocation for this engine.
+func ansibleEnv() []string {
+	return []string{"ANSIBLE_HOST_KEY_CHECKING=False"}
 }
 
 func buildAddMemberInventoryYAML(spec StoredSpec, newMemberIP string) string {
@@ -325,140 +293,6 @@ func buildRemoveMemberInventoryYAML(spec StoredSpec, removedIP string) string {
 	return b.String()
 }
 
-func (r *Runner) run(ctx context.Context, cfg runConfig) (result StepResult) {
-	result = StepResult{
-		Name:      cfg.step.Name,
-		Status:    JobStatusRunning,
-		StartedAt: time.Now().UTC(),
-		ExitCode:  -1,
-	}
-	defer func() { result.EndedAt = time.Now().UTC() }()
-
-	if strings.TrimSpace(r.deployPlaybook) == "" {
-		result.Status = JobStatusFailed
-		result.Message = "playbook path is not configured"
-		return
-	}
-
-	workspace, err := os.MkdirTemp("", "pgsql-cluster-job-")
-	if err != nil {
-		result.Status = JobStatusFailed
-		result.Message = fmt.Sprintf("create temp dir: %v", err)
-		return
-	}
-	defer os.RemoveAll(workspace)
-
-	inventoryPath := filepath.Join(workspace, "inventory.yml")
-	varsPath := filepath.Join(workspace, "vars.json")
-
-	if err := os.WriteFile(inventoryPath, []byte(buildInventoryYAML(cfg.spec)), 0o600); err != nil {
-		result.Status = JobStatusFailed
-		result.Message = fmt.Sprintf("write inventory: %v", err)
-		return
-	}
-
-	stepTimeout := cfg.spec.StepTimeoutSeconds
-	if stepTimeout <= 0 {
-		stepTimeout = 900
-	}
-	extraVars := map[string]any{
-		"deployment_job_id":           cfg.jobID,
-		"cluster_name":                cfg.spec.ClusterName,
-		"primary_ip":                  cfg.spec.PrimaryIP,
-		"standby_ips":                 cfg.spec.StandbyIPs,
-		"postgres_superuser":          defaultPostgresSuperuser,
-		"postgres_superuser_password": cfg.secret.PostgresPassword,
-		"replication_user":            defaultReplicationUser,
-		"replication_password":        cfg.secret.ReplicatorPassword,
-		"patroni_admin_user":          cfg.spec.AdminUsername,
-		"patroni_admin_password":      cfg.secret.AdminPassword,
-		"new_user":                    cfg.spec.NewUser,
-		"new_user_password":           cfg.secret.NewUserPassword,
-		"new_user_ssl_required":       cfg.spec.NewUserSSLRequired,
-		"new_db":                      cfg.spec.NewDB,
-		"postgres_port":               cfg.spec.PostgresPort,
-		"erawan_pg_major_version":     cfg.spec.PostgresVersion,
-		"postgresql_cluster_name":     defaultPostgreSQLCluster,
-		"patroni_namespace":           "/db/",
-		"patroni_rest_port":           8008,
-		"patroni_config_path":         "/etc/patroni/patroni.yml",
-		"patroni_pgpass_path":         "/etc/patroni/patroni.pgpass",
-		"etcd_config_path":            "/etc/etcd/etcd.conf",
-		"etcd_cluster_token":          cfg.spec.ClusterName + "-etcd-cluster-token",
-		"etcd_client_port":            2379,
-		"etcd_peer_port":              2380,
-		"step_timeout_seconds":        stepTimeout,
-	}
-
-	sanitized, err := json.Marshal(extraVars)
-	if err != nil {
-		result.Status = JobStatusFailed
-		result.Message = fmt.Sprintf("marshal vars: %v", err)
-		return
-	}
-
-	if err := os.WriteFile(varsPath, sanitized, 0o600); err != nil {
-		result.Status = JobStatusFailed
-		result.Message = fmt.Sprintf("write vars: %v", err)
-		return
-	}
-
-	runTimeout := cfg.timeout
-	if runTimeout <= 0 {
-		runTimeout = 15 * time.Minute
-	}
-	stepCtx, cancel := context.WithTimeout(ctx, runTimeout)
-	defer cancel()
-
-	args := []string{
-		"-i", inventoryPath,
-		r.deployPlaybook,
-		"--tags", cfg.step.Tag,
-		"--extra-vars", "@" + varsPath,
-	}
-	if r.ansibleVerbosity > 0 {
-		args = append(args, "-"+strings.Repeat("v", r.ansibleVerbosity))
-	}
-
-	cmd := exec.CommandContext(stepCtx, r.ansibleBin, args...)
-	cmd.Env = append(os.Environ(), "ANSIBLE_HOST_KEY_CHECKING=False")
-
-	var stdout cappedBuffer
-	var stderr cappedBuffer
-	stdout.limit = r.maxOutputChars
-	stderr.limit = r.maxOutputChars
-	if r.streamLogs {
-		cmd.Stdout = io.MultiWriter(&stdout, os.Stdout)
-		cmd.Stderr = io.MultiWriter(&stderr, os.Stderr)
-	} else {
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-	}
-
-	err = cmd.Run()
-	result.Stdout = stdout.String()
-	result.Stderr = stderr.String()
-
-	if err == nil {
-		result.Status = JobStatusCompleted
-		result.ExitCode = 0
-		return
-	}
-
-	result.Status = JobStatusFailed
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		result.ExitCode = exitErr.ExitCode()
-	} else {
-		result.ExitCode = 1
-	}
-	if stepCtx.Err() == context.DeadlineExceeded {
-		result.Message = "step execution timed out"
-		return
-	}
-	result.Message = fmt.Sprintf("ansible step failed: %v", err)
-	return
-}
-
 func buildInventoryYAML(spec StoredSpec) string {
 	var b strings.Builder
 	b.WriteString("all:\n")
@@ -491,36 +325,4 @@ func buildInventoryYAML(spec StoredSpec) string {
 		b.WriteString(fmt.Sprintf("        standby_%d: {}\n", i+1))
 	}
 	return b.String()
-}
-
-// cappedBuffer is a write-capped bytes.Buffer. Writes beyond limit are dropped
-// and a truncation marker is appended to String(). limit=0 means unlimited.
-type cappedBuffer struct {
-	buf     bytes.Buffer
-	limit   int
-	dropped bool
-}
-
-func (b *cappedBuffer) Write(p []byte) (int, error) {
-	if b.limit > 0 {
-		avail := b.limit - b.buf.Len()
-		if avail <= 0 {
-			b.dropped = true
-			return len(p), nil
-		}
-		if len(p) > avail {
-			_, _ = b.buf.Write(p[:avail])
-			b.dropped = true
-			return len(p), nil
-		}
-	}
-	return b.buf.Write(p)
-}
-
-func (b *cappedBuffer) String() string {
-	s := strings.TrimSpace(b.buf.String())
-	if b.dropped {
-		s += "\n...truncated..."
-	}
-	return s
 }
