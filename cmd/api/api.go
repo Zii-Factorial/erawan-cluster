@@ -14,6 +14,11 @@ import (
 	"erawan-cluster/internal/cluster/pgsql/dbmanager"
 	"erawan-cluster/internal/haproxy"
 	"erawan-cluster/internal/security"
+
+	haproxyapi "erawan-cluster/cmd/api/haproxy"
+	mysqlapi "erawan-cluster/cmd/api/mysql"
+	pgsqlapi "erawan-cluster/cmd/api/pgsql"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -34,9 +39,7 @@ type config struct {
 	env       string
 	apiKey    string
 	version   string
-	proxyHost      string // HAProxy host for metric connections; from PROXY_HOST env (default 127.0.0.1)
-	proxyMySQLPort int    // HAProxy frontend port for MySQL; from PROXY_MYSQL_PORT env (default 3306)
-	proxyPGSQLPort int    // HAProxy frontend port for pgsql; from PROXY_PGSQL_PORT env (default 5432)
+	proxyHost string // HAProxy host for metric connections; from PROXY_HOST env (default 127.0.0.1)
 }
 
 func (app *application) mount() *chi.Mux {
@@ -54,52 +57,53 @@ func (app *application) mount() *chi.Mux {
 	r.Get("/health", app.healthCheckHandler)
 	r.Get("/docs", app.docsHandler)
 
+	haproxyH := haproxyapi.New(app.haproxy)
 	r.Route("/haproxy", func(r chi.Router) {
-		r.Post("/config/mysql", app.createMySQLHAProxyConfigHandler)
-		r.Patch("/config/mysql", app.addMySQLMemberHAProxyHandler)
-		r.Post("/config/pgsql", app.createPGSQLHAProxyConfigHandler)
-		r.Patch("/config/pgsql", app.addPGSQLMemberHAProxyHandler)
-		r.Delete("/config", app.deleteHAProxyConfigHandler)
-		r.Get("/configs", app.listHAProxyConfigsHandler)
-		r.Get("/configs/download", app.downloadTenantsZipHandler)
-		r.Post("/reload", app.reloadHAProxyHandler)
+		r.Post("/config/mysql", haproxyH.CreateMySQLConfig)
+		r.Patch("/config/mysql", haproxyH.AddMySQLMember)
+		r.Post("/config/pgsql", haproxyH.CreatePGSQLConfig)
+		r.Patch("/config/pgsql", haproxyH.AddPGSQLMember)
+		r.Delete("/config", haproxyH.DeleteConfig)
+		r.Get("/configs", haproxyH.ListConfigs)
+		r.Get("/configs/download", haproxyH.DownloadZip)
+		r.Post("/reload", haproxyH.Reload)
 	})
 
+	mysqlH := mysqlapi.New(app.mysqlCluster, app.mysqlDB, app.config.proxyHost)
 	r.Route("/cluster/mysql", func(r chi.Router) {
-		r.Post("/deploy", app.deployMySQLClusterHandler)
-		r.Post("/metrics", app.mysqlMetricsHandler)
-		r.Get("/jobs", app.listMySQLClusterJobsHandler)
-		r.Get("/jobs/{jobID}", app.getMySQLClusterJobHandler)
-		r.Post("/jobs/{jobID}/resume", app.resumeMySQLClusterJobHandler)
-		r.Post("/jobs/{jobID}/rollback", app.rollbackMySQLClusterJobHandler)
-		r.Post("/members", app.addMySQLMemberHandler)
-		r.Delete("/members", app.removeMySQLMemberHandler)
-
-		r.Post("/users", app.createMySQLUserHandler)
-		r.Patch("/users", app.updateMySQLUserHandler)
-		r.Put("/users/password", app.resetMySQLPasswordHandler)
-		r.Delete("/users", app.deleteMySQLUserHandler)
-		r.Post("/databases", app.createMySQLDatabaseHandler)
-		r.Patch("/databases", app.updateMySQLDatabaseHandler)
-		r.Delete("/databases", app.deleteMySQLDatabaseHandler)
+		r.Post("/deploy", mysqlH.Deploy)
+		r.Post("/metrics", mysqlH.Metrics)
+		r.Get("/jobs", mysqlH.ListJobs)
+		r.Get("/jobs/{jobID}", mysqlH.GetJob)
+		r.Post("/jobs/{jobID}/resume", mysqlH.ResumeJob)
+		r.Post("/jobs/{jobID}/rollback", mysqlH.RollbackJob)
+		r.Post("/members", mysqlH.AddMember)
+		r.Delete("/members", mysqlH.RemoveMember)
+		r.Post("/users", mysqlH.CreateUser)
+		r.Patch("/users", mysqlH.UpdateUser)
+		r.Put("/users/password", mysqlH.ResetPassword)
+		r.Delete("/users", mysqlH.DeleteUser)
+		r.Post("/databases", mysqlH.CreateDatabase)
+		r.Patch("/databases", mysqlH.UpdateDatabase)
+		r.Delete("/databases", mysqlH.DeleteDatabase)
 	})
 
+	pgsqlH := pgsqlapi.New(app.pgsqlCluster, app.pgsqlDB, app.config.proxyHost)
 	r.Route("/cluster/pgsql", func(r chi.Router) {
-		r.Post("/deploy", app.deployPGSQLClusterHandler)
-		r.Post("/metrics", app.pgsqlMetricsHandler)
-		r.Get("/jobs", app.listPGSQLClusterJobsHandler)
-		r.Get("/jobs/{jobID}", app.getPGSQLClusterJobHandler)
-		r.Post("/jobs/{jobID}/resume", app.resumePGSQLClusterJobHandler)
-		r.Post("/members", app.addPGSQLMemberHandler)
-		r.Delete("/members", app.removePGSQLMemberHandler)
-
-		r.Post("/users", app.createPGSQLUserHandler)
-		r.Patch("/users", app.updatePGSQLUserHandler)
-		r.Put("/users/password", app.resetPGSQLPasswordHandler)
-		r.Delete("/users", app.deletePGSQLUserHandler)
-		r.Post("/databases", app.createPGSQLDatabaseHandler)
-		r.Patch("/databases", app.updatePGSQLDatabaseHandler)
-		r.Delete("/databases", app.deletePGSQLDatabaseHandler)
+		r.Post("/deploy", pgsqlH.Deploy)
+		r.Post("/metrics", pgsqlH.Metrics)
+		r.Get("/jobs", pgsqlH.ListJobs)
+		r.Get("/jobs/{jobID}", pgsqlH.GetJob)
+		r.Post("/jobs/{jobID}/resume", pgsqlH.ResumeJob)
+		r.Post("/members", pgsqlH.AddMember)
+		r.Delete("/members", pgsqlH.RemoveMember)
+		r.Post("/users", pgsqlH.CreateUser)
+		r.Patch("/users", pgsqlH.UpdateUser)
+		r.Put("/users/password", pgsqlH.ResetPassword)
+		r.Delete("/users", pgsqlH.DeleteUser)
+		r.Post("/databases", pgsqlH.CreateDatabase)
+		r.Patch("/databases", pgsqlH.UpdateDatabase)
+		r.Delete("/databases", pgsqlH.DeleteDatabase)
 	})
 
 	return r

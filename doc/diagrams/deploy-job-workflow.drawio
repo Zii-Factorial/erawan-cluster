@@ -1,0 +1,153 @@
+<mxfile compressed="false">
+  <diagram name="Deploy Job Workflow" id="job-workflow">
+    <mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="1654" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Title -->
+        <mxCell id="title" value="erawan-cluster — Deploy Job Lifecycle" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=22;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="84" y="20" width="1000" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Subtitle: applies to both mysql and pgsql -->
+        <mxCell id="subtitle" value="Applies to: POST /cluster/mysql/deploy   and   POST /cluster/pgsql/deploy" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=13;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="84" y="65" width="1000" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- START -->
+        <mxCell id="start" value="&lt;b&gt;Client&lt;/b&gt;&#xa;POST /cluster/{type}/deploy" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="384" y="120" width="400" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- Validate request -->
+        <mxCell id="validate" value="&lt;b&gt;Validate Request&lt;/b&gt;&#xa;— X-API-Key header check&#xa;— Decode JSON body&#xa;— Required fields present?" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#555555;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="384" y="250" width="400" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- Validation decision -->
+        <mxCell id="d-valid" value="Valid?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#555555;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="484" y="400" width="200" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- 400 error -->
+        <mxCell id="err-400" value="400 Bad Request&#xa;{ error: &quot;...&quot; }" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="834" y="410" width="240" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- Create job -->
+        <mxCell id="create-job" value="&lt;b&gt;Create Job&lt;/b&gt;&#xa;status: pending&#xa;steps: [{name, status: pending}, ...]&#xa;Write .json + .secret files to disk" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="384" y="560" width="400" height="120" as="geometry" />
+        </mxCell>
+
+        <!-- Return 202 -->
+        <mxCell id="resp-202" value="202 Accepted&#xa;{ job_id, secret }&#xa;(response is immediate)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="834" y="580" width="240" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- Background goroutine starts -->
+        <mxCell id="bg-start" value="Background goroutine starts&#xa;(runs ansible-playbook)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#555555;fontSize=12;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="384" y="740" width="400" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Update job: running -->
+        <mxCell id="job-running" value="Update job: status = running" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="384" y="870" width="400" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Run step N -->
+        <mxCell id="run-step" value="Run Ansible Step N&#xa;ansible-playbook ...&#xa;  -e &quot;...vars...&quot;&#xa;  --tags step_name" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="384" y="990" width="400" height="110" as="geometry" />
+        </mxCell>
+
+        <!-- Step result decision -->
+        <mxCell id="d-step" value="Step&#xa;result?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#555555;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="484" y="1160" width="200" height="120" as="geometry" />
+        </mxCell>
+
+        <!-- Step success path -->
+        <mxCell id="step-ok" value="Update step: status = completed&#xa;last_completed_step = N" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="384" y="1350" width="400" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- More steps decision -->
+        <mxCell id="d-more" value="More&#xa;steps?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#555555;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="484" y="1480" width="200" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- Job completed -->
+        <mxCell id="job-done" value="Update job: status = completed" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="384" y="1640" width="400" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Step failed path (right) -->
+        <mxCell id="step-fail" value="Update step: status = failed&#xa;Update job: status = failed&#xa;last_completed_step = N-1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="834" y="1160" width="280" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- Resume or rollback box -->
+        <mxCell id="resume-box" value="&lt;b&gt;Client options on failure:&lt;/b&gt;&#xa;&#xa;POST /jobs/{id}/resume&#xa;  → retry from last_completed_step+1&#xa;  → requires X-Job-Secret header&#xa;&#xa;POST /jobs/{id}/rollback (MySQL only)&#xa;  → dissolve cluster, clean up&#xa;  → requires X-Job-Secret header" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="794" y="1310" width="360" height="230" as="geometry" />
+        </mxCell>
+
+        <!-- Poll status note -->
+        <mxCell id="poll-note" value="Client can poll job status at any time:&#xa;GET /jobs/{jobID}   or   GET /jobs   (list all)&#xa;{ status, steps: [{name, status, started_at, completed_at}], ... }" style="text;html=1;strokeColor=#6c8ebf;fillColor=#dae8fc;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="84" y="990" width="270" height="110" as="geometry" />
+        </mxCell>
+
+        <!-- ===== EDGES ===== -->
+        <mxCell id="e-start-validate" value="" style="endArrow=block;endFill=1;strokeColor=#555555;strokeWidth=2;" edge="1" parent="1" source="start" target="validate">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-validate-d" value="" style="endArrow=block;endFill=1;strokeColor=#555555;strokeWidth=2;" edge="1" parent="1" source="validate" target="d-valid">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-d-no" value="No" style="endArrow=block;endFill=1;strokeColor=#b85450;strokeWidth=2;fontSize=12;" edge="1" parent="1" source="d-valid" target="err-400">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-d-yes" value="Yes" style="endArrow=block;endFill=1;strokeColor=#82b366;strokeWidth=2;fontSize=12;" edge="1" parent="1" source="d-valid" target="create-job">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-create-202" value="immediately" style="endArrow=block;endFill=1;strokeColor=#6c8ebf;strokeWidth=1;dashed=1;fontSize=11;" edge="1" parent="1" source="create-job" target="resp-202">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-create-bg" value="" style="endArrow=block;endFill=1;strokeColor=#555555;strokeWidth=2;" edge="1" parent="1" source="create-job" target="bg-start">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-bg-running" value="" style="endArrow=block;endFill=1;strokeColor=#555555;strokeWidth=2;" edge="1" parent="1" source="bg-start" target="job-running">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-running-step" value="" style="endArrow=block;endFill=1;strokeColor=#555555;strokeWidth=2;" edge="1" parent="1" source="job-running" target="run-step">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-step-d" value="" style="endArrow=block;endFill=1;strokeColor=#555555;strokeWidth=2;" edge="1" parent="1" source="run-step" target="d-step">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-d-ok" value="success" style="endArrow=block;endFill=1;strokeColor=#82b366;strokeWidth=2;fontSize=12;" edge="1" parent="1" source="d-step" target="step-ok">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-d-fail" value="fail" style="endArrow=block;endFill=1;strokeColor=#b85450;strokeWidth=2;fontSize=12;" edge="1" parent="1" source="d-step" target="step-fail">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-stepok-more" value="" style="endArrow=block;endFill=1;strokeColor=#555555;strokeWidth=2;" edge="1" parent="1" source="step-ok" target="d-more">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-more-step" value="Yes, N+1" style="endArrow=block;endFill=1;strokeColor=#d6b656;strokeWidth=2;fontSize=12;" edge="1" parent="1" source="d-more" target="run-step">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="284" y="1530" />
+              <mxPoint x="284" y="1045" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e-more-done" value="No" style="endArrow=block;endFill=1;strokeColor=#82b366;strokeWidth=2;fontSize=12;" edge="1" parent="1" source="d-more" target="job-done">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-fail-resume" value="" style="endArrow=block;endFill=1;strokeColor=#b85450;strokeWidth=1;dashed=1;" edge="1" parent="1" source="step-fail" target="resume-box">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
