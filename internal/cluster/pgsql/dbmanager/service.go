@@ -213,6 +213,10 @@ func (s *Service) UpdateUser(ctx context.Context, req UpdateUserRequest) error {
 	if err != nil {
 		return err
 	}
+	secret, err := s.store.LoadSecret(req.JobID)
+	if err != nil {
+		return fmt.Errorf("load secret: %w", err)
+	}
 
 	root, err := s.connect(ctx, host, port, "postgres", adminUser, adminPass)
 	if err != nil {
@@ -234,6 +238,9 @@ func (s *Service) UpdateUser(ctx context.Context, req UpdateUserRequest) error {
 	if rolName == "postgres" || strings.HasPrefix(rolName, "pg_") {
 		return fmt.Errorf("user %q is a protected system role and cannot be renamed", req.Username)
 	}
+	if req.Username == secret.ReplicatorUser {
+		return fmt.Errorf("user %q is the replication user and cannot be renamed through this API", req.Username)
+	}
 	if req.Username == adminUser {
 		return fmt.Errorf("user %q is the cluster admin and cannot be renamed through this API", req.Username)
 	}
@@ -254,6 +261,10 @@ func (s *Service) DeleteUser(ctx context.Context, req DeleteUserRequest) error {
 	if err != nil {
 		return err
 	}
+	secret, err := s.store.LoadSecret(req.JobID)
+	if err != nil {
+		return fmt.Errorf("load secret: %w", err)
+	}
 
 	root, err := s.connect(ctx, host, port, "postgres", adminUser, adminPass)
 	if err != nil {
@@ -262,19 +273,21 @@ func (s *Service) DeleteUser(ctx context.Context, req DeleteUserRequest) error {
 	defer root.Close()
 
 	var rolName string
-	var rolReplication bool
 	err = root.QueryRowContext(ctx,
-		`SELECT rolname, rolreplication FROM pg_roles WHERE rolname = $1`,
+		`SELECT rolname FROM pg_roles WHERE rolname = $1`,
 		req.Username,
-	).Scan(&rolName, &rolReplication)
+	).Scan(&rolName)
 	if err == sql.ErrNoRows {
 		return fmt.Errorf("user %q does not exist", req.Username)
 	}
 	if err != nil {
 		return fmt.Errorf("lookup role: %w", err)
 	}
-	if rolName == "postgres" || rolReplication || strings.HasPrefix(rolName, "pg_") {
+	if rolName == "postgres" || strings.HasPrefix(rolName, "pg_") {
 		return fmt.Errorf("user %q is a protected system role and cannot be deleted", req.Username)
+	}
+	if req.Username == secret.ReplicatorUser {
+		return fmt.Errorf("user %q is the replication user and cannot be deleted through this API", req.Username)
 	}
 	if req.Username == adminUser {
 		return fmt.Errorf("user %q is the cluster admin and cannot be deleted through this API", req.Username)
