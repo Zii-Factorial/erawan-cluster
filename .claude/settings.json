@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(make build *)",
-      "Bash(mv 07_enable_auto_rejoin.yml 05_enable_auto_rejoin.yml)",
-      "Bash(mv 05_bootstrap_router.yml   08_bootstrap_router.yml)"
-    ]
-  }
-}
