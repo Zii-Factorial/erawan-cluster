@@ -88,6 +88,7 @@
         except Exception:
           pass
     else:
+      session.run_sql(f"REVOKE ALL PRIVILEGES, GRANT OPTION FROM `{eu}`@'%'")
       session.run_sql(f"GRANT ALL PRIVILEGES ON `{edb}`.* TO `{eu}`@'%'")
 
     session.run_sql("FLUSH PRIVILEGES")
