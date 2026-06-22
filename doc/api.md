@@ -163,6 +163,7 @@ Deploy a MySQL InnoDB Cluster. Returns immediately with a job ID; the deployment
 | `new_user` | string | no | Application user to create |
 | `new_user_password` | string | no | Password for the application user |
 | `new_user_ssl_required` | bool | no | Require SSL for the application user (default `false`) |
+| `new_user_superuser` | bool | no | `true` = grant `ALL PRIVILEGES ON *.*` + all dynamic privileges (full server-level superuser). `false` = `ALL PRIVILEGES ON new_db.*` only. Default `true` |
 | `new_db` | string | no | Application database to create |
 | `assume_prepared` | bool | no | Skip node preparation steps if already prepared (default `false`) |
 | `bootstrap_router` | bool | no | Bootstrap MySQL Router on each node (default `true`) |
@@ -180,6 +181,7 @@ Deploy a MySQL InnoDB Cluster. Returns immediately with a job ID; the deployment
   "admin_password": "AdminPass#2026",
   "new_user": "appuser",
   "new_user_password": "AppUser#2026",
+  "new_user_superuser": true,
   "new_db": "appdb",
   "bootstrap_router": true,
   "mysql_version": 8,
@@ -397,7 +399,9 @@ The `categories` object contains one key per collected category. Failures are re
 
 ### `POST /cluster/mysql/users`
 
-Create a MySQL user on a cluster (grants only on the specified database).
+Create (or update) a MySQL user. Idempotent — re-running with the same username updates the password, SSL requirement, and grants.
+
+Connects as the **cluster admin** user (`clusteradmin`) resolved from the deploy job.
 
 **Request:**
 | Field | Type | Required | Description |
@@ -405,7 +409,15 @@ Create a MySQL user on a cluster (grants only on the specified database).
 | `job_id` | string | yes | Source deploy job ID |
 | `username` | string | yes | New user name |
 | `password` | string | yes | Password |
-| `database` | string | no | Grant privileges only on this database |
+| `superuser` | bool | no | `true` = `GRANT ALL PRIVILEGES ON *.*` + all dynamic privileges (same as deploy-time superuser). `false` = scoped grants on `database` only. Default `false` |
+| `ssl_required` | bool | no | Require SSL (`REQUIRE SSL`) for this user (default `false`) |
+| `database` | string | no | Database to grant scoped access on (ignored when `superuser: true`) |
+
+**Protection rules** — the following users cannot be deleted or renamed via this API:
+- Built-in system users: `root`, `mysql.sys`, `mysql.session`, `mysql.infoschema`
+- The cluster admin user created at deploy time (e.g. `clusteradmin`)
+
+Users created with `superuser: true` are **not** protected and can be freely deleted or renamed.
 
 ---
 
@@ -502,7 +514,8 @@ Deploy a PostgreSQL Patroni cluster. Returns immediately with a job ID.
 | `admin_password` | string | yes | Password for the admin user |
 | `new_user` | string | no | Application user to create |
 | `new_user_password` | string | no | Password for the application user |
-| `new_user_ssl_required` | bool | no | Require SSL for the application user (default `true`) |
+| `new_user_ssl_required` | bool | no | Require SSL for the application user via `pg_hba.conf` (`hostssl`/`hostnossl` rules). Default `true` |
+| `new_user_superuser` | bool | no | `true` = `LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS` (full superuser). `false` = `LOGIN NOSUPERUSER NOINHERIT NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`. Default `true` |
 | `new_db` | string | no | Application database to create |
 | `ssh_port` | int | no | SSH port for Ansible (default `22`) |
 | `postgres_port` | int | no | PostgreSQL port on DB nodes (default `5432`) |
@@ -520,6 +533,7 @@ Deploy a PostgreSQL Patroni cluster. Returns immediately with a job ID.
   "admin_password": "Admin#2026",
   "new_user": "appuser",
   "new_user_password": "App#2026",
+  "new_user_superuser": true,
   "new_db": "appdb",
   "postgres_version": 16,
   "step_timeout_seconds": 900
@@ -642,53 +656,64 @@ Collect live metrics from a PostgreSQL cluster via HAProxy.
 
 ### `POST /cluster/pgsql/users`
 
-Create a PostgreSQL user on a cluster. Grants privileges only on the specified database.
+Create (or update) a PostgreSQL role. Idempotent — re-running with the same username updates the password and grants.
+
+Connects as the **`postgres`** superuser resolved from the deploy job.
 
 **Request:**
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `job_id` | string | yes | Source deploy job ID |
-| `username` | string | yes | New user name |
+| `username` | string | yes | New role name |
 | `password` | string | yes | Password |
-| `database` | string | no | Grant on this database only |
+| `superuser` | bool | no | `true` = `LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS` (same as deploy-time superuser). `false` = `LOGIN NOSUPERUSER NOCREATEROLE INHERIT` scoped to `database`. Default `false` |
+| `ssl_required` | bool | no | `true` = `hostssl` + `hostnossl reject` rule in `pg_hba.conf`. `false` = plain `host` rule. Patroni DCS is patched automatically. Default `false` |
+| `database` | string | no | Database to grant scoped access on (ignored when `superuser: true`) |
+
+**Protection rules** — the following roles cannot be deleted or renamed via this API:
+- Built-in system roles: `postgres`, any role starting with `pg_`
+- Replication roles (`rolreplication = true`, e.g. `replicator`)
+- The cluster admin user created at deploy time
+
+Roles created with `superuser: true` are **not** protected and can be freely deleted or renamed.
 
 ---
 
 ### `PATCH /cluster/pgsql/users`
 
-Rename a PostgreSQL user.
+Rename a PostgreSQL role.
 
 **Request:**
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `job_id` | string | yes | Source deploy job ID |
-| `username` | string | yes | Current user name |
-| `new_username` | string | yes | New user name |
+| `username` | string | yes | Current role name |
+| `new_username` | string | yes | New role name |
 
 ---
 
 ### `PUT /cluster/pgsql/users/password`
 
-Reset a PostgreSQL user's password.
+Reset a PostgreSQL role's password.
 
 **Request:**
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `job_id` | string | yes | Source deploy job ID |
-| `username` | string | yes | User name |
+| `username` | string | yes | Role name |
 | `password` | string | yes | New password |
 
 ---
 
 ### `DELETE /cluster/pgsql/users`
 
-Drop a PostgreSQL user.
+Drop a PostgreSQL role.
 
 **Request:**
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `job_id` | string | yes | Source deploy job ID |
-| `username` | string | yes | User to drop |
+| `username` | string | yes | Role to drop |
 
 ---
 

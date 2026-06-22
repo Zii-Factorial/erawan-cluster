@@ -1,8 +1,10 @@
 package dbmanager
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -89,60 +91,80 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) error {
 
 	userLit := pq.QuoteLiteral(req.Username)
 	passLit := pq.QuoteLiteral(req.Password)
-	createdbOpt := "CREATEDB"
-	if req.DatabaseName != "" {
-		createdbOpt = "NOCREATEDB"
-	}
-	upsertRole := fmt.Sprintf(`
-		DO $body$
-		BEGIN
-		  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %s) THEN
-		    EXECUTE format(
-		      'CREATE ROLE %%I WITH LOGIN %s NOSUPERUSER NOCREATEROLE INHERIT PASSWORD %%L',
-		      %s, %s);
-		  ELSE
-		    EXECUTE format(
-		      'ALTER ROLE %%I WITH LOGIN %s NOSUPERUSER NOCREATEROLE INHERIT PASSWORD %%L',
-		      %s, %s);
-		  END IF;
-		END
-		$body$`, userLit, createdbOpt, userLit, passLit, createdbOpt, userLit, passLit)
-	if _, err := root.ExecContext(ctx, upsertRole); err != nil {
-		return fmt.Errorf("upsert role: %w", err)
-	}
-
 	uid := pq.QuoteIdentifier(req.Username)
 
-	if req.DatabaseName != "" {
-		existingUsers, err := appUsers(ctx, root)
-		if err != nil {
-			return fmt.Errorf("list users: %w", err)
+	if req.Superuser {
+		const attrs = "LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS"
+		upsertRole := fmt.Sprintf(`
+			DO $body$
+			BEGIN
+			  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %s) THEN
+			    EXECUTE format('CREATE ROLE %%I WITH %s PASSWORD %%L', %s, %s);
+			  ELSE
+			    EXECUTE format('ALTER ROLE %%I WITH %s PASSWORD %%L', %s, %s);
+			  END IF;
+			END
+			$body$`, userLit, attrs, userLit, passLit, attrs, userLit, passLit)
+		if _, err := root.ExecContext(ctx, upsertRole); err != nil {
+			return fmt.Errorf("upsert role: %w", err)
 		}
-		peers := without(existingUsers, req.Username)
+	} else {
+		createdbOpt := "CREATEDB"
+		if req.DatabaseName != "" {
+			createdbOpt = "NOCREATEDB"
+		}
+		upsertRole := fmt.Sprintf(`
+			DO $body$
+			BEGIN
+			  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %s) THEN
+			    EXECUTE format(
+			      'CREATE ROLE %%I WITH LOGIN %s NOSUPERUSER NOCREATEROLE INHERIT PASSWORD %%L',
+			      %s, %s);
+			  ELSE
+			    EXECUTE format(
+			      'ALTER ROLE %%I WITH LOGIN %s NOSUPERUSER NOCREATEROLE INHERIT PASSWORD %%L',
+			      %s, %s);
+			  END IF;
+			END
+			$body$`, userLit, createdbOpt, userLit, passLit, createdbOpt, userLit, passLit)
+		if _, err := root.ExecContext(ctx, upsertRole); err != nil {
+			return fmt.Errorf("upsert role: %w", err)
+		}
 
-		var dbExists bool
-		if err := root.QueryRowContext(ctx,
-			"SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)", req.DatabaseName,
-		).Scan(&dbExists); err != nil {
-			return fmt.Errorf("check database: %w", err)
-		}
-		if !dbExists {
-			if _, err := root.ExecContext(ctx,
-				"CREATE DATABASE "+pq.QuoteIdentifier(req.DatabaseName)+" OWNER "+pq.QuoteIdentifier(adminUser),
-			); err != nil {
-				return fmt.Errorf("create database: %w", err)
+		if req.DatabaseName != "" {
+			existingUsers, err := appUsers(ctx, root)
+			if err != nil {
+				return fmt.Errorf("list users: %w", err)
 			}
-		}
-		if _, err := root.ExecContext(ctx,
-			"GRANT ALL PRIVILEGES ON DATABASE "+pq.QuoteIdentifier(req.DatabaseName)+" TO "+uid,
-		); err != nil {
-			return fmt.Errorf("grant on database %q: %w", req.DatabaseName, err)
-		}
-		if err := s.grantInDatabase(ctx, host, port, req.DatabaseName, adminUser, adminPass, req.Username, peers); err != nil {
-			return err
+			peers := without(existingUsers, req.Username)
+
+			var dbExists bool
+			if err := root.QueryRowContext(ctx,
+				"SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)", req.DatabaseName,
+			).Scan(&dbExists); err != nil {
+				return fmt.Errorf("check database: %w", err)
+			}
+			if !dbExists {
+				if _, err := root.ExecContext(ctx,
+					"CREATE DATABASE "+pq.QuoteIdentifier(req.DatabaseName)+" OWNER "+pq.QuoteIdentifier(adminUser),
+				); err != nil {
+					return fmt.Errorf("create database: %w", err)
+				}
+			}
+			if _, err := root.ExecContext(ctx,
+				"GRANT ALL PRIVILEGES ON DATABASE "+pq.QuoteIdentifier(req.DatabaseName)+" TO "+uid,
+			); err != nil {
+				return fmt.Errorf("grant on database %q: %w", req.DatabaseName, err)
+			}
+			if err := s.grantInDatabase(ctx, host, port, req.DatabaseName, adminUser, adminPass, req.Username, peers); err != nil {
+				return err
+			}
 		}
 	}
 
+	if err := s.updatePatroniPgHba(ctx, req.JobID, req.Username, req.SSLRequired); err != nil {
+		return fmt.Errorf("update pg_hba: %w", err)
+	}
 	return nil
 }
 
@@ -213,6 +235,9 @@ func (s *Service) UpdateUser(ctx context.Context, req UpdateUserRequest) error {
 	if rolName == "postgres" || strings.HasPrefix(rolName, "pg_") {
 		return fmt.Errorf("user %q is a protected system role and cannot be renamed", req.Username)
 	}
+	if req.Username == adminUser {
+		return fmt.Errorf("user %q is the cluster admin and cannot be renamed through this API", req.Username)
+	}
 
 	if _, err := root.ExecContext(ctx,
 		"ALTER ROLE "+pq.QuoteIdentifier(req.Username)+" RENAME TO "+pq.QuoteIdentifier(req.NewUsername),
@@ -238,19 +263,22 @@ func (s *Service) DeleteUser(ctx context.Context, req DeleteUserRequest) error {
 	defer root.Close()
 
 	var rolName string
-	var rolSuper, rolReplication bool
+	var rolReplication bool
 	err = root.QueryRowContext(ctx,
-		`SELECT rolname, rolsuper, rolreplication FROM pg_roles WHERE rolname = $1`,
+		`SELECT rolname, rolreplication FROM pg_roles WHERE rolname = $1`,
 		req.Username,
-	).Scan(&rolName, &rolSuper, &rolReplication)
+	).Scan(&rolName, &rolReplication)
 	if err == sql.ErrNoRows {
 		return fmt.Errorf("user %q does not exist", req.Username)
 	}
 	if err != nil {
 		return fmt.Errorf("lookup role: %w", err)
 	}
-	if rolSuper || rolReplication || strings.HasPrefix(rolName, "pg_") {
+	if rolName == "postgres" || rolReplication || strings.HasPrefix(rolName, "pg_") {
 		return fmt.Errorf("user %q is a protected system role and cannot be deleted", req.Username)
+	}
+	if req.Username == adminUser {
+		return fmt.Errorf("user %q is the cluster admin and cannot be deleted through this API", req.Username)
 	}
 
 	dbs, err := appDatabases(ctx, root)
@@ -266,6 +294,8 @@ func (s *Service) DeleteUser(ctx context.Context, req DeleteUserRequest) error {
 	if _, err := root.ExecContext(ctx, "DROP ROLE "+pq.QuoteIdentifier(req.Username)); err != nil {
 		return fmt.Errorf("drop role: %w", err)
 	}
+	// best-effort cleanup of any pg_hba entries for this user
+	_ = s.removeFromPatroniPgHba(ctx, req.JobID, req.Username)
 	return nil
 }
 
@@ -482,6 +512,116 @@ func (s *Service) revokeInDatabase(ctx context.Context, host string, port int,
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("db %q: %s: %w", dbname, stmt, err)
 		}
+	}
+	return nil
+}
+
+// updatePatroniPgHba patches the Patroni DCS config to set the pg_hba rule for
+// the given user. ssl=true → hostssl+hostnossl pair; ssl=false → plain host rule.
+// Existing rules for the same username are replaced.
+func (s *Service) updatePatroniPgHba(ctx context.Context, jobID, username string, ssl bool) error {
+	var newRules []string
+	if ssl {
+		newRules = []string{
+			"hostssl all " + username + " 0.0.0.0/0 scram-sha-256",
+			"hostnossl all " + username + " 0.0.0.0/0 reject",
+		}
+	} else {
+		newRules = []string{
+			"host all " + username + " 0.0.0.0/0 scram-sha-256",
+		}
+	}
+	return s.patchPatroniPgHba(ctx, jobID, username, newRules)
+}
+
+// removeFromPatroniPgHba removes all pg_hba entries for the given user.
+func (s *Service) removeFromPatroniPgHba(ctx context.Context, jobID, username string) error {
+	return s.patchPatroniPgHba(ctx, jobID, username, nil)
+}
+
+// patchPatroniPgHba reads the current DCS pg_hba list, strips rules for username,
+// prepends newRules, then writes the result back via PATCH /config.
+func (s *Service) patchPatroniPgHba(ctx context.Context, jobID, username string, newRules []string) error {
+	job, err := s.store.Load(jobID)
+	if err != nil {
+		return fmt.Errorf("load job: %w", err)
+	}
+	secret, err := s.store.LoadSecret(jobID)
+	if err != nil {
+		return fmt.Errorf("load secret: %w", err)
+	}
+	candidates := append([]string{job.Request.PrimaryIP}, job.Request.StandbyIPs...)
+	primary, err := s.findPrimary(ctx, candidates)
+	if err != nil {
+		return fmt.Errorf("discover primary: %w", err)
+	}
+
+	patroniURL := fmt.Sprintf("http://%s:8008/config", primary)
+
+	getReq, err := http.NewRequestWithContext(ctx, http.MethodGet, patroniURL, nil)
+	if err != nil {
+		return fmt.Errorf("build patroni GET: %w", err)
+	}
+	getReq.SetBasicAuth(job.Request.AdminUsername, secret.AdminPassword)
+	resp, err := s.httpClient.Do(getReq)
+	if err != nil {
+		return fmt.Errorf("GET patroni config: %w", err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GET patroni config: status %d", resp.StatusCode)
+	}
+
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return fmt.Errorf("parse patroni config: %w", err)
+	}
+
+	// Extract existing pg_hba, removing stale entries for this user.
+	var existing []string
+	if pg, ok := cfg["postgresql"].(map[string]interface{}); ok {
+		if hba, ok := pg["pg_hba"].([]interface{}); ok {
+			for _, r := range hba {
+				if line, ok := r.(string); ok {
+					existing = append(existing, line)
+				}
+			}
+		}
+	}
+	filtered := make([]string, 0, len(existing))
+	for _, rule := range existing {
+		if f := strings.Fields(rule); len(f) >= 3 && f[2] == username {
+			continue
+		}
+		filtered = append(filtered, rule)
+	}
+
+	allRules := append(newRules, filtered...)
+
+	patch := map[string]interface{}{
+		"postgresql": map[string]interface{}{
+			"pg_hba": allRules,
+		},
+	}
+	body, err := json.Marshal(patch)
+	if err != nil {
+		return fmt.Errorf("marshal patch: %w", err)
+	}
+	patchReq, err := http.NewRequestWithContext(ctx, http.MethodPatch, patroniURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build patroni PATCH: %w", err)
+	}
+	patchReq.Header.Set("Content-Type", "application/json")
+	patchReq.SetBasicAuth(job.Request.AdminUsername, secret.AdminPassword)
+	patchResp, err := s.httpClient.Do(patchReq)
+	if err != nil {
+		return fmt.Errorf("PATCH patroni config: %w", err)
+	}
+	defer patchResp.Body.Close()
+	if patchResp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(patchResp.Body)
+		return fmt.Errorf("PATCH patroni config: status %d: %s", patchResp.StatusCode, b)
 	}
 	return nil
 }

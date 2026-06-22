@@ -4,6 +4,8 @@ type CreateUserRequest struct {
 	JobID        string `json:"job_id"`
 	Username     string `json:"username"`
 	Password     string `json:"password"`
+	Superuser    bool   `json:"superuser"`
+	SSLRequired  bool   `json:"ssl_required"`
 	DatabaseName string `json:"database,omitempty"`
 }
 
