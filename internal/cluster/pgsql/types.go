@@ -23,6 +23,7 @@ type DeployRequest struct {
 	NewUser            string   `json:"new_user"`
 	NewUserPassword    string   `json:"new_user_password"`
 	NewUserSSLRequired *bool    `json:"new_user_ssl_required"`
+	NewUserSuperuser   *bool    `json:"new_user_superuser"`
 	NewDB              string   `json:"new_db"`
 	SSHPort            int      `json:"ssh_port"`
 	PostgresPort       int      `json:"postgres_port"`
@@ -71,6 +72,7 @@ type StoredSpec struct {
 	AdminUsername      string   `json:"admin_username"`
 	NewUser            string   `json:"new_user"`
 	NewUserSSLRequired bool     `json:"new_user_ssl_required"`
+	NewUserSuperuser   bool     `json:"new_user_superuser"`
 	NewDB              string   `json:"new_db"`
 	SSHUser            string   `json:"ssh_user"`
 	SSHPrivateKeyPath  string   `json:"ssh_private_key_path,omitempty"`
@@ -119,11 +121,19 @@ func (r DeployRequest) NewUserSSLRequiredEnabled() bool {
 	return *r.NewUserSSLRequired
 }
 
+func (r DeployRequest) NewUserSuperuserEnabled() bool {
+	if r.NewUserSuperuser == nil {
+		return false
+	}
+	return *r.NewUserSuperuser
+}
+
 func (s *StoredSpec) UnmarshalJSON(data []byte) error {
 	type alias StoredSpec
 	aux := struct {
 		*alias
 		NewUserSSLRequired *bool `json:"new_user_ssl_required"`
+		NewUserSuperuser   *bool `json:"new_user_superuser"`
 	}{
 		alias: (*alias)(s),
 	}
@@ -134,6 +144,11 @@ func (s *StoredSpec) UnmarshalJSON(data []byte) error {
 		s.NewUserSSLRequired = true
 	} else {
 		s.NewUserSSLRequired = *aux.NewUserSSLRequired
+	}
+	if aux.NewUserSuperuser == nil {
+		s.NewUserSuperuser = false
+	} else {
+		s.NewUserSuperuser = *aux.NewUserSuperuser
 	}
 	return nil
 }

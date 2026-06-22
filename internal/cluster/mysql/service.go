@@ -93,6 +93,7 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 			StandbyIPs:           req.StandbyIPs,
 			NewUser:              req.NewUser,
 			NewUserSSLRequired:   req.NewUserSSLRequired,
+			NewUserSuperuser:     req.NewUserSuperuser,
 			NewDB:                req.NewDB,
 			AssumePrepared:       req.AssumePrepared,
 			BootstrapRouter:      req.BootstrapRouterEnabled(),

@@ -24,6 +24,7 @@ type DeployRequest struct {
 	NewUser            string   `json:"new_user"`
 	NewUserPassword    string   `json:"new_user_password"`
 	NewUserSSLRequired bool     `json:"new_user_ssl_required"`
+	NewUserSuperuser   bool     `json:"new_user_superuser"`
 	NewDB              string   `json:"new_db"`
 	AssumePrepared     bool     `json:"assume_prepared"`
 	BootstrapRouter    *bool    `json:"bootstrap_router"`
@@ -85,6 +86,7 @@ type StoredSpec struct {
 	StandbyIPs         []string `json:"standby_ips"`
 	NewUser            string   `json:"new_user"`
 	NewUserSSLRequired bool     `json:"new_user_ssl_required"`
+	NewUserSuperuser   bool     `json:"new_user_superuser"`
 	NewDB              string   `json:"new_db"`
 	AssumePrepared     bool     `json:"assume_prepared"`
 	BootstrapRouter    bool     `json:"bootstrap_router"`
