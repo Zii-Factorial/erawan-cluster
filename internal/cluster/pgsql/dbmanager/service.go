@@ -162,8 +162,10 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) error {
 		}
 	}
 
-	if err := s.updatePatroniPgHba(ctx, req.JobID, req.Username, req.SSLRequired); err != nil {
-		return fmt.Errorf("update pg_hba: %w", err)
+	if req.SSLRequired {
+		if err := s.updatePatroniPgHba(ctx, req.JobID, req.Username, true); err != nil {
+			return fmt.Errorf("update pg_hba: %w", err)
+		}
 	}
 	return nil
 }
@@ -516,9 +518,9 @@ func (s *Service) revokeInDatabase(ctx context.Context, host string, port int,
 	return nil
 }
 
-// updatePatroniPgHba patches the Patroni DCS config to set the pg_hba rule for
-// the given user. ssl=true → hostssl+hostnossl pair; ssl=false → plain host rule.
-// Existing rules for the same username are replaced.
+// updatePatroniPgHba adds/replaces hostssl+hostnossl rules for username in the
+// Patroni DCS pg_hba list. If DCS has no pg_hba yet, the current rules are first
+// seeded from pg_hba_file_rules so existing catch-all rules are preserved.
 func (s *Service) updatePatroniPgHba(ctx context.Context, jobID, username string, ssl bool) error {
 	var newRules []string
 	if ssl {
@@ -534,13 +536,18 @@ func (s *Service) updatePatroniPgHba(ctx context.Context, jobID, username string
 	return s.patchPatroniPgHba(ctx, jobID, username, newRules)
 }
 
-// removeFromPatroniPgHba removes all pg_hba entries for the given user.
+// removeFromPatroniPgHba removes all pg_hba entries for username, but only if DCS
+// already owns pg_hba (so we don't accidentally take ownership on delete).
 func (s *Service) removeFromPatroniPgHba(ctx context.Context, jobID, username string) error {
 	return s.patchPatroniPgHba(ctx, jobID, username, nil)
 }
 
-// patchPatroniPgHba reads the current DCS pg_hba list, strips rules for username,
-// prepends newRules, then writes the result back via PATCH /config.
+// patchPatroniPgHba is the low-level helper: it reads the current DCS pg_hba,
+// strips rules for username, prepends newRules, and PATCHes /config.
+//
+// If DCS has no pg_hba set yet (first call), it seeds the baseline from the
+// PostgreSQL pg_hba_file_rules view so existing catch-all rules are not lost.
+// If newRules is nil and DCS has no pg_hba, this is a no-op.
 func (s *Service) patchPatroniPgHba(ctx context.Context, jobID, username string, newRules []string) error {
 	job, err := s.store.Load(jobID)
 	if err != nil {
@@ -578,10 +585,12 @@ func (s *Service) patchPatroniPgHba(ctx context.Context, jobID, username string,
 		return fmt.Errorf("parse patroni config: %w", err)
 	}
 
-	// Extract existing pg_hba, removing stale entries for this user.
+	// Check whether DCS already owns pg_hba.
 	var existing []string
+	hasDCSPgHba := false
 	if pg, ok := cfg["postgresql"].(map[string]interface{}); ok {
 		if hba, ok := pg["pg_hba"].([]interface{}); ok {
+			hasDCSPgHba = true
 			for _, r := range hba {
 				if line, ok := r.(string); ok {
 					existing = append(existing, line)
@@ -589,6 +598,27 @@ func (s *Service) patchPatroniPgHba(ctx context.Context, jobID, username string,
 			}
 		}
 	}
+
+	// If DCS has no pg_hba and we have nothing to add (remove call), skip entirely —
+	// there are no DCS-managed rules to clean up.
+	if !hasDCSPgHba && len(newRules) == 0 {
+		return nil
+	}
+
+	// First time we touch DCS pg_hba: seed from the real pg_hba_file_rules so
+	// existing catch-all rules are carried forward.
+	if !hasDCSPgHba {
+		p := job.Request.PostgresPort
+		if p == 0 {
+			p = 5432
+		}
+		existing, err = s.readPgHbaRules(ctx, primary, p, secret.PostgresUser, secret.PostgresPassword)
+		if err != nil {
+			return fmt.Errorf("seed pg_hba from file: %w", err)
+		}
+	}
+
+	// Strip old rules for this user, prepend the new ones.
 	filtered := make([]string, 0, len(existing))
 	for _, rule := range existing {
 		if f := strings.Fields(rule); len(f) >= 3 && f[2] == username {
@@ -596,7 +626,6 @@ func (s *Service) patchPatroniPgHba(ctx context.Context, jobID, username string,
 		}
 		filtered = append(filtered, rule)
 	}
-
 	allRules := append(newRules, filtered...)
 
 	patch := map[string]interface{}{
@@ -624,6 +653,52 @@ func (s *Service) patchPatroniPgHba(ctx context.Context, jobID, username string,
 		return fmt.Errorf("PATCH patroni config: status %d: %s", patchResp.StatusCode, b)
 	}
 	return nil
+}
+
+// readPgHbaRules reads the current pg_hba.conf rules via pg_hba_file_rules and
+// reconstructs them as strings suitable for Patroni's pg_hba DCS list.
+func (s *Service) readPgHbaRules(ctx context.Context, host string, port int, user, password string) ([]string, error) {
+	db, err := s.connect(ctx, host, port, "postgres", user, password)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT type,
+		       array_to_string(database, ',') AS database,
+		       array_to_string(user_name, ',')  AS username,
+		       COALESCE(address, '')             AS address,
+		       COALESCE(netmask, '')             AS netmask,
+		       auth_method
+		FROM pg_hba_file_rules
+		WHERE error IS NULL
+		ORDER BY line_number`)
+	if err != nil {
+		return nil, fmt.Errorf("query pg_hba_file_rules: %w", err)
+	}
+	defer rows.Close()
+
+	var rules []string
+	for rows.Next() {
+		var typ, db2, usr, addr, netmask, method string
+		if err := rows.Scan(&typ, &db2, &usr, &addr, &netmask, &method); err != nil {
+			return nil, fmt.Errorf("scan pg_hba_file_rules: %w", err)
+		}
+		var rule string
+		switch typ {
+		case "local":
+			rule = strings.Join([]string{typ, db2, usr, method}, " ")
+		default:
+			if netmask != "" {
+				rule = strings.Join([]string{typ, db2, usr, addr, netmask, method}, " ")
+			} else {
+				rule = strings.Join([]string{typ, db2, usr, addr, method}, " ")
+			}
+		}
+		rules = append(rules, rule)
+	}
+	return rules, rows.Err()
 }
 
 func without(slice []string, target string) []string {
