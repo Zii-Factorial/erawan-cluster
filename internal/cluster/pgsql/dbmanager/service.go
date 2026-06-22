@@ -109,24 +109,21 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) error {
 			return fmt.Errorf("upsert role: %w", err)
 		}
 	} else {
-		createdbOpt := "CREATEDB"
-		if req.DatabaseName != "" {
-			createdbOpt = "NOCREATEDB"
-		}
+		const nonSuperAttrs = "LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
 		upsertRole := fmt.Sprintf(`
 			DO $body$
 			BEGIN
 			  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %s) THEN
 			    EXECUTE format(
-			      'CREATE ROLE %%I WITH LOGIN %s NOSUPERUSER NOCREATEROLE INHERIT PASSWORD %%L',
+			      'CREATE ROLE %%I WITH %s PASSWORD %%L',
 			      %s, %s);
 			  ELSE
 			    EXECUTE format(
-			      'ALTER ROLE %%I WITH LOGIN %s NOSUPERUSER NOCREATEROLE INHERIT PASSWORD %%L',
+			      'ALTER ROLE %%I WITH %s PASSWORD %%L',
 			      %s, %s);
 			  END IF;
 			END
-			$body$`, userLit, createdbOpt, userLit, passLit, createdbOpt, userLit, passLit)
+			$body$`, userLit, nonSuperAttrs, userLit, passLit, nonSuperAttrs, userLit, passLit)
 		if _, err := root.ExecContext(ctx, upsertRole); err != nil {
 			return fmt.Errorf("upsert role: %w", err)
 		}
