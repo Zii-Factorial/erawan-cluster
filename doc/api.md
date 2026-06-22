@@ -1,4 +1,4 @@
-# API Reference
+# Cluster Management API — Reference
 
 All requests require the `X-API-Key` header. All request and response bodies are `application/json`.
 
