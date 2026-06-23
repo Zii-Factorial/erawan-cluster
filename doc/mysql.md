@@ -98,12 +98,22 @@ systemctl enable --now mysqlrouter
 Router is bootstrapped on every DB node and configured as a systemd service.
 
 ### Phase 6 — Application DB and user
-If `new_db` and `new_user` are set, these are created on the primary via `mysqlsh`:
+If `new_db` and `new_user` are set, these are created on the primary via `mysqlsh`.
+
+When `new_user_superuser: true` (default):
 ```sql
-CREATE DATABASE appdb;
-CREATE USER 'appuser'@'%' IDENTIFIED BY 'password' REQUIRE SSL;
-GRANT ALL ON appdb.* TO 'appuser'@'%';
+CREATE USER 'appuser'@'%' IDENTIFIED BY 'password';
+GRANT ALL PRIVILEGES ON *.* TO 'appuser'@'%' WITH GRANT OPTION;
+-- + GRANT <dynamic_priv> ON *.* ... for each of 36 dynamic privileges
 ```
+
+When `new_user_superuser: false`:
+```sql
+CREATE USER 'appuser'@'%' IDENTIFIED BY 'password';
+GRANT ALL PRIVILEGES ON `appdb`.* TO 'appuser'@'%';
+```
+
+`new_user_ssl_required: true` adds `REQUIRE SSL` to the `ALTER USER` statement.
 
 ---
 

@@ -319,6 +319,7 @@ func (r *Runner) run(ctx context.Context, cfg runConfig, playbook string) (resul
 		"new_user":                   cfg.spec.NewUser,
 		"new_user_password":          cfg.secret.NewUserPassword,
 		"new_user_ssl_required":      cfg.spec.NewUserSSLRequired,
+		"new_user_superuser":         cfg.spec.NewUserSuperuser,
 		"new_db":                     cfg.spec.NewDB,
 		"mysql_port":                 cfg.spec.MySQLPort,
 		"erawan_mysql_major_version": cfg.spec.MySQLVersion,

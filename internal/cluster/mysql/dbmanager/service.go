@@ -62,24 +62,44 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) error {
 		return fmt.Errorf("update password: %w", err)
 	}
 
-	if req.DatabaseName != "" {
-		var exists int
-		if err := db.QueryRowContext(ctx,
-			"SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?",
-			req.DatabaseName,
-		).Scan(&exists); err != nil {
-			return fmt.Errorf("check database: %w", err)
-		}
-		if exists == 0 {
-			if _, err := db.ExecContext(ctx, "CREATE DATABASE "+mysqlID(req.DatabaseName)); err != nil {
-				return fmt.Errorf("create database: %w", err)
-			}
-		}
+	sslClause := "REQUIRE NONE"
+	if req.SSLRequiredEnabled() {
+		sslClause = "REQUIRE SSL"
+	}
+	if _, err := db.ExecContext(ctx, fmt.Sprintf("ALTER USER %s@'%%' %s", uid, sslClause)); err != nil {
+		return fmt.Errorf("set ssl requirement: %w", err)
+	}
+
+	if req.Superuser {
 		if _, err := db.ExecContext(ctx, fmt.Sprintf(
-			"GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, REFERENCES ON %s.* TO %s@'%%'",
-			mysqlID(req.DatabaseName), uid),
+			"GRANT ALL PRIVILEGES ON *.* TO %s@'%%' WITH GRANT OPTION", uid),
 		); err != nil {
-			return fmt.Errorf("grant on database: %w", err)
+			return fmt.Errorf("grant all privileges: %w", err)
+		}
+		for _, priv := range mysqlDynamicPrivs {
+			_, _ = db.ExecContext(ctx, fmt.Sprintf(
+				"GRANT %s ON *.* TO %s@'%%' WITH GRANT OPTION", priv, uid))
+		}
+	} else {
+		if req.DatabaseName != "" {
+			var exists int
+			if err := db.QueryRowContext(ctx,
+				"SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?",
+				req.DatabaseName,
+			).Scan(&exists); err != nil {
+				return fmt.Errorf("check database: %w", err)
+			}
+			if exists == 0 {
+				if _, err := db.ExecContext(ctx, "CREATE DATABASE "+mysqlID(req.DatabaseName)); err != nil {
+					return fmt.Errorf("create database: %w", err)
+				}
+			}
+			if _, err := db.ExecContext(ctx, fmt.Sprintf(
+				"GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, REFERENCES ON %s.* TO %s@'%%'",
+				mysqlID(req.DatabaseName), uid),
+			); err != nil {
+				return fmt.Errorf("grant on database: %w", err)
+			}
 		}
 	}
 
@@ -87,6 +107,22 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) error {
 		return fmt.Errorf("flush privileges: %w", err)
 	}
 	return nil
+}
+
+var mysqlDynamicPrivs = []string{
+	"AUDIT_ABORT_EXEMPT", "AUDIT_ADMIN", "AUTHENTICATION_POLICY_ADMIN",
+	"BACKUP_ADMIN", "BINLOG_ADMIN", "BINLOG_ENCRYPTION_ADMIN", "CLONE_ADMIN",
+	"CONNECTION_ADMIN", "ENCRYPTION_KEY_ADMIN", "FIREWALL_EXEMPT",
+	"FLUSH_OPTIMIZER_COSTS", "FLUSH_STATUS", "FLUSH_TABLES", "FLUSH_USER_RESOURCES",
+	"GROUP_REPLICATION_ADMIN", "GROUP_REPLICATION_STREAM",
+	"INNODB_REDO_LOG_ARCHIVE", "INNODB_REDO_LOG_ENABLE",
+	"PASSWORDLESS_USER_ADMIN", "PERSIST_RO_VARIABLES_ADMIN",
+	"REPLICATION_APPLIER", "REPLICATION_SLAVE_ADMIN",
+	"RESOURCE_GROUP_ADMIN", "RESOURCE_GROUP_USER", "ROLE_ADMIN",
+	"SENSITIVE_VARIABLES_OBSERVER", "SERVICE_CONNECTION_ADMIN",
+	"SESSION_VARIABLES_ADMIN", "SET_USER_ID", "SHOW_ROUTINE",
+	"SKIP_QUERY_REWRITE", "SYSTEM_USER", "SYSTEM_VARIABLES_ADMIN",
+	"TABLE_ENCRYPTION_ADMIN", "TELEMETRY_LOG_ADMIN", "XA_RECOVER_ADMIN",
 }
 
 func (s *Service) ResetPassword(ctx context.Context, req ResetPasswordRequest) error {
@@ -161,6 +197,9 @@ func (s *Service) UpdateUser(ctx context.Context, req UpdateUserRequest) error {
 	if systemUsers[req.Username] {
 		return fmt.Errorf("user %q is a protected system user", req.Username)
 	}
+	if req.Username == adminUser {
+		return fmt.Errorf("user %q is the cluster admin and cannot be renamed through this API", req.Username)
+	}
 
 	if _, err := db.ExecContext(ctx, fmt.Sprintf(
 		"RENAME USER %s@'%%' TO %s@'%%'",
@@ -189,22 +228,22 @@ func (s *Service) DeleteUser(ctx context.Context, req DeleteUserRequest) error {
 	}
 	defer db.Close()
 
-	var superPriv string
+	var count int
 	err = db.QueryRowContext(ctx,
-		"SELECT Super_priv FROM mysql.user WHERE User = ? AND Host = '%'",
+		"SELECT COUNT(*) FROM mysql.user WHERE User = ? AND Host = '%'",
 		req.Username,
-	).Scan(&superPriv)
-	if err == sql.ErrNoRows {
-		return fmt.Errorf("user %q does not exist", req.Username)
-	}
+	).Scan(&count)
 	if err != nil {
 		return fmt.Errorf("lookup user: %w", err)
+	}
+	if count == 0 {
+		return fmt.Errorf("user %q does not exist", req.Username)
 	}
 	if systemUsers[req.Username] {
 		return fmt.Errorf("user %q is a protected system user", req.Username)
 	}
-	if superPriv == "Y" {
-		return fmt.Errorf("user %q has SUPER privilege and cannot be deleted through this API", req.Username)
+	if req.Username == adminUser {
+		return fmt.Errorf("user %q is the cluster admin and cannot be deleted through this API", req.Username)
 	}
 
 	if _, err := db.ExecContext(ctx,

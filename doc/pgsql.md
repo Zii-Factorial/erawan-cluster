@@ -85,13 +85,24 @@ PostgreSQL data directory (`/var/lib/postgresql/<major>/main`) is cleared for a 
 
 ### Phase 6 — Application DB and user
 If `new_db` and `new_user` are set:
+
+When `new_user_superuser: true` (default):
 ```sql
-CREATE DATABASE appdb;
-CREATE USER appuser WITH PASSWORD 'password';
-GRANT CONNECT ON DATABASE appdb TO appuser;
-GRANT USAGE ON SCHEMA public TO appuser;
-GRANT ALL ON ALL TABLES IN SCHEMA public TO appuser;
+CREATE ROLE appuser WITH LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS PASSWORD 'password';
+CREATE DATABASE appdb OWNER appuser;
+GRANT ALL PRIVILEGES ON DATABASE appdb TO appuser;
 ```
+
+When `new_user_superuser: false`:
+```sql
+CREATE ROLE appuser WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'password';
+CREATE DATABASE appdb OWNER appuser;
+GRANT ALL PRIVILEGES ON DATABASE appdb TO appuser;
+```
+
+`new_user_ssl_required` (default `true`) controls `pg_hba.conf` rules written by Patroni:
+- `true` → `hostssl all appuser 0.0.0.0/0 scram-sha-256` + `hostnossl all appuser 0.0.0.0/0 reject`
+- `false` → `host all appuser 0.0.0.0/0 scram-sha-256`
 
 ---
 
