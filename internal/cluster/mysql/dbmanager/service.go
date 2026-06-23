@@ -63,7 +63,7 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) error {
 	}
 
 	sslClause := "REQUIRE NONE"
-	if req.SSLRequired {
+	if req.SSLRequiredEnabled() {
 		sslClause = "REQUIRE SSL"
 	}
 	if _, err := db.ExecContext(ctx, fmt.Sprintf("ALTER USER %s@'%%' %s", uid, sslClause)); err != nil {

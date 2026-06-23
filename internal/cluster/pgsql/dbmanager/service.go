@@ -159,7 +159,7 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) error {
 		}
 	}
 
-	if err := s.updatePatroniPgHba(ctx, req.JobID, req.Username, req.SSLRequired); err != nil {
+	if err := s.updatePatroniPgHba(ctx, req.JobID, req.Username, req.SSLRequiredEnabled()); err != nil {
 		return fmt.Errorf("update pg_hba: %w", err)
 	}
 	return nil

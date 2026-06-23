@@ -5,8 +5,15 @@ type CreateUserRequest struct {
 	Username     string `json:"username"`
 	Password     string `json:"password"`
 	Superuser    bool   `json:"superuser"`
-	SSLRequired  bool   `json:"ssl_required"`
+	SSLRequired  *bool  `json:"ssl_required"`
 	DatabaseName string `json:"database,omitempty"`
+}
+
+func (r CreateUserRequest) SSLRequiredEnabled() bool {
+	if r.SSLRequired == nil {
+		return true
+	}
+	return *r.SSLRequired
 }
 
 type ResetPasswordRequest struct {
