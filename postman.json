@@ -81,6 +81,11 @@
       "value": "true"
     },
     {
+      "key": "NEW_USER_SUPERUSER",
+      "value": "true",
+      "description": "Grant the new user full superuser privileges (true) or scope to new_db only (false)"
+    },
+    {
       "key": "NEW_DB",
       "value": "appdb"
     },
@@ -607,9 +612,9 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"cluster_name\": \"{{CLUSTER_NAME}}\",\n  \"admin_username\": \"clusteradmin\",\n  \"admin_password\": \"\",\n  \"primary_ip\": \"{{PRIMARY_IP}}\",\n  \"standby_ips\": [\"{{SECONDARY_IP}}\"],\n  \"new_user\": \"{{NEW_USER}}\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\",\n  \"new_user_ssl_required\": {{NEW_USER_SSL_REQUIRED}},\n  \"new_db\": \"{{NEW_DB}}\",\n  \"assume_prepared\": false,\n  \"bootstrap_router\": true,\n  \"ssh_port\": 22,\n  \"mysql_port\": 3306,\n  \"mysql_version\": 8,\n  \"step_timeout_seconds\": 900\n}"
+              "raw": "{\n  \"cluster_name\": \"{{CLUSTER_NAME}}\",\n  \"admin_username\": \"clusteradmin\",\n  \"admin_password\": \"\",\n  \"primary_ip\": \"{{PRIMARY_IP}}\",\n  \"standby_ips\": [\"{{SECONDARY_IP}}\"],\n  \"new_user\": \"{{NEW_USER}}\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\",\n  \"new_user_ssl_required\": {{NEW_USER_SSL_REQUIRED}},\n  \"new_user_superuser\": {{NEW_USER_SUPERUSER}},\n  \"new_db\": \"{{NEW_DB}}\",\n  \"assume_prepared\": false,\n  \"bootstrap_router\": true,\n  \"ssh_port\": 22,\n  \"mysql_port\": 3306,\n  \"mysql_version\": 8,\n  \"step_timeout_seconds\": 900\n}"
             },
-            "description": "Starts a MySQL InnoDB Cluster deployment. Returns a job immediately (`202 Accepted`). Poll **Get Job** to track progress. `JOB_ID` is auto-extracted from the response into the collection variable.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `cluster_name` | string | yes | InnoDB Cluster name (alphanumeric, no spaces) |\n| `primary_ip` | string | yes | IP of the primary node |\n| `standby_ips` | string[] | yes | IPs of secondary nodes; `[]` for single-node |\n| `admin_username` | string | yes | Cluster admin user to create (e.g. `clusteradmin`) |\n| `admin_password` | string | yes | Password for the admin user (auto-generated if empty) |\n| `new_user` | string | no | Application user to create |\n| `new_user_password` | string | no | Password for the application user |\n| `new_user_ssl_required` | bool | no | Require SSL for the application user (default `false`) |\n| `new_db` | string | no | Application database to create |\n| `assume_prepared` | bool | no | Skip node preparation steps if already prepared (default `false`) |\n| `bootstrap_router` | bool | no | Bootstrap MySQL Router on each node (default `true`) |\n| `ssh_port` | int | no | SSH port for Ansible (default `22`) |\n| `mysql_port` | int | no | MySQL port on DB nodes (default `3306`) |\n| `mysql_version` | int | no | Major version: `8` = 8.x, `9` = 9.x (default `8`) |\n| `step_timeout_seconds` | int | no | Per-step Ansible timeout in seconds (default `900`) |\n",
+            "description": "Starts a MySQL InnoDB Cluster deployment. Returns a job immediately (`202 Accepted`). Poll **Get Job** to track progress. `JOB_ID` is auto-extracted from the response into the collection variable.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `cluster_name` | string | yes | InnoDB Cluster name (alphanumeric, no spaces) |\n| `primary_ip` | string | yes | IP of the primary node |\n| `standby_ips` | string[] | yes | IPs of secondary nodes; `[]` for single-node |\n| `admin_username` | string | yes | Cluster admin user to create (e.g. `clusteradmin`) |\n| `admin_password` | string | yes | Password for the admin user (auto-generated if empty) |\n| `new_user` | string | no | Application user to create |\n| `new_user_password` | string | no | Password for the application user |\n| `new_user_ssl_required` | bool | no | Require SSL for the application user. Omit to use default (`true`) |\n| `new_user_superuser` | bool | no | Grant full server-level superuser privileges (`true`) or scope to `new_db` only (`false`). Default `true` |\n| `new_db` | string | no | Application database to create |\n| `assume_prepared` | bool | no | Skip node preparation steps if already prepared (default `false`) |\n| `bootstrap_router` | bool | no | Bootstrap MySQL Router on each node (default `true`) |\n| `ssh_port` | int | no | SSH port for Ansible (default `22`) |\n| `mysql_port` | int | no | MySQL port on DB nodes (default `3306`) |\n| `mysql_version` | int | no | Major version: `8` = 8.x, `9` = 9.x (default `8`) |\n| `step_timeout_seconds` | int | no | Per-step Ansible timeout in seconds (default `900`) |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/deploy",
               "protocol": "http",
@@ -971,9 +976,9 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"cluster_name\": \"{{CLUSTER_NAME}}\",\n  \"admin_username\": \"admin\",\n  \"admin_password\": \"\",\n  \"primary_ip\": \"{{PGSQL_PRIMARY_IP}}\",\n  \"standby_ips\": [],\n  \"new_user\": \"{{NEW_USER}}\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\",\n  \"new_user_ssl_required\": true,\n  \"new_db\": \"{{NEW_DB}}\",\n  \"ssh_port\": 22,\n  \"postgres_port\": 5432,\n  \"postgres_version\": 16,\n  \"step_timeout_seconds\": 900\n}"
+              "raw": "{\n  \"cluster_name\": \"{{CLUSTER_NAME}}\",\n  \"admin_username\": \"admin\",\n  \"admin_password\": \"\",\n  \"primary_ip\": \"{{PGSQL_PRIMARY_IP}}\",\n  \"standby_ips\": [],\n  \"new_user\": \"{{NEW_USER}}\",\n  \"new_user_password\": \"{{NEW_USER_PASSWORD}}\",\n  \"new_user_ssl_required\": {{NEW_USER_SSL_REQUIRED}},\n  \"new_user_superuser\": {{NEW_USER_SUPERUSER}},\n  \"new_db\": \"{{NEW_DB}}\",\n  \"ssh_port\": 22,\n  \"postgres_port\": 5432,\n  \"postgres_version\": 16,\n  \"step_timeout_seconds\": 900\n}"
             },
-            "description": "Starts a PostgreSQL/Patroni cluster deployment. Returns a job immediately (`202 Accepted`). Poll **Get Job** to track progress. `JOB_ID` is auto-extracted from the response into the collection variable.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `cluster_name` | string | yes | Patroni cluster scope name (alphanumeric, no spaces) |\n| `primary_ip` | string | yes | IP of the primary node |\n| `standby_ips` | string[] | yes | IPs of standby nodes; `[]` for single-node |\n| `admin_username` | string | yes | Patroni admin user to create (e.g. `admin`) |\n| `admin_password` | string | yes | Password for the admin user (auto-generated if empty) |\n| `postgres_version` | int | no | PostgreSQL major version (default `16`) |\n| `postgres_port` | int | no | PostgreSQL port on DB nodes (default `5432`) |\n| `new_user` | string | no | Application user to create |\n| `new_user_password` | string | no | Password for the application user |\n| `new_user_ssl_required` | bool | no | Require SSL for the application user (default `false`) |\n| `new_db` | string | no | Application database to create |\n| `ssh_port` | int | no | SSH port for Ansible (default `22`) |\n| `step_timeout_seconds` | int | no | Per-step Ansible timeout in seconds (default `900`) |\n",
+            "description": "Starts a PostgreSQL/Patroni cluster deployment. Returns a job immediately (`202 Accepted`). Poll **Get Job** to track progress. `JOB_ID` is auto-extracted from the response into the collection variable.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `cluster_name` | string | yes | Patroni cluster scope name (alphanumeric, no spaces) |\n| `primary_ip` | string | yes | IP of the primary node |\n| `standby_ips` | string[] | yes | IPs of standby nodes; `[]` for single-node |\n| `admin_username` | string | yes | Patroni admin user to create (e.g. `admin`) |\n| `admin_password` | string | yes | Password for the admin user (auto-generated if empty) |\n| `postgres_version` | int | no | PostgreSQL major version (default `16`) |\n| `postgres_port` | int | no | PostgreSQL port on DB nodes (default `5432`) |\n| `new_user` | string | no | Application user to create |\n| `new_user_password` | string | no | Password for the application user |\n| `new_user_ssl_required` | bool | no | Require SSL for the application user (default `true`) |\n| `new_user_superuser` | bool | no | Grant full superuser privileges — `SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS` (`true`) or `NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS` (`false`). Default `true` |\n| `new_db` | string | no | Application database to create |\n| `ssh_port` | int | no | SSH port for Ansible (default `22`) |\n| `step_timeout_seconds` | int | no | Per-step Ansible timeout in seconds (default `900`) |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/deploy",
               "protocol": "http",
@@ -1247,9 +1252,9 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"password\": \"{{DBMGR_PASSWORD}}\",\n  \"database\": \"{{DBMGR_DBNAME}}\"\n}"
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"password\": \"{{DBMGR_PASSWORD}}\",\n  \"superuser\": false,\n  \"ssl_required\": true,\n  \"database\": \"{{DBMGR_DBNAME}}\"\n}"
             },
-            "description": "Creates (or updates) a MySQL user. Credentials and primary IP are resolved from the deploy job. Idempotent — re-running with the same username updates the password and grants.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID (resolves admin credentials and primary IP) |\n| `username` | string | yes | MySQL username to create |\n| `password` | string | yes | User password |\n| `host` | string | no | Host pattern (default `%`) |\n| `databases` | string[] | no | Databases to grant `ALL PRIVILEGES` on (`[]` = no grants) |\n| `ssl_required` | bool | no | Require SSL for this user (default `false`) |\n",
+            "description": "Creates (or updates) a MySQL user. Credentials and primary IP are resolved from the deploy job. Idempotent — re-running with the same username updates the password and grants.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID (resolves admin credentials and primary IP) |\n| `username` | string | yes | MySQL username to create |\n| `password` | string | yes | User password |\n| `superuser` | bool | no | `true` = grant `ALL PRIVILEGES ON *.*` + all dynamic privileges (same as deploy-time superuser). `false` = scoped grants on `database` only (default `false`) |\n| `ssl_required` | bool | no | Require SSL for this user. Omit to use default (`true`) |\n| `database` | string | no | Database to grant scoped access on (ignored when `superuser: true`) |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/users",
               "protocol": "http",
@@ -1284,7 +1289,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"new_username\": \"newname\"\n}"
             },
-            "description": "Renames a MySQL user. Existing grants are carried over automatically. System users and users with `SUPER` privilege are refused.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `username` | string | yes | Current username |\n| `new_username` | string | yes | New username |\n",
+            "description": "Renames a MySQL user. Existing grants are carried over automatically.\n\n**Protected** — cannot be renamed: built-in system users (`root`, `mysql.sys`, `mysql.session`, `mysql.infoschema`) and the cluster admin user created at deploy time. API-created superusers can be renamed freely.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `username` | string | yes | Current username |\n| `new_username` | string | yes | New username |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/users",
               "protocol": "http",
@@ -1319,7 +1324,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"password\": \"{{DBMGR_PASSWORD}}\"\n}"
             },
-            "description": "Resets the password for an existing MySQL user. System users and users with `SUPER` privilege are refused.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `username` | string | yes | Username whose password to reset |\n| `password` | string | yes | New password |\n",
+            "description": "Resets the password for an existing MySQL user. Built-in system users (`root`, `mysql.sys`, `mysql.session`, `mysql.infoschema`) are refused.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `username` | string | yes | Username whose password to reset |\n| `password` | string | yes | New password |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/users/password",
               "protocol": "http",
@@ -1355,7 +1360,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\"\n}"
             },
-            "description": "Drops a MySQL user. System users (`root`, `mysql.sys`, `mysql.session`, `mysql.infoschema`) and users with the `SUPER` privilege are refused.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `username` | string | yes | Username to drop |\n",
+            "description": "Drops a MySQL user.\n\n**Protected** — cannot be dropped: built-in system users (`root`, `mysql.sys`, `mysql.session`, `mysql.infoschema`) and the cluster admin user created at deploy time. API-created superusers can be dropped freely.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `username` | string | yes | Username to drop |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/users",
               "protocol": "http",
@@ -1499,9 +1504,9 @@
                   "language": "json"
                 }
               },
-              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"password\": \"{{DBMGR_PASSWORD}}\",\n  \"database\": \"{{DBMGR_DBNAME}}\"\n}"
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"password\": \"{{DBMGR_PASSWORD}}\",\n  \"superuser\": false,\n  \"ssl_required\": true,\n  \"database\": \"{{DBMGR_DBNAME}}\"\n}"
             },
-            "description": "Creates (or updates) a PostgreSQL role. Credentials and primary IP are resolved from the deploy job. Idempotent — re-running with the same username updates the password and grants.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID (resolves admin credentials and primary IP) |\n| `username` | string | yes | PostgreSQL role name to create |\n| `password` | string | yes | Role password |\n| `databases` | string[] | no | Databases to grant `CONNECT` + `ALL ON ALL TABLES` on (`[]` = no grants) |\n| `ssl_required` | bool | no | Enforce `hostssl` rule for this role (default `false`) |\n",
+            "description": "Creates (or updates) a PostgreSQL role. Credentials and primary IP are resolved from the deploy job. Idempotent — re-running with the same username updates the password and grants.\n\nSSL enforcement is applied via Patroni's `pg_hba` DCS config (not at the role level). The pg_hba rule for this user is always written and kept in sync with `ssl_required`.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID (resolves admin credentials and primary IP) |\n| `username` | string | yes | PostgreSQL role name to create |\n| `password` | string | yes | Role password |\n| `superuser` | bool | no | `true` = `LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS` (same as deploy-time superuser). `false` = `NOSUPERUSER NOCREATEROLE INHERIT` scoped to `database` (default `false`) |\n| `ssl_required` | bool | no | `true` = `hostssl` + `hostnossl reject` in `pg_hba.conf`. `false` = plain `host` rule. Omit to use default (`true`). Patroni DCS is patched automatically |\n| `database` | string | no | Database to grant scoped access on (ignored when `superuser: true`) |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/users",
               "protocol": "http",
@@ -1536,7 +1541,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"new_username\": \"newname\"\n}"
             },
-            "description": "Renames a PostgreSQL role. Existing grants are carried over automatically. Superuser, replication, and built-in `pg_*` roles are refused.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `username` | string | yes | Current role name |\n| `new_username` | string | yes | New role name |\n",
+            "description": "Renames a PostgreSQL role. Existing grants are carried over automatically.\n\n**Protected** — cannot be renamed: `postgres`, any `pg_*` built-in role, replication roles (e.g. `replicator`), and the cluster admin user created at deploy time. API-created superusers can be renamed freely.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `username` | string | yes | Current role name |\n| `new_username` | string | yes | New role name |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/users",
               "protocol": "http",
@@ -1571,7 +1576,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\",\n  \"password\": \"{{DBMGR_PASSWORD}}\"\n}"
             },
-            "description": "Resets the password for an existing PostgreSQL role. Superuser, replication, and built-in `pg_*` roles are refused.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `username` | string | yes | Role name whose password to reset |\n| `password` | string | yes | New password |\n",
+            "description": "Resets the password for an existing PostgreSQL role. Built-in system roles (`postgres`, `pg_*` prefix) are refused.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `username` | string | yes | Role name whose password to reset |\n| `password` | string | yes | New password |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/users/password",
               "protocol": "http",
@@ -1607,7 +1612,7 @@
               },
               "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"username\": \"{{DBMGR_USERNAME}}\"\n}"
             },
-            "description": "Drops a PostgreSQL role. Superuser roles, replication roles, built-in `pg_*` roles, and the `postgres` user are refused. Objects owned by the role are reassigned to the admin user before drop.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `username` | string | yes | Role name to drop |\n",
+            "description": "Drops a PostgreSQL role. Objects owned by the role are reassigned to the admin user before drop.\n\n**Protected** — cannot be dropped: `postgres`, any `pg_*` built-in role, replication roles (e.g. `replicator`), and the cluster admin user created at deploy time. API-created superusers can be dropped freely.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `username` | string | yes | Role name to drop |\n",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/users",
               "protocol": "http",

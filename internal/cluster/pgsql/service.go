@@ -171,6 +171,7 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 			AdminUsername:      req.AdminUsername,
 			NewUser:            req.NewUser,
 			NewUserSSLRequired: req.NewUserSSLRequiredEnabled(),
+			NewUserSuperuser:   req.NewUserSuperuserEnabled(),
 			NewDB:              req.NewDB,
 			SSHUser:            s.sshUser,
 			SSHPrivateKeyPath:  s.sshKeyPath,

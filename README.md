@@ -4,7 +4,7 @@
 
 # erawan-cluster
 
-**Version 1.02** — REST API for automated database cluster lifecycle management, live metrics collection, and HAProxy configuration.
+**Version 1.02** — Cluster Management API for automated database cluster lifecycle management, live metrics collection, and HAProxy configuration.
 
 ---
 

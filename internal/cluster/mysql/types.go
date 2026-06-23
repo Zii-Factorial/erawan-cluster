@@ -33,7 +33,8 @@ type DeployRequest struct {
 	SecondaryIPs       []string `json:"secondary_ips,omitempty"`
 	NewUser            string   `json:"new_user"`
 	NewUserPassword    string   `json:"new_user_password"`
-	NewUserSSLRequired bool     `json:"new_user_ssl_required"`
+	NewUserSSLRequired *bool    `json:"new_user_ssl_required"`
+	NewUserSuperuser   bool     `json:"new_user_superuser"`
 	NewDB              string   `json:"new_db"`
 	AssumePrepared     bool     `json:"assume_prepared"`
 	BootstrapRouter    *bool    `json:"bootstrap_router"`
@@ -41,6 +42,13 @@ type DeployRequest struct {
 	MySQLPort          int      `json:"mysql_port"`
 	MySQLVersion       int      `json:"mysql_version"` // major version: 7=5.7, 8=8.x, 9=9.x; default 8
 	StepTimeoutSeconds int      `json:"step_timeout_seconds"`
+}
+
+func (r DeployRequest) NewUserSSLRequiredEnabled() bool {
+	if r.NewUserSSLRequired == nil {
+		return true
+	}
+	return *r.NewUserSSLRequired
 }
 
 /**
@@ -52,6 +60,7 @@ type DeployRequest struct {
  * Returns:
  *   bool - boolean result
  */
+
 func (r DeployRequest) BootstrapRouterEnabled() bool {
 	if r.BootstrapRouter == nil {
 		return true
@@ -77,6 +86,7 @@ type StoredSpec struct {
 	StandbyIPs         []string `json:"standby_ips"`
 	NewUser            string   `json:"new_user"`
 	NewUserSSLRequired bool     `json:"new_user_ssl_required"`
+	NewUserSuperuser   bool     `json:"new_user_superuser"`
 	NewDB              string   `json:"new_db"`
 	AssumePrepared     bool     `json:"assume_prepared"`
 	BootstrapRouter    bool     `json:"bootstrap_router"`

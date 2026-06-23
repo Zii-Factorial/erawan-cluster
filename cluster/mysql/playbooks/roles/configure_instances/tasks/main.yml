@@ -240,6 +240,13 @@
       raise RuntimeError("unable to find a usable MySQL local socket for root")
 
     session = connect_local_root()
+
+    # dba.configure_instance() with the MYSQL communication stack persists
+    # require_secure_transport=ON, which forces ALL client connections to use
+    # SSL even for users with REQUIRE NONE. GR traffic has its own SSL via
+    # group_replication_ssl_mode, so resetting this is safe.
+    session.run_sql("SET PERSIST require_secure_transport = OFF")
+
     admin_user = {{ cluster_admin_username | to_json }}
     admin_pass = {{ cluster_admin_password | to_json }}
     eu = admin_user.replace("`", "``")

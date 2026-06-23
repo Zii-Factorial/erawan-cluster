@@ -1,6 +1,6 @@
 # Proxy Architecture
 
-This document explains how the erawan-cluster proxy node works — what runs on it, how it controls cluster jobs, and how SQL traffic flows through it.
+This document explains how the erawan-cluster Cluster Management API and proxy node work together — what runs on each, how cluster jobs are controlled, and how SQL traffic flows through HAProxy.
 
 **Diagrams (draw.io):** [diagrams/proxy-architecture.drawio](diagrams/proxy-architecture.drawio) · [diagrams/deploy-job-workflow.drawio](diagrams/deploy-job-workflow.drawio)
 
@@ -10,27 +10,28 @@ This document explains how the erawan-cluster proxy node works — what runs on 
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        PROXY NODE                               │
+│                            PROXY NODE                           │
 │                                                                 │
-│   ┌──────────────────┐         ┌──────────────────────────┐    │
-│   │  erawan-cluster  │         │         HAProxy           │    │
-│   │    Go API        │─ SSH ──▶│   :25041  MySQL frontend  │    │
-│   │    :8080         │         │   :25042  pgsql frontend  │    │
-│   └────────┬─────────┘         └──────────┬───────────────┘    │
-│            │ ansible-playbook             │ TCP proxy           │
-└────────────┼──────────────────────────────┼────────────────────┘
-             │                              │
-     ┌───────┴──────────────────┐    ┌──────┴───────────────┐
-     │      DB CLUSTER          │    │      DB CLUSTER       │
-     │  10.0.0.1  (primary)     │    │  10.0.0.1 :3306       │
-     │  10.0.0.2  (secondary)   │◀───│  10.0.0.2 :3306       │
-     │  10.0.0.3  (secondary)   │    │  10.0.0.3 :3306       │
-     └──────────────────────────┘    └──────────────────────┘
+│  ┌──────────────────────────────┐  ┌─────────────────────────┐  │
+│  │       erawan-cluster         │  │        HAProxy          │  │
+│  │  Cluster Management API      │─▶│  :25041  MySQL          │  │
+│  │  :8080                       │  │  :25042  PostgreSQL     │  │
+│  └──────────────┬───────────────┘  └────────────┬────────────┘  │
+│                 │  SSH + Ansible                │  TCP proxy    │
+└─────────────────┼───────────────────────────────┼───────────────┘
+                  │                               │
+                  ▼                               ▼
+      ┌───────────────────────┐     ┌──────────────────────────┐
+      │     MySQL Cluster     │     │   PostgreSQL Cluster     │
+      │  node1 :3306 primary  │     │  node1 :5432 leader      │
+      │  node2 :3306 secondary│     │  node2 :5432 sync_sb     │
+      │  node3 :3306 secondary│     │  node3 :5432 replica     │
+      └───────────────────────┘     └──────────────────────────┘
 ```
 
 A single **proxy node** runs two services:
 
-- **erawan-cluster API** (`/usr/local/bin/erawan-cluster`) — the Go REST API that receives requests from clients, manages cluster jobs, and runs Ansible playbooks over SSH
+- **erawan-cluster** (`/usr/local/bin/erawan-cluster`) — the Cluster Management API that receives requests from clients, manages cluster jobs, and runs Ansible playbooks over SSH
 - **HAProxy** — the SQL traffic proxy that routes database connections from clients to the correct DB node
 
 Client applications **never connect directly to DB node IPs**. All SQL connections go through HAProxy.
