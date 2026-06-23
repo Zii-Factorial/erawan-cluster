@@ -561,6 +561,7 @@
     },
     {
       "name": "Cluster - MySQL",
+      "description": "MySQL InnoDB Cluster with MySQL Router on every node.\n\n**Supports:** single-primary with one or more secondaries, or single-node.\n\n**Auto-rejoin after outage:**\nEvery node runs Group Replication with `start_on_boot = ON` and `autorejoin_tries = 10` — MySQL re-attempts group join automatically on restart. In addition, the `erawan-gr-watchdog` systemd timer fires every 60 s: it detects any non-ONLINE/RECOVERING GR state, runs `STOP GROUP_REPLICATION` → `RESET REPLICA ALL` → `START GROUP_REPLICATION`, and restarts MySQL Router once the node is back ONLINE. A node that loses majority contact for more than 60 s switches to READ_ONLY (`exit_state_action = READ_ONLY`) so it never silently accepts stale writes. MySQL Router on all nodes re-discovers the new topology automatically after each successful rejoin.",
       "item": [
         {
           "name": "Deploy",
@@ -928,7 +929,7 @@
     },
     {
       "name": "Cluster - PostgreSQL",
-      "description": "PostgreSQL supports either a single primary node or a primary with one or more standby nodes.",
+      "description": "PostgreSQL/Patroni cluster. Supports a single primary or a primary with one or more streaming standbys.\n\n**Auto-rejoin / failover after outage:**\nPatroni manages the full lifecycle — no manual intervention needed for most failure scenarios.\n\n- **Standby comes back after disconnect:** Patroni detects the node is lagging, uses `pg_rewind` to fast-resync diverged WAL from the current primary, then restarts streaming replication. Full re-clone is used only when rewind fails or timelines diverge too far.\n- **Primary goes down:** etcd leader key expires after `ttl = 30 s`. Patroni promotes the most up-to-date standby (respecting `maximum_lag_on_failover = 1 MB`). The old primary, when it comes back, detects a new leader, demotes itself, rewinds, and rejoins as replica automatically.\n- **HAProxy health check** (`httpchk GET /leader` on Patroni REST port) removes the old primary from the pool within seconds of failover and adds the new one — client connections are rerouted transparently.\n- **Synchronous mode** (`synchronous_mode = true`, `synchronous_mode_strict = false`): at least one sync replica must acknowledge each WAL record for the primary to commit; if no sync replica is available the primary still serves writes rather than blocking indefinitely.",
       "item": [
         {
           "name": "Deploy",

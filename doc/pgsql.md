@@ -326,6 +326,92 @@ For the `cluster` and `failover` categories, the collector also calls Patroni RE
 
 ---
 
+## Auto-Rejoin and Node Recovery
+
+Patroni handles all recovery scenarios automatically. No manual intervention is needed for typical single-node failures.
+
+### Key recovery parameters (DCS-managed, apply to all nodes)
+
+| Parameter | Value | Effect |
+|-----------|-------|--------|
+| `ttl` | 30 s | Leader lock expires after 30 s without renewal; triggers failover |
+| `loop_wait` | 10 s | Patroni health-check interval |
+| `retry_timeout` | 10 s | Timeout for etcd operations |
+| `maximum_lag_on_failover` | 1 048 576 bytes (1 MB) | Standby is eligible for promotion only if lag < 1 MB |
+| `use_pg_rewind` | true | Prefer fast WAL diff over full re-clone when a node has diverged |
+| `remove_data_directory_on_rewind_failure` | true | If pg_rewind fails, wipe data dir and re-clone via pg_basebackup |
+| `remove_data_directory_on_diverged_timelines` | true | If timelines diverge unresolvably, wipe and re-clone |
+
+### Scenario 1 — Standby goes down and comes back
+
+```
+1. Standby loses connectivity or is rebooted
+2. Patroni on the standby detects it is no longer streaming
+3. Patroni attempts pg_rewind to fast-sync the diverged WAL from current primary
+   → Success: streaming replication resumes (seconds)
+   → Failure: data dir is wiped; pg_basebackup re-clones from primary (minutes)
+4. Standby rejoins as replica; if no sync_standby exists, Patroni elects it as sync_standby
+```
+
+`pg_rewind` works by shipping only the blocks that changed since the last common checkpoint — much faster than a full clone for short outages.
+
+### Scenario 2 — Primary goes down (automatic failover)
+
+```
+1. Primary (Node 1) dies or loses network
+2. Patroni on Node 1 fails to renew the etcd leader key
+3. After ttl = 30 s, the leader key expires
+4. Patroni on Node 2 (sync_standby) wins the election:
+   → acquires etcd lock
+   → promotes PostgreSQL from standby to read-write (pg_ctl promote)
+   → REST /leader on Node 2 now returns 200
+5. HAProxy health check (≤10 s interval):
+   → Node 1: /leader → 503 (or no response) → removed from pool
+   → Node 2: /leader → 200 → receives all new connections
+6. Node 3 (replica) detects new leader via etcd, re-attaches streaming replication to Node 2
+   Patroni may promote Node 3 to sync_standby
+```
+
+**Client impact:** connections in flight to Node 1 at the moment of failure are dropped. New connections route to Node 2 within ≤40 s (ttl + HAProxy interval).
+
+### Scenario 3 — Old primary comes back after failover
+
+```
+1. Node 1 recovers and patroni.service starts
+2. Patroni on Node 1 detects an active leader key in etcd (Node 2 is now leader)
+3. Patroni demotes Node 1:
+   → pg_rewind runs to walk back Node 1's timeline to Node 2's divergence point
+   → If rewind fails: data directory is wiped, pg_basebackup re-clones from Node 2
+4. Node 1 restarts as a streaming replica of Node 2
+5. Patroni REST /replica on Node 1 returns 200; HAProxy does NOT route writes to it
+```
+
+Node 1 never "fights" for leadership. Patroni reads the etcd lock and immediately yields.
+
+### Scenario 4 — etcd node goes down
+
+etcd uses Raft consensus. A 3-node etcd cluster tolerates **1 node failure** and continues serving reads and writes. Patroni keeps running as long as etcd has quorum.
+
+When the etcd node recovers:
+```
+1. etcd on that node starts, discovers peers via initial-cluster
+2. etcd syncs Raft log from the remaining members (automatic)
+3. etcd rejoins the cluster as a voting member — no Patroni or PostgreSQL restart needed
+```
+
+### Recovery scenario matrix
+
+| Scenario | Mechanism | Recovery time |
+|----------|-----------|---------------|
+| Standby rebooted, primary still running | pg_rewind → resume streaming | Seconds (fast WAL sync) |
+| Standby diverged, rewind fails | Full pg_basebackup re-clone | Minutes (data size dependent) |
+| Primary dies, standby takes over | Patroni leader election via etcd TTL | ≤30 s (failover) + ≤10 s (HAProxy) |
+| Old primary returns after failover | pg_rewind to new leader's timeline | Seconds to minutes |
+| etcd single node dies | Raft quorum maintained (3-node: tolerates 1) | Immediate (other 2 nodes serve) |
+| etcd node returns | Raft log sync | Seconds |
+
+---
+
 ## Important Behaviors
 
 - PostgreSQL data directory and etcd data are cleared **once per deployment job**. Resuming a failed job does not clear data again.

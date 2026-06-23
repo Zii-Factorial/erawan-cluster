@@ -71,8 +71,9 @@ On each node via `mysqlsh`:
 - The cluster admin user is created or confirmed
 - Auto-rejoin settings are written:
   - `group_replication_start_on_boot = ON`
-  - `group_replication_autorejoin_tries = 3`
-  - `group_replication_unreachable_majority_timeout = 30`
+  - `group_replication_autorejoin_tries = 10`
+  - `group_replication_member_expel_timeout = 5`
+  - `group_replication_unreachable_majority_timeout = 60`
   - `group_replication_exit_state_action = READ_ONLY`
 
 ### Phase 3 — Cluster creation (primary node)
@@ -257,4 +258,89 @@ Use the **cluster admin credentials** (`admin_user` / `admin_password` from the 
 - `assume_prepared: true` — skips preflight and `dba.configureInstance()`. Use when nodes were already prepared in a prior run.
 - Single-node clusters support rollback but not automatic failover.
 - A 3-node cluster survives loss of 1 node and keeps quorum. A 2-node cluster cannot tolerate any node loss (no quorum majority).
-- The boot-recovery service installed on each node automatically rejoins the cluster after a full cluster outage with staggered delays (prevents split-brain on simultaneous restart).
+
+---
+
+## Auto-Rejoin and Node Recovery
+
+Every node has three independent recovery mechanisms installed during deploy. They work together to cover different failure scenarios without any manual intervention.
+
+### Layer 1 — Group Replication built-in (`start_on_boot` + `autorejoin_tries`)
+
+When MySQL restarts (e.g. after a reboot or a crash), GR starts automatically:
+
+```
+group_replication_start_on_boot = ON
+```
+
+If the node was expelled from the group while running (e.g. due to a network partition), GR retries rejoining automatically:
+
+```
+group_replication_autorejoin_tries             = 10   # retry attempts after expulsion
+group_replication_member_expel_timeout         = 5    # seconds before declaring a member suspect
+group_replication_unreachable_majority_timeout = 60   # seconds before transitioning to ERROR if majority lost
+group_replication_exit_state_action            = READ_ONLY  # on exit: go READ_ONLY, not ABORT
+```
+
+`READ_ONLY` means a failed node stops accepting writes but keeps running — it never silently diverges.
+
+### Layer 2 — GR watchdog (`erawan-gr-watchdog`)
+
+A systemd timer fires every **60 seconds** (first run: 120 s after boot) on every node:
+
+```
+erawan-gr-watchdog.timer  →  erawan-gr-watchdog.service
+```
+
+What it does:
+
+```
+1. Query: SELECT member_state FROM performance_schema.replication_group_members
+2. If ONLINE or RECOVERING → exit (all good)
+3. If anything else:
+   a. STOP GROUP_REPLICATION
+   b. RESET REPLICA ALL FOR CHANNEL 'group_replication_applier'
+   c. START GROUP_REPLICATION
+   d. Wait 10 s, check new state
+4. If now ONLINE → systemctl restart <router_service>
+   (Router re-discovers topology after the rejoin)
+```
+
+This handles cases where `autorejoin_tries` is exhausted or GR gets stuck in an unrecoverable applier state.
+
+### Layer 3 — Boot recovery (`erawan-mysql-boot-recovery`)
+
+Handles **complete cluster outage** — all nodes were down at the same time (e.g. data center power loss).
+
+Each node runs a one-shot service on boot with a staggered delay:
+
+| Node index | Delay |
+|------------|-------|
+| Node 1 (primary at deploy) | 30 s |
+| Node 2 | 60 s |
+| Node 3 | 90 s |
+| … | +30 s per node |
+
+On each node the script:
+
+```
+1. Waits up to 120 s for local MySQL to accept connections
+2. Sleeps the staggered delay
+3. Checks: are any members already ONLINE?
+   → yes: exit (another node recovered first, GR watchdog will resync this node)
+   → no: call dba.reboot_cluster_from_complete_outage(cluster_name)
+          (mysqlsh picks the node with highest GTID as primary)
+4. If reboot fails: log error; GR watchdog retries every 60 s
+```
+
+The staggered delay prevents multiple nodes from simultaneously trying to bootstrap a new primary, which would cause split-brain.
+
+### Recovery scenario matrix
+
+| Scenario | Mechanism |
+|----------|-----------|
+| Single node reboots, cluster still has quorum | `start_on_boot = ON` — GR rejoins automatically on MySQL start |
+| Node expelled during partition (cluster still running) | `autorejoin_tries = 10` — GR retries 10 times; watchdog catches any remaining failures |
+| GR stuck in applier error state | GR watchdog — STOP → RESET REPLICA → START every 60 s |
+| All nodes rebooted simultaneously (full DC outage) | Boot recovery — staggered `reboot_cluster_from_complete_outage`, first node wins |
+| Node rejoins but Router has stale topology | GR watchdog restarts MySQL Router after each successful ONLINE state |
