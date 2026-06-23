@@ -229,6 +229,10 @@
     daemon_reload: true
     enabled: true
     state: restarted
+  register: _router_restart
+  retries: 3
+  delay: 15
+  until: _router_restart is succeeded
   when: bootstrap_router | default(false) | bool
   tags: ["bootstrap_router"]
 
