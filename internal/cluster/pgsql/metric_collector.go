@@ -2,102 +2,95 @@ package pgsql
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
-	"net/url"
-	"strconv"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	_ "github.com/lib/pq"
+	"erawan-cluster/internal/cluster/core"
 )
 
 // Collector gathers live metrics from a PostgreSQL / Patroni cluster.
-// Each category is collected independently — a failure in one never suppresses the others.
+// Data is sourced from postgres_exporter (:9187), node_exporter (:9100),
+// and the Patroni REST API (:8008). No direct database connection is required.
 type Collector struct {
 	httpClient *http.Client
 }
 
-/**
- * NewCollector returns a ready-to-use Collector.
- *
- * Returns:
- *   *Collector - the resulting *Collector
- */
 func NewCollector() *Collector {
 	return &Collector{
 		httpClient: &http.Client{Timeout: 15 * time.Second},
 	}
 }
 
-/**
- * Collect gathers every requested category and returns a MetricResponse.
- *
- * Receiver:
- *   c *Collector - pointer receiver; the method may mutate this Collector instance
- *
- * Params:
- *   ctx context.Context - context carrying cancellation signals and deadlines
- *   req MetricRequest - the req (MetricRequest)
- *
- * Returns:
- *   MetricResponse - the resulting MetricResponse
- */
+// Collect gathers every requested category and returns a MetricResponse.
 func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricResponse {
 	resp := MetricResponse{
 		CollectedAt: time.Now().UTC(),
+		Engine:      "pgsql",
 		Host:        req.Host,
 		Port:        resolvePort(req.Port, 5432),
-		From:        req.From,
-		To:          req.To,
 		Categories:  make(map[string]any),
 		Errors:      make(map[string]string),
 	}
 
-	categories := resolveCategories(req.Categories)
+	pgPort := resolvePort(req.PgsqlExporterPort, 9187)
+	nodePort := resolvePort(req.NodeExporterPort, 9100)
 
-	var db *sql.DB
-	if categoriesNeedDB(categories) {
+	// Primary is the first node IP (set by ConnectionInfo from stored job).
+	primaryIP := ""
+	if len(req.NodeIPs) > 0 {
+		primaryIP = req.NodeIPs[0]
+	} else if req.Host != "" {
+		primaryIP = req.Host
+	}
+
+	// Scrape postgres_exporter on the primary node — used by most DB categories.
+	var pgMetrics core.MetricFamily
+	if primaryIP != "" {
+		url := fmt.Sprintf("http://%s:%d/metrics", primaryIP, pgPort)
 		var err error
-		db, err = openDB(req)
+		pgMetrics, err = core.ScrapeMetrics(ctx, c.httpClient, url)
 		if err != nil {
-			for _, cat := range categories {
-				if !requiresNoDB(cat) {
-					resp.Errors[cat] = "db connect: " + err.Error()
+			// Record the scrape error for all DB-dependent categories.
+			for _, cat := range resolveCategories(req.Categories) {
+				if !isPatroniCategory(cat) && cat != MetricCategorySystem {
+					resp.Errors[cat] = "pgsql exporter scrape: " + err.Error()
 				}
 			}
-		} else {
-			defer db.Close()
-			resp.DatabaseCount, _ = collectDatabaseCount(ctx, db)
-			resp.Users, _ = collectUsers(ctx, db)
-			resp.Databases, _ = collectDatabases(ctx, db)
 		}
 	}
 
-	limit := req.Limit
-	if limit <= 0 {
-		limit = 20
-	}
-	if limit > 500 {
-		limit = 500
+	// Scrape databases list from pg_database_size_bytes.
+	if pgMetrics != nil {
+		resp.Databases = normalizeDatabases(pgMetrics)
 	}
 
-	type catResult struct {
+	// Scrape node_exporter on every node — collected into resp.Nodes in parallel.
+	nodeMetrics := c.scrapeAllNodes(ctx, req.NodeIPs, nodePort)
+	for _, nm := range nodeMetrics {
+		resp.Nodes = append(resp.Nodes, nm)
+	}
+
+	// Collect each category concurrently.
+	categories := resolveCategories(req.Categories)
+	type result struct {
 		data any
 		err  error
 	}
-	results := make(map[string]catResult, len(categories))
+	results := make(map[string]result, len(categories))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
 	for _, cat := range categories {
-		if !requiresNoDB(cat) && db == nil {
-			continue // error already recorded above
+		// Skip DB categories if the scrape failed.
+		if pgMetrics == nil && !isPatroniCategory(cat) && cat != MetricCategorySystem {
+			continue
 		}
 		cat := cat
 		wg.Add(1)
@@ -108,32 +101,39 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 			switch cat {
 			case MetricCategoryCluster:
 				data, err = c.collectCluster(ctx, req)
-			case MetricCategoryUptime:
-				data, err = collectUptime(ctx, db)
 			case MetricCategoryFailover:
 				data, err = c.collectFailover(ctx, req)
+			case MetricCategoryUptime:
+				data, err = collectUptime(pgMetrics)
 			case MetricCategoryConnections:
-				data, err = collectConnections(ctx, db, req.Databases)
+				data, err = collectConnections(pgMetrics)
 			case MetricCategoryReplication:
-				data, err = collectReplication(ctx, db)
+				data, err = collectReplication(pgMetrics, req)
 			case MetricCategoryPerformance:
-				data, err = collectPerformance(ctx, db)
+				data, err = collectPerformance(pgMetrics)
 			case MetricCategoryQuery:
-				data, err = collectQuery(ctx, db, limit, req.From, req.To, req.Databases)
+				data, err = collectQuery(pgMetrics)
 			case MetricCategoryMaintenance:
-				data, err = collectMaintenance(ctx, db, limit, req.Databases)
+				data, err = collectMaintenance(pgMetrics)
+			case MetricCategorySystem:
+				// Already in resp.Nodes; nothing to add to categories map.
 			}
 			mu.Lock()
-			results[cat] = catResult{data, err}
+			results[cat] = result{data, err}
 			mu.Unlock()
 		}()
 	}
 	wg.Wait()
 
 	for cat, r := range results {
+		if cat == MetricCategorySystem {
+			continue
+		}
 		if r.err != nil {
-			resp.Errors[cat] = r.err.Error()
-		} else {
+			if _, already := resp.Errors[cat]; !already {
+				resp.Errors[cat] = r.err.Error()
+			}
+		} else if r.data != nil {
 			resp.Categories[cat] = r.data
 		}
 	}
@@ -144,472 +144,779 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 	return resp
 }
 
-/**
- * ValidateMetricRequest applies defaults and validates required fields.
- *
- * Params:
- *   req *MetricRequest - the req (*MetricRequest)
- *
- * Returns:
- *   error - error value; non-nil when the operation fails
- */
+// ValidateMetricRequest applies defaults and validates required fields.
 func ValidateMetricRequest(req *MetricRequest) error {
-	req.Host = strings.TrimSpace(req.Host)
-	if req.Port == 0 {
+	if req.ProxyPort == 0 {
 		return fmt.Errorf("proxy_port is required (HAProxy frontend port, e.g. 25041)")
 	}
-	if req.Port < 1 || req.Port > 65535 {
+	if req.ProxyPort < 1 || req.ProxyPort > 65535 {
 		return fmt.Errorf("proxy_port must be between 1 and 65535")
 	}
-	req.User = strings.TrimSpace(req.User)
-	if req.User == "" {
-		return fmt.Errorf("user is required")
-	}
-	if req.SSLMode == "" {
-		req.SSLMode = "disable"
-	}
-	if req.SSLMode != "disable" && req.SSLMode != "require" && req.SSLMode != "skip-verify" && req.SSLMode != "verify-full" {
-		return fmt.Errorf("ssl_mode must be 'disable', 'require' (TLS, no cert check), 'verify-full' (TLS + CA verification), or 'skip-verify' (alias for require)")
+	if len(req.NodeIPs) == 0 && req.JobID == "" {
+		return fmt.Errorf("job_id or node_ips is required to locate cluster exporters")
 	}
 	if req.From != nil && req.To != nil && req.From.After(*req.To) {
 		return fmt.Errorf("from must be before to")
 	}
-	valid := make(map[string]bool, len(allMetricCategories))
+	valid := map[string]bool{}
 	for _, c := range allMetricCategories {
 		valid[c] = true
 	}
 	for _, cat := range req.Categories {
 		if !valid[strings.ToLower(strings.TrimSpace(cat))] {
-			return fmt.Errorf("unknown category %q; valid: %s",
-				cat, strings.Join(allMetricCategories, ", "))
+			return fmt.Errorf("unknown category %q; valid: %s", cat, strings.Join(allMetricCategories, ", "))
 		}
 	}
 	return nil
 }
 
 // =============================================================================
-// helpers
+// Node exporter — system metrics
 // =============================================================================
 
-/**
- * resolvePort.
- *
- * Params:
- *   port int - the port value
- *   def int - the def value
- *
- * Returns:
- *   int - the resulting integer
- */
-func resolvePort(port, def int) int {
-	if port <= 0 {
-		return def
-	}
-	return port
+type nodeResult struct {
+	metric NodeMetric
+	err    error
 }
 
-/**
- * discoverLeader probes each node in req.NodeIPs and returns the IP of the
- * node that responds 200 to GET /leader (i.e. the current Patroni primary).
- * Returns an error if no node responds as leader.
- *
- * Receiver:
- *   c *Collector - pointer receiver; the method may mutate this Collector instance
- *
- * Params:
- *   ctx context.Context - context carrying cancellation signals and deadlines
- *   req MetricRequest - the req (MetricRequest)
- *
- * Returns:
- *   string - the resulting string
- *   error - error value; non-nil when the operation fails
- */
-func (c *Collector) discoverLeader(ctx context.Context, req MetricRequest) (string, error) {
-	patroniPort := resolvePort(req.PatroniPort, 8008)
-	if len(req.NodeIPs) == 0 {
-		return "", fmt.Errorf("node_ips is required for cluster/failover metrics — provide the IPs of all cluster members")
+func (c *Collector) scrapeAllNodes(ctx context.Context, nodeIPs []string, port int) []NodeMetric {
+	if len(nodeIPs) == 0 {
+		return nil
 	}
-	for _, ip := range req.NodeIPs {
-		ip = strings.TrimSpace(ip)
-		if ip == "" {
-			continue
-		}
-		url := fmt.Sprintf("http://%s:%d/leader", ip, patroniPort)
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			continue
-		}
-		resp, err := c.httpClient.Do(httpReq)
-		if err != nil {
-			continue
-		}
-		status := resp.StatusCode
-		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		if status == http.StatusOK {
-			return ip, nil
-		}
+	results := make([]nodeResult, len(nodeIPs))
+	var wg sync.WaitGroup
+	for i, ip := range nodeIPs {
+		i, ip := i, ip
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			url := fmt.Sprintf("http://%s:%d/metrics", ip, port)
+			m, err := core.ScrapeMetrics(ctx, c.httpClient, url)
+			if err != nil {
+				results[i] = nodeResult{err: err}
+				return
+			}
+			results[i] = nodeResult{metric: normalizeNodeMetrics(ip, m)}
+		}()
 	}
-	return "", fmt.Errorf("no Patroni leader found among node_ips %v (port %d) — cluster may be unhealthy", req.NodeIPs, patroniPort)
-}
-
-/**
- * requiresNoDB returns true for categories that use Patroni REST only (no DB connection needed).
- *
- * Params:
- *   cat string - the cat string
- *
- * Returns:
- *   bool - boolean result
- */
-func requiresNoDB(cat string) bool {
-	return cat == MetricCategoryCluster || cat == MetricCategoryFailover
-}
-
-/**
- * categoriesNeedDB.
- *
- * Params:
- *   cats []string - the cats ([]string)
- *
- * Returns:
- *   bool - boolean result
- */
-func categoriesNeedDB(cats []string) bool {
-	for _, c := range cats {
-		if !requiresNoDB(c) {
-			return true
-		}
-	}
-	return false
-}
-
-/**
- * resolveCategories.
- *
- * Params:
- *   requested []string - the requested ([]string)
- *
- * Returns:
- *   []string - the resulting []string
- */
-func resolveCategories(requested []string) []string {
-	if len(requested) == 0 {
-		return allMetricCategories
-	}
-	valid := make(map[string]bool, len(allMetricCategories))
-	for _, c := range allMetricCategories {
-		valid[c] = true
-	}
-	out := make([]string, 0, len(requested))
-	for _, r := range requested {
-		lc := strings.ToLower(strings.TrimSpace(r))
-		if valid[lc] {
-			out = append(out, lc)
+	wg.Wait()
+	var out []NodeMetric
+	for _, r := range results {
+		if r.err == nil {
+			out = append(out, r.metric)
 		}
 	}
 	return out
 }
 
-/**
- * openDB.
- *
- * Params:
- *   req MetricRequest - the req (MetricRequest)
- *
- * Returns:
- *   *sql.DB - the resulting *sql.DB
- *   error - error value; non-nil when the operation fails
- */
-func openDB(req MetricRequest) (*sql.DB, error) {
-	port := resolvePort(req.Port, 5432)
-	dbName := req.Database
-	if dbName == "" {
-		dbName = "postgres"
-	}
-	timeout := req.ConnectTimeout
-	if timeout <= 0 {
-		timeout = 10
-	}
-	// Map the API ssl_mode to a lib/pq sslmode.
-	// "require" / "skip-verify" → pq "require" (encrypted, cert NOT verified — standard behaviour).
-	// "verify-full" → pq "verify-full" (encrypted + CA verification, anti-MITM).
-	sslMode := "disable"
-	switch req.SSLMode {
-	case "require", "skip-verify":
-		sslMode = "require"
-	case "verify-full":
-		sslMode = "verify-full"
-	}
-	u := &url.URL{
-		Scheme: "postgres",
-		User:   url.UserPassword(req.User, req.Password),
-		Host:   fmt.Sprintf("%s:%d", req.Host, port),
-		Path:   "/" + dbName,
-	}
-	q := url.Values{}
-	q.Set("sslmode", sslMode)
-	q.Set("connect_timeout", strconv.Itoa(timeout))
-	u.RawQuery = q.Encode()
+func normalizeNodeMetrics(host string, f core.MetricFamily) NodeMetric {
+	nm := NodeMetric{Host: host}
 
-	db, err := sql.Open("postgres", u.String())
-	if err != nil {
-		return nil, err
+	bootTime := f.First("node_boot_time_seconds", 0)
+	if bootTime > 0 {
+		nm.UptimeSeconds = int64(time.Now().Unix()) - int64(bootTime)
 	}
-	db.SetMaxOpenConns(len(allMetricCategories))
-	db.SetMaxIdleConns(2)
-	db.SetConnMaxLifetime(30 * time.Second)
-	if err := db.Ping(); err != nil {
-		db.Close()
-		return nil, err
-	}
-	return db, nil
-}
 
-/**
- * nullTime converts *time.Time to an interface{} suitable for database/sql params
- * (nil → SQL NULL, non-nil → time value).
- *
- * Params:
- *   t *time.Time - the t (*time.Time)
- *
- * Returns:
- *   any - the resulting any
- */
-func nullTime(t *time.Time) any {
-	if t == nil {
-		return nil
-	}
-	return *t
-}
+	nm.Load1 = f.First("node_load1", 0)
+	nm.Load5 = f.First("node_load5", 0)
+	nm.Load15 = f.First("node_load15", 0)
 
-/**
- * collectDatabaseCount returns the number of user databases (excludes templates).
- *
- * Params:
- *   ctx context.Context - context carrying cancellation signals and deadlines
- *   db *sql.DB - the db (*sql.DB)
- *
- * Returns:
- *   int - the resulting integer
- *   error - error value; non-nil when the operation fails
- */
-func collectDatabaseCount(ctx context.Context, db *sql.DB) (int, error) {
-	var count int
-	err := db.QueryRowContext(ctx, `
-		SELECT count(*) FROM pg_database
-		WHERE datistemplate = false`).Scan(&count)
-	return count, err
-}
-
-/**
- * collectUsers returns all PostgreSQL roles (excluding internal pg_* system roles).
- *
- * Params:
- *   ctx context.Context - context carrying cancellation signals and deadlines
- *   db *sql.DB - the db (*sql.DB)
- *
- * Returns:
- *   []UserInfo - the resulting []UserInfo
- *   error - error value; non-nil when the operation fails
- */
-func collectUsers(ctx context.Context, db *sql.DB) ([]UserInfo, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT rolname, rolsuper, rolcreatedb, rolcanlogin
-		FROM pg_roles
-		WHERE rolname NOT LIKE 'pg_%'
-		ORDER BY rolname`)
-	if err != nil {
-		return nil, err
+	nm.MemTotalBytes = int64(f.First("node_memory_MemTotal_bytes", 0))
+	nm.MemAvailableBytes = int64(f.First("node_memory_MemAvailable_bytes", 0))
+	if nm.MemTotalBytes > 0 {
+		used := nm.MemTotalBytes - nm.MemAvailableBytes
+		nm.MemUsedPct = math.Round(float64(used)/float64(nm.MemTotalBytes)*10000) / 100
 	}
-	defer rows.Close()
-	var out []UserInfo
-	for rows.Next() {
-		var u UserInfo
-		if err := rows.Scan(&u.Name, &u.IsSuperuser, &u.CanCreateDB, &u.CanLogin); err != nil {
-			return nil, err
+
+	// CPU: compute average since boot using idle vs total seconds.
+	idleTotal := f.SumWhere("node_cpu_seconds_total", "mode", "idle")
+	allTotal := f.Sum("node_cpu_seconds_total")
+	if allTotal > 0 {
+		nm.CPUUsagePct = math.Round((1-idleTotal/allTotal)*10000) / 100
+	}
+
+	// Disks: include only real filesystems, exclude pseudo/temp mounts.
+	excludedFSTypes := map[string]bool{
+		"tmpfs": true, "devtmpfs": true, "devfs": true,
+		"overlay": true, "squashfs": true, "nsfs": true,
+	}
+	diskSeen := map[string]bool{}
+	for _, s := range f["node_filesystem_size_bytes"] {
+		mp := s.Labels["mountpoint"]
+		fstype := s.Labels["fstype"]
+		if excludedFSTypes[fstype] || diskSeen[mp] {
+			continue
 		}
-		out = append(out, u)
-	}
-	if out == nil {
-		out = []UserInfo{}
-	}
-	return out, rows.Err()
-}
-
-/**
- * collectDatabases returns all non-template PostgreSQL databases with owner, size, and encoding.
- *
- * Params:
- *   ctx context.Context - context carrying cancellation signals and deadlines
- *   db *sql.DB - the db (*sql.DB)
- *
- * Returns:
- *   []DatabaseInfo - the resulting []DatabaseInfo
- *   error - error value; non-nil when the operation fails
- */
-func collectDatabases(ctx context.Context, db *sql.DB) ([]DatabaseInfo, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT
-			d.datname,
-			pg_catalog.pg_get_userbyid(d.datdba),
-			pg_database_size(d.datname),
-			pg_encoding_to_char(d.encoding)
-		FROM pg_database d
-		WHERE d.datistemplate = false
-		ORDER BY d.datname`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []DatabaseInfo
-	for rows.Next() {
-		var d DatabaseInfo
-		if err := rows.Scan(&d.Name, &d.Owner, &d.SizeBytes, &d.Encoding); err != nil {
-			return nil, err
+		diskSeen[mp] = true
+		avail := f.FirstWhere("node_filesystem_avail_bytes", s.Labels, 0)
+		total := s.Value
+		var usedPct float64
+		if total > 0 {
+			usedPct = math.Round((1-avail/total)*10000) / 100
 		}
-		out = append(out, d)
+		nm.Disks = append(nm.Disks, DiskStat{
+			Mountpoint: mp,
+			SizeBytes:  int64(total),
+			AvailBytes: int64(avail),
+			UsedPct:    usedPct,
+		})
 	}
-	if out == nil {
-		out = []DatabaseInfo{}
-	}
-	return out, rows.Err()
-}
+	sort.Slice(nm.Disks, func(i, j int) bool {
+		return nm.Disks[i].Mountpoint < nm.Disks[j].Mountpoint
+	})
 
-/**
- * dbSet builds a lookup set from a list of database names.
- * Returns nil when the list is empty, meaning "no filter — include all".
- *
- * Params:
- *   databases []string - the databases ([]string)
- *
- * Returns:
- *   map[string]bool - the resulting map[string]bool
- */
-func dbSet(databases []string) map[string]bool {
-	if len(databases) == 0 {
-		return nil
+	// Network: exclude loopback and virtual interfaces.
+	excludedDevPrefixes := []string{"lo", "veth", "docker", "br-", "virbr"}
+	netSeen := map[string]bool{}
+	for _, s := range f["node_network_receive_bytes_total"] {
+		dev := s.Labels["device"]
+		if netSeen[dev] {
+			continue
+		}
+		excluded := false
+		for _, pfx := range excludedDevPrefixes {
+			if strings.HasPrefix(dev, pfx) {
+				excluded = true
+				break
+			}
+		}
+		if excluded {
+			continue
+		}
+		netSeen[dev] = true
+		tx := f.FirstWhere("node_network_transmit_bytes_total", map[string]string{"device": dev}, 0)
+		nm.NetworkInterfaces = append(nm.NetworkInterfaces, NetworkStat{
+			Interface:    dev,
+			RxBytesTotal: int64(s.Value),
+			TxBytesTotal: int64(tx),
+		})
 	}
-	s := make(map[string]bool, len(databases))
-	for _, d := range databases {
-		s[d] = true
-	}
-	return s
-}
+	sort.Slice(nm.NetworkInterfaces, func(i, j int) bool {
+		return nm.NetworkInterfaces[i].Interface < nm.NetworkInterfaces[j].Interface
+	})
 
-/**
- * inDBSet reports whether name passes the filter.
- * A nil set means no filter (always passes).
- *
- * Params:
- *   set map[string]bool - the set (map[string]bool)
- *   name string - the name string
- *
- * Returns:
- *   bool - boolean result
- */
-func inDBSet(set map[string]bool, name string) bool {
-	if set == nil {
-		return true
-	}
-	return set[name]
+	return nm
 }
 
 // =============================================================================
-// Patroni HTTP helpers
+// Databases — from pg_database_size_bytes
 // =============================================================================
 
-const patroniBodyLimit = 1 << 20 // 1 MB — sufficient for any Patroni response
-
-/**
- * patroniRequest.
- *
- * Receiver:
- *   c *Collector - pointer receiver; the method may mutate this Collector instance
- *
- * Params:
- *   ctx context.Context - context carrying cancellation signals and deadlines
- *   rawURL string - the rawURL string
- *   out any - the out (any)
- *
- * Returns:
- *   error - error value; non-nil when the operation fails
- */
-func (c *Collector) patroniRequest(ctx context.Context, rawURL string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return err
+func normalizeDatabases(f core.MetricFamily) []DatabaseInfo {
+	excludeDB := map[string]bool{"template0": true, "template1": true}
+	var dbs []DatabaseInfo
+	for _, s := range f["pg_database_size_bytes"] {
+		name := s.Labels["datname"]
+		if name == "" || excludeDB[name] {
+			continue
+		}
+		dbs = append(dbs, DatabaseInfo{Name: name, SizeBytes: int64(s.Value)})
 	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("patroni %s: HTTP %d", rawURL, resp.StatusCode)
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, patroniBodyLimit)).Decode(out); err != nil {
-		return fmt.Errorf("decode %s: %w", rawURL, err)
-	}
-	return nil
-}
-
-/**
- * patroniGET.
- *
- * Receiver:
- *   c *Collector - pointer receiver; the method may mutate this Collector instance
- *
- * Params:
- *   ctx context.Context - context carrying cancellation signals and deadlines
- *   rawURL string - the rawURL string
- *
- * Returns:
- *   map[string]any - the resulting map[string]any
- *   error - error value; non-nil when the operation fails
- */
-func (c *Collector) patroniGET(ctx context.Context, rawURL string) (map[string]any, error) {
-	var out map[string]any
-	return out, c.patroniRequest(ctx, rawURL, &out)
-}
-
-/**
- * patroniGETArray.
- *
- * Receiver:
- *   c *Collector - pointer receiver; the method may mutate this Collector instance
- *
- * Params:
- *   ctx context.Context - context carrying cancellation signals and deadlines
- *   rawURL string - the rawURL string
- *
- * Returns:
- *   []any - the resulting []any
- *   error - error value; non-nil when the operation fails
- */
-func (c *Collector) patroniGETArray(ctx context.Context, rawURL string) ([]any, error) {
-	var out []any
-	return out, c.patroniRequest(ctx, rawURL, &out)
+	sort.Slice(dbs, func(i, j int) bool { return dbs[i].Name < dbs[j].Name })
+	return dbs
 }
 
 // =============================================================================
-// cluster — Patroni /, /cluster, /config
+// uptime — pg_postmaster_start_time_seconds
 // =============================================================================
 
-/**
- * collectCluster.
- *
- * Receiver:
- *   c *Collector - pointer receiver; the method may mutate this Collector instance
- *
- * Params:
- *   ctx context.Context - context carrying cancellation signals and deadlines
- *   req MetricRequest - the req (MetricRequest)
- *
- * Returns:
- *   *ClusterMetric - the resulting *ClusterMetric
- *   error - error value; non-nil when the operation fails
- */
+func collectUptime(f core.MetricFamily) (*UptimeMetric, error) {
+	startUnix := f.First("pg_postmaster_start_time_seconds", 0)
+	if startUnix == 0 {
+		return nil, fmt.Errorf("pg_postmaster_start_time_seconds not found in exporter output")
+	}
+	startTime := time.Unix(int64(startUnix), 0).UTC()
+	uptimeSec := int64(time.Since(startTime).Seconds())
+	return &UptimeMetric{
+		StartTime:     startTime,
+		UptimeSeconds: uptimeSec,
+		UptimeHuman:   formatDuration(uptimeSec),
+	}, nil
+}
+
+// =============================================================================
+// connections — pg_stat_activity_count + pg_settings_max_connections
+// =============================================================================
+
+func collectConnections(f core.MetricFamily) (*ConnectionMetric, error) {
+	m := &ConnectionMetric{
+		WaitEvents: []WaitEvent{},
+		ByDatabase: []DBConnStat{},
+	}
+
+	m.MaxConnections = int(f.First("pg_settings_max_connections", 0))
+
+	// Sum across all datname/wait_event labels by state.
+	for _, s := range f["pg_stat_activity_count"] {
+		state := s.Labels["state"]
+		m.TotalConnections += int(s.Value)
+		switch state {
+		case "active":
+			m.Active += int(s.Value)
+		case "idle":
+			m.Idle += int(s.Value)
+		case "idle in transaction", "idle_in_transaction":
+			m.IdleInTransaction += int(s.Value)
+		}
+		if s.Labels["wait_event_type"] == "Lock" {
+			m.WaitingForLock += int(s.Value)
+		}
+	}
+
+	if m.MaxConnections > 0 {
+		m.UtilizationPct = math.Round(float64(m.TotalConnections)/float64(m.MaxConnections)*10000) / 100
+	}
+
+	// Wait events grouped by wait_event_type.
+	waitTotals := map[string]int{}
+	for _, s := range f["pg_stat_activity_count"] {
+		wt := s.Labels["wait_event_type"]
+		if wt == "" {
+			wt = "None"
+		}
+		waitTotals[wt] += int(s.Value)
+	}
+	for wt, cnt := range waitTotals {
+		m.WaitEvents = append(m.WaitEvents, WaitEvent{Type: wt, Count: cnt})
+	}
+	sort.Slice(m.WaitEvents, func(i, j int) bool {
+		return m.WaitEvents[i].Count > m.WaitEvents[j].Count
+	})
+
+	// Per-database breakdown.
+	dbTotals := map[string]*DBConnStat{}
+	for _, s := range f["pg_stat_activity_count"] {
+		dn := s.Labels["datname"]
+		if dn == "" {
+			continue
+		}
+		if dbTotals[dn] == nil {
+			dbTotals[dn] = &DBConnStat{Database: dn}
+		}
+		st := s.Labels["state"]
+		dbTotals[dn].Total += int(s.Value)
+		switch st {
+		case "active":
+			dbTotals[dn].Active += int(s.Value)
+		case "idle":
+			dbTotals[dn].Idle += int(s.Value)
+		}
+	}
+	for _, stat := range dbTotals {
+		m.ByDatabase = append(m.ByDatabase, *stat)
+	}
+	sort.Slice(m.ByDatabase, func(i, j int) bool {
+		return m.ByDatabase[i].Total > m.ByDatabase[j].Total
+	})
+
+	return m, nil
+}
+
+// =============================================================================
+// replication — pg_stat_replication_* + pg_replication_slots_*
+// =============================================================================
+
+func collectReplication(f core.MetricFamily, req MetricRequest) (*ReplicationMetric, error) {
+	m := &ReplicationMetric{
+		Members: []ReplicationMember{},
+		Slots:   []ReplicationSlot{},
+	}
+
+	m.MaxWALSenders = int(f.First("pg_settings_max_wal_senders", 0))
+
+	// Primary is always the first member with zero lag.
+	primaryIP := ""
+	if len(req.NodeIPs) > 0 {
+		primaryIP = req.NodeIPs[0]
+	}
+	zero := float64(0)
+	zeroBytes := int64(0)
+	m.Members = append(m.Members, ReplicationMember{
+		Role:             "primary",
+		Host:             primaryIP,
+		ApplicationName:  "primary",
+		State:            "running",
+		SyncState:        "primary",
+		WriteLagSeconds:  &zero,
+		FlushLagSeconds:  &zero,
+		ReplayLagSeconds: &zero,
+		ReplayLagBytes:   &zeroBytes,
+	})
+
+	// Standby entries from pg_stat_replication_write_lag_seconds.
+	// Collect all distinct application_name/client_addr pairs.
+	type memberKey struct{ appName, clientAddr string }
+	seen := map[memberKey]bool{}
+	for _, s := range f["pg_stat_replication_write_lag_seconds"] {
+		app := s.Labels["application_name"]
+		addr := s.Labels["client_addr"]
+		k := memberKey{app, addr}
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+
+		lm := map[string]string{"application_name": app, "client_addr": addr}
+		wl := f.FirstWhere("pg_stat_replication_write_lag_seconds", lm, 0)
+		fl := f.FirstWhere("pg_stat_replication_flush_lag_seconds", lm, 0)
+		rl := f.FirstWhere("pg_stat_replication_replay_lag_seconds", lm, 0)
+		rb := f.FirstWhere("pg_stat_replication_pg_wal_lsn_diff", lm, 0)
+		rbInt := int64(rb)
+
+		mem := ReplicationMember{
+			Role:            "standby",
+			Host:            addr,
+			ApplicationName: app,
+			State:            s.Labels["state"],
+			SyncState:        s.Labels["sync_state"],
+			WriteLagSeconds:  &wl,
+			FlushLagSeconds:  &fl,
+			ReplayLagSeconds: &rl,
+			ReplayLagBytes:   &rbInt,
+		}
+		m.Members = append(m.Members, mem)
+	}
+	m.StandbyCount = len(m.Members) - 1
+
+	// Replication slots.
+	slotNames := f.LabelValues("pg_replication_slots_active", "slot_name")
+	for _, name := range slotNames {
+		lm := map[string]string{"slot_name": name}
+		active := f.FirstWhere("pg_replication_slots_active", lm, 0) == 1
+		lagBytes := int64(f.FirstWhere("pg_replication_slots_pg_wal_lsn_diff", lm, 0))
+		slotType := ""
+		database := ""
+		for _, s := range f["pg_replication_slots_active"] {
+			if s.Labels["slot_name"] == name {
+				slotType = s.Labels["slot_type"]
+				database = s.Labels["database"]
+				break
+			}
+		}
+		lagRef := lagBytes
+		m.Slots = append(m.Slots, ReplicationSlot{
+			Name:     name,
+			Type:     slotType,
+			Database: database,
+			Active:   active,
+			LagBytes: &lagRef,
+		})
+	}
+
+	return m, nil
+}
+
+// =============================================================================
+// performance — pg_stat_database_* + pg_stat_bgwriter_*
+// =============================================================================
+
+func collectPerformance(f core.MetricFamily) (*PerformanceMetric, error) {
+	m := &PerformanceMetric{}
+
+	// Aggregate across all user databases (excluding templates).
+	excludeDB := map[string]bool{"template0": true, "template1": true}
+	var blksHit, blksRead float64
+	for _, s := range f["pg_stat_database_blks_hit"] {
+		if !excludeDB[s.Labels["datname"]] {
+			blksHit += s.Value
+		}
+	}
+	// Handle _total suffix variant (counter naming).
+	if blksHit == 0 {
+		for _, s := range f["pg_stat_database_blks_hit_total"] {
+			if !excludeDB[s.Labels["datname"]] {
+				blksHit += s.Value
+			}
+		}
+	}
+	for _, s := range f["pg_stat_database_blks_read"] {
+		if !excludeDB[s.Labels["datname"]] {
+			blksRead += s.Value
+		}
+	}
+	if blksRead == 0 {
+		for _, s := range f["pg_stat_database_blks_read_total"] {
+			if !excludeDB[s.Labels["datname"]] {
+				blksRead += s.Value
+			}
+		}
+	}
+	if blksHit+blksRead > 0 {
+		m.CacheHitRatioPct = math.Round(blksHit/(blksHit+blksRead)*10000) / 100
+	}
+
+	for _, s := range f["pg_stat_database_xact_commit"] {
+		if !excludeDB[s.Labels["datname"]] {
+			m.TotalCommits += int64(s.Value)
+		}
+	}
+	if m.TotalCommits == 0 {
+		for _, s := range f["pg_stat_database_xact_commit_total"] {
+			if !excludeDB[s.Labels["datname"]] {
+				m.TotalCommits += int64(s.Value)
+			}
+		}
+	}
+	for _, s := range f["pg_stat_database_xact_rollback"] {
+		if !excludeDB[s.Labels["datname"]] {
+			m.TotalRollbacks += int64(s.Value)
+		}
+	}
+	if m.TotalRollbacks == 0 {
+		for _, s := range f["pg_stat_database_xact_rollback_total"] {
+			if !excludeDB[s.Labels["datname"]] {
+				m.TotalRollbacks += int64(s.Value)
+			}
+		}
+	}
+	m.TotalTransactions = m.TotalCommits + m.TotalRollbacks
+
+	for _, s := range f["pg_stat_database_temp_files"] {
+		if !excludeDB[s.Labels["datname"]] {
+			m.TempFiles += int64(s.Value)
+		}
+	}
+	if m.TempFiles == 0 {
+		for _, s := range f["pg_stat_database_temp_files_total"] {
+			if !excludeDB[s.Labels["datname"]] {
+				m.TempFiles += int64(s.Value)
+			}
+		}
+	}
+	for _, s := range f["pg_stat_database_temp_bytes"] {
+		if !excludeDB[s.Labels["datname"]] {
+			m.TempBytes += int64(s.Value)
+		}
+	}
+	if m.TempBytes == 0 {
+		for _, s := range f["pg_stat_database_temp_bytes_total"] {
+			if !excludeDB[s.Labels["datname"]] {
+				m.TempBytes += int64(s.Value)
+			}
+		}
+	}
+
+	// Bgwriter / checkpointer (PG16+ split bgwriter into bgwriter + checkpointer).
+	m.CheckpointsTimed = int64(f.SumAlt("pg_stat_bgwriter_checkpoints_timed_total", "pg_stat_checkpointer_num_timed_total"))
+	if m.CheckpointsTimed == 0 {
+		m.CheckpointsTimed = int64(f.SumAlt("pg_stat_bgwriter_checkpoints_timed", "pg_stat_checkpointer_num_timed"))
+	}
+	m.CheckpointsReq = int64(f.SumAlt("pg_stat_bgwriter_checkpoints_req_total", "pg_stat_checkpointer_num_requested_total"))
+	if m.CheckpointsReq == 0 {
+		m.CheckpointsReq = int64(f.SumAlt("pg_stat_bgwriter_checkpoints_req", "pg_stat_checkpointer_num_requested"))
+	}
+	total := m.CheckpointsTimed + m.CheckpointsReq
+	if total > 0 {
+		m.CheckpointRatioPct = math.Round(float64(m.CheckpointsTimed)/float64(total)*10000) / 100
+	}
+
+	m.BuffersCheckpoint = int64(f.SumAlt("pg_stat_bgwriter_buffers_checkpoint_total", "pg_stat_bgwriter_buffers_checkpoint"))
+	m.BuffersClean = int64(f.SumAlt("pg_stat_bgwriter_buffers_clean_total", "pg_stat_bgwriter_buffers_clean"))
+	m.BuffersBackend = int64(f.SumAlt("pg_stat_bgwriter_buffers_backend_total", "pg_stat_bgwriter_buffers_backend"))
+	m.BuffersAlloc = int64(f.SumAlt("pg_stat_bgwriter_buffers_alloc_total", "pg_stat_bgwriter_buffers_alloc"))
+
+	// TPS derived from transaction counters and server uptime.
+	startUnix := f.First("pg_postmaster_start_time_seconds", 0)
+	if startUnix > 0 {
+		uptimeSec := time.Since(time.Unix(int64(startUnix), 0)).Seconds()
+		if uptimeSec > 0 {
+			m.TPS = math.Round(float64(m.TotalCommits+m.TotalRollbacks)/uptimeSec*1000) / 1000
+		}
+	}
+
+	// Row DML totals from pg_stat_database.
+	for _, s := range f["pg_stat_database_tup_inserted"] {
+		if !excludeDB[s.Labels["datname"]] {
+			m.RowsInserted += int64(s.Value)
+		}
+	}
+	if m.RowsInserted == 0 {
+		for _, s := range f["pg_stat_database_tup_inserted_total"] {
+			if !excludeDB[s.Labels["datname"]] {
+				m.RowsInserted += int64(s.Value)
+			}
+		}
+	}
+	for _, s := range f["pg_stat_database_tup_updated"] {
+		if !excludeDB[s.Labels["datname"]] {
+			m.RowsUpdated += int64(s.Value)
+		}
+	}
+	if m.RowsUpdated == 0 {
+		for _, s := range f["pg_stat_database_tup_updated_total"] {
+			if !excludeDB[s.Labels["datname"]] {
+				m.RowsUpdated += int64(s.Value)
+			}
+		}
+	}
+	for _, s := range f["pg_stat_database_tup_deleted"] {
+		if !excludeDB[s.Labels["datname"]] {
+			m.RowsDeleted += int64(s.Value)
+		}
+	}
+	if m.RowsDeleted == 0 {
+		for _, s := range f["pg_stat_database_tup_deleted_total"] {
+			if !excludeDB[s.Labels["datname"]] {
+				m.RowsDeleted += int64(s.Value)
+			}
+		}
+	}
+
+	// I/O timing (requires track_io_timing = on; will be 0 if disabled).
+	for _, s := range f["pg_stat_database_blk_read_time"] {
+		if !excludeDB[s.Labels["datname"]] {
+			m.BlkReadTimeMs += s.Value
+		}
+	}
+	for _, s := range f["pg_stat_database_blk_write_time"] {
+		if !excludeDB[s.Labels["datname"]] {
+			m.BlkWriteTimeMs += s.Value
+		}
+	}
+
+	// Cache size from shared_buffers setting (each page = 8 KiB).
+	sharedBufs := f.First("pg_settings_shared_buffers", 0)
+	if sharedBufs > 0 {
+		m.CacheSizeBytes = int64(sharedBufs) * 8192
+	}
+
+	return m, nil
+}
+
+// =============================================================================
+// query — lock/deadlock counts, row throughput, scan efficiency
+// =============================================================================
+
+func collectQuery(f core.MetricFamily) (*QueryMetric, error) {
+	m := &QueryMetric{HighSeqScanTables: []ScanEfficiency{}}
+
+	excludeDB := map[string]bool{"template0": true, "template1": true}
+
+	// Deadlocks from pg_stat_database.
+	for _, s := range f["pg_stat_database_deadlocks"] {
+		if !excludeDB[s.Labels["datname"]] {
+			m.DeadlockCount += int64(s.Value)
+		}
+	}
+	if m.DeadlockCount == 0 {
+		for _, s := range f["pg_stat_database_deadlocks_total"] {
+			if !excludeDB[s.Labels["datname"]] {
+				m.DeadlockCount += int64(s.Value)
+			}
+		}
+	}
+
+	// Lock waits from pg_locks_count.
+	for _, s := range f["pg_locks_count"] {
+		if s.Labels["granted"] == "false" {
+			m.LockWaitCount += int(s.Value)
+		}
+	}
+
+	// Row throughput.
+	for _, s := range f["pg_stat_database_tup_returned"] {
+		if !excludeDB[s.Labels["datname"]] {
+			m.RowsReturned += int64(s.Value)
+		}
+	}
+	if m.RowsReturned == 0 {
+		for _, s := range f["pg_stat_database_tup_returned_total"] {
+			if !excludeDB[s.Labels["datname"]] {
+				m.RowsReturned += int64(s.Value)
+			}
+		}
+	}
+	for _, s := range f["pg_stat_database_tup_fetched"] {
+		if !excludeDB[s.Labels["datname"]] {
+			m.RowsFetched += int64(s.Value)
+		}
+	}
+	if m.RowsFetched == 0 {
+		for _, s := range f["pg_stat_database_tup_fetched_total"] {
+			if !excludeDB[s.Labels["datname"]] {
+				m.RowsFetched += int64(s.Value)
+			}
+		}
+	}
+
+	// Scan efficiency from pg_stat_user_tables.
+	type tableKey struct{ schema, table string }
+	seqScanByTable := map[tableKey]int64{}
+	idxScanByTable := map[tableKey]int64{}
+
+	for _, s := range f["pg_stat_user_tables_seq_scan"] {
+		k := tableKey{s.Labels["schemaname"], s.Labels["relname"]}
+		seqScanByTable[k] += int64(s.Value)
+	}
+	for _, s := range f["pg_stat_user_tables_seq_scan_total"] {
+		k := tableKey{s.Labels["schemaname"], s.Labels["relname"]}
+		seqScanByTable[k] += int64(s.Value)
+	}
+	for _, s := range f["pg_stat_user_tables_idx_scan"] {
+		k := tableKey{s.Labels["schemaname"], s.Labels["relname"]}
+		idxScanByTable[k] += int64(s.Value)
+	}
+	for _, s := range f["pg_stat_user_tables_idx_scan_total"] {
+		k := tableKey{s.Labels["schemaname"], s.Labels["relname"]}
+		idxScanByTable[k] += int64(s.Value)
+	}
+
+	for _, seq := range seqScanByTable {
+		m.SeqScansTotal += seq
+	}
+	for _, idx := range idxScanByTable {
+		m.IdxScansTotal += idx
+	}
+	total := m.SeqScansTotal + m.IdxScansTotal
+	if total > 0 {
+		m.IdxScanRatioPct = math.Round(float64(m.IdxScansTotal)/float64(total)*10000) / 100
+	}
+
+	// Top tables by sequential scans (those with > 50 seq scans, sorted desc).
+	type scanEntry struct {
+		key tableKey
+		seq int64
+		idx int64
+	}
+	var highSeq []scanEntry
+	for k, seq := range seqScanByTable {
+		if seq > 50 {
+			highSeq = append(highSeq, scanEntry{k, seq, idxScanByTable[k]})
+		}
+	}
+	sort.Slice(highSeq, func(i, j int) bool { return highSeq[i].seq > highSeq[j].seq })
+	if len(highSeq) > 20 {
+		highSeq = highSeq[:20]
+	}
+	for _, e := range highSeq {
+		tot := e.seq + e.idx
+		var idxPct float64
+		if tot > 0 {
+			idxPct = math.Round(float64(e.idx)/float64(tot)*10000) / 100
+		}
+		m.HighSeqScanTables = append(m.HighSeqScanTables, ScanEfficiency{
+			Schema:          e.key.schema,
+			Table:           e.key.table,
+			SeqScans:        e.seq,
+			IdxScans:        e.idx,
+			IdxScanRatioPct: idxPct,
+		})
+	}
+
+	return m, nil
+}
+
+// =============================================================================
+// maintenance — stale tables, logical slots, lock grants
+// =============================================================================
+
+func collectMaintenance(f core.MetricFamily) (*MaintenanceMetric, error) {
+	m := &MaintenanceMetric{
+		StaleTables:    []StaleTable{},
+		LogicalSlotLag: []LogicalSlotStat{},
+	}
+
+	// Stale tables by dead tuple count.
+	type tableKey struct{ schema, table string }
+	deadByTable := map[tableKey]int64{}
+	liveByTable := map[tableKey]int64{}
+	vacByTable := map[tableKey]float64{}
+
+	for _, s := range f["pg_stat_user_tables_n_dead_tup"] {
+		k := tableKey{s.Labels["schemaname"], s.Labels["relname"]}
+		deadByTable[k] += int64(s.Value)
+	}
+	for _, s := range f["pg_stat_user_tables_n_live_tup"] {
+		k := tableKey{s.Labels["schemaname"], s.Labels["relname"]}
+		liveByTable[k] += int64(s.Value)
+	}
+	for _, s := range f["pg_stat_user_tables_last_autovacuum"] {
+		k := tableKey{s.Labels["schemaname"], s.Labels["relname"]}
+		vacByTable[k] = s.Value
+	}
+
+	type staleEntry struct {
+		key  tableKey
+		dead int64
+		live int64
+		vac  float64
+	}
+	var staleList []staleEntry
+	for k, dead := range deadByTable {
+		if dead > 0 {
+			staleList = append(staleList, staleEntry{k, dead, liveByTable[k], vacByTable[k]})
+		}
+		live := liveByTable[k]
+		if live+dead > 0 && float64(dead)/float64(live+dead) > 0.20 {
+			m.TablesNeedingVacuum++
+		}
+	}
+	sort.Slice(staleList, func(i, j int) bool { return staleList[i].dead > staleList[j].dead })
+	if len(staleList) > 20 {
+		staleList = staleList[:20]
+	}
+	for _, e := range staleList {
+		st := StaleTable{
+			Schema:     e.key.schema,
+			Table:      e.key.table,
+			DeadTuples: e.dead,
+		}
+		if e.vac > 0 {
+			t := time.Unix(int64(e.vac), 0).UTC()
+			st.LastAutovacuum = &t
+		}
+		m.StaleTables = append(m.StaleTables, st)
+	}
+
+	// Logical slot lag.
+	slotNames := f.LabelValues("pg_replication_slots_active", "slot_name")
+	for _, name := range slotNames {
+		lm := map[string]string{"slot_name": name}
+		slotType := ""
+		database := ""
+		for _, s := range f["pg_replication_slots_active"] {
+			if s.Labels["slot_name"] == name {
+				slotType = s.Labels["slot_type"]
+				database = s.Labels["database"]
+				break
+			}
+		}
+		if slotType != "logical" {
+			continue
+		}
+		active := f.FirstWhere("pg_replication_slots_active", lm, 0) == 1
+		lag := int64(f.FirstWhere("pg_replication_slots_pg_wal_lsn_diff", lm, 0))
+		m.LogicalSlotLag = append(m.LogicalSlotLag, LogicalSlotStat{
+			Name:     name,
+			Database: database,
+			Active:   active,
+			LagBytes: lag,
+		})
+	}
+
+	// Lock grants vs waits.
+	for _, s := range f["pg_locks_count"] {
+		m.TotalLocks += int(s.Value)
+		if s.Labels["granted"] == "true" {
+			m.GrantedLocks += int(s.Value)
+		} else {
+			m.WaitingLocks += int(s.Value)
+		}
+	}
+
+	// WAL archiver health (pg_stat_archiver).
+	m.ArchiverArchived = int64(f.SumAlt("pg_stat_archiver_archived_count_total", "pg_stat_archiver_archived_count"))
+	m.ArchiverFailed = int64(f.SumAlt("pg_stat_archiver_failed_count_total", "pg_stat_archiver_failed_count"))
+
+	return m, nil
+}
+
+// =============================================================================
+// Patroni REST — cluster + failover (unchanged from previous implementation)
+// =============================================================================
+
+const patroniBodyLimit = 1 << 20
+
 func (c *Collector) collectCluster(ctx context.Context, req MetricRequest) (*ClusterMetric, error) {
 	leaderIP, err := c.discoverLeader(ctx, req)
 	if err != nil {
@@ -640,13 +947,10 @@ func (c *Collector) collectCluster(ctx context.Context, req MetricRequest) (*Clu
 	if sv, ok := nodeState["server_version"].(float64); ok {
 		m.ServerVersion = int(sv)
 	}
-	// dcs_last_seen is a Unix timestamp in the Patroni node state.
 	if dcs, ok := nodeState["dcs_last_seen"].(float64); ok && dcs > 0 {
 		t := time.Unix(int64(dcs), 0).UTC()
 		m.DCSLastSeen = &t
 	}
-
-	// Fetch TTL/loop_wait/retry_timeout from /config.
 	if cfg, err := c.patroniGET(ctx, base+"/config"); err == nil {
 		m.TTL = getInt(cfg, "ttl")
 		m.LoopWait = getInt(cfg, "loop_wait")
@@ -660,68 +964,28 @@ func (c *Collector) collectCluster(ctx context.Context, req MetricRequest) (*Clu
 				continue
 			}
 			host, port := splitHostPort(getString(mm, "host"), 5432)
-			m.Members = append(m.Members, ClusterMember{
+			role := getString(mm, "role")
+			mem := ClusterMember{
 				Name:     getString(mm, "name"),
 				Host:     host,
 				Port:     port,
-				Role:     getString(mm, "role"),
+				Role:     role,
 				State:    getString(mm, "state"),
 				Timeline: getInt(mm, "timeline"),
-				Lag:      mm["lag"],
-			})
+			}
+			if role == "leader" || role == "master" {
+				zero := int64(0)
+				mem.LagBytes = &zero
+			} else if v, ok := mm["lag"].(float64); ok {
+				n := int64(v)
+				mem.LagBytes = &n
+			}
+			m.Members = append(m.Members, mem)
 		}
 	}
 	return m, nil
 }
 
-// =============================================================================
-// uptime — pg_postmaster_start_time()
-// =============================================================================
-
-/**
- * collectUptime.
- *
- * Params:
- *   ctx context.Context - context carrying cancellation signals and deadlines
- *   db *sql.DB - the db (*sql.DB)
- *
- * Returns:
- *   *UptimeMetric - the resulting *UptimeMetric
- *   error - error value; non-nil when the operation fails
- */
-func collectUptime(ctx context.Context, db *sql.DB) (*UptimeMetric, error) {
-	const q = `
-		SELECT
-		    pg_postmaster_start_time()                                     AS start_time,
-		    extract(epoch from now() - pg_postmaster_start_time())::bigint AS uptime_seconds`
-
-	var m UptimeMetric
-	if err := db.QueryRowContext(ctx, q).Scan(&m.StartTime, &m.UptimeSeconds); err != nil {
-		return nil, fmt.Errorf("scan uptime: %w", err)
-	}
-	m.StartTime = m.StartTime.UTC()
-	m.UptimeHuman = formatDuration(m.UptimeSeconds)
-	return &m, nil
-}
-
-// =============================================================================
-// failover — Patroni /history (time-range aware)
-// =============================================================================
-
-/**
- * collectFailover.
- *
- * Receiver:
- *   c *Collector - pointer receiver; the method may mutate this Collector instance
- *
- * Params:
- *   ctx context.Context - context carrying cancellation signals and deadlines
- *   req MetricRequest - the req (MetricRequest)
- *
- * Returns:
- *   *FailoverMetric - the resulting *FailoverMetric
- *   error - error value; non-nil when the operation fails
- */
 func (c *Collector) collectFailover(ctx context.Context, req MetricRequest) (*FailoverMetric, error) {
 	leaderIP, err := c.discoverLeader(ctx, req)
 	if err != nil {
@@ -743,9 +1007,7 @@ func (c *Collector) collectFailover(ctx context.Context, req MetricRequest) (*Fa
 		CurrentTimeline: getInt(nodeState, "timeline"),
 		Events:          []FailoverEvent{},
 	}
-
 	var lastEventTime *time.Time
-	// Patroni /history format: [[timeline, lsn, reason, timestamp], ...]
 	for _, raw := range rawHistory {
 		entry, ok := raw.([]any)
 		if !ok || len(entry) < 4 {
@@ -757,16 +1019,14 @@ func (c *Collector) collectFailover(ctx context.Context, req MetricRequest) (*Fa
 		tsStr, _ := entry[3].(string)
 		ts := parsePatroniTime(tsStr)
 		if ts.IsZero() {
-			continue // unrecognised timestamp format — skip to avoid year-0001 garbage
+			continue
 		}
-
 		if req.From != nil && ts.Before(*req.From) {
 			continue
 		}
 		if req.To != nil && ts.After(*req.To) {
 			continue
 		}
-
 		t := ts.UTC()
 		lastEventTime = &t
 		m.Events = append(m.Events, FailoverEvent{
@@ -784,662 +1044,102 @@ func (c *Collector) collectFailover(ctx context.Context, req MetricRequest) (*Fa
 	return m, nil
 }
 
-// =============================================================================
-// connections — pg_stat_activity
-// =============================================================================
-
-/**
- * collectConnections.
- *
- * Params:
- *   ctx context.Context - context carrying cancellation signals and deadlines
- *   db *sql.DB - the db (*sql.DB)
- *   databases []string - the databases ([]string)
- *
- * Returns:
- *   *ConnectionMetric - the resulting *ConnectionMetric
- *   error - error value; non-nil when the operation fails
- */
-func collectConnections(ctx context.Context, db *sql.DB, databases []string) (*ConnectionMetric, error) {
-	const qSummary = `
-		SELECT
-		    count(*)                                                          AS total,
-		    count(*) FILTER (WHERE state = 'active')                         AS active,
-		    count(*) FILTER (WHERE state = 'idle')                           AS idle,
-		    count(*) FILTER (WHERE state = 'idle in transaction')            AS idle_in_tx,
-		    count(*) FILTER (WHERE wait_event_type = 'Lock')                 AS waiting_lock,
-		    coalesce(
-		        round(avg(extract(epoch from now()-backend_start))*1000, 2),
-		        0
-		    )                                                                 AS avg_session_age_ms
-		FROM pg_stat_activity
-		WHERE pid <> pg_backend_pid()`
-
-	const qWaitEvents = `
-		SELECT coalesce(wait_event_type,'None') AS evt, count(*) AS cnt
-		FROM pg_stat_activity
-		WHERE pid <> pg_backend_pid()
-		GROUP BY wait_event_type
-		ORDER BY cnt DESC`
-
-	const qPerDB = `
-		SELECT
-		    d.datname,
-		    count(a.pid)                                  AS total,
-		    count(a.pid) FILTER (WHERE a.state='active') AS active,
-		    count(a.pid) FILTER (WHERE a.state='idle')   AS idle
-		FROM pg_database d
-		LEFT JOIN pg_stat_activity a
-		    ON a.datname = d.datname AND a.pid <> pg_backend_pid()
-		WHERE d.datistemplate = false
-		GROUP BY d.datname
-		ORDER BY total DESC, d.datname`
-
-	m := &ConnectionMetric{ByDatabase: []DBConnStat{}, WaitEvents: []WaitEvent{}}
-
-	if err := db.QueryRowContext(ctx, qSummary).Scan(
-		&m.TotalConnections, &m.Active, &m.Idle,
-		&m.IdleInTransaction, &m.WaitingForLock, &m.AvgSessionAgeMs,
-	); err != nil {
-		return nil, fmt.Errorf("scan connection summary: %w", err)
+func (c *Collector) discoverLeader(ctx context.Context, req MetricRequest) (string, error) {
+	patroniPort := resolvePort(req.PatroniPort, 8008)
+	if len(req.NodeIPs) == 0 {
+		return "", fmt.Errorf("node_ips required for cluster/failover metrics")
 	}
-
-	var maxStr string
-	if err := db.QueryRowContext(ctx, `SHOW max_connections`).Scan(&maxStr); err == nil {
-		fmt.Sscanf(maxStr, "%d", &m.MaxConnections)
-	}
-	if m.MaxConnections > 0 {
-		m.UtilizationPct = math.Round(float64(m.TotalConnections)/float64(m.MaxConnections)*10000) / 100
-	}
-
-	rows, err := db.QueryContext(ctx, qWaitEvents)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var w WaitEvent
-			if rows.Scan(&w.Type, &w.Count) == nil {
-				m.WaitEvents = append(m.WaitEvents, w)
-			}
-		}
-		_ = rows.Err()
-	}
-
-	dbFilter := dbSet(databases)
-	rows2, err := db.QueryContext(ctx, qPerDB)
-	if err != nil {
-		return nil, fmt.Errorf("query connections per db: %w", err)
-	}
-	defer rows2.Close()
-	for rows2.Next() {
-		var s DBConnStat
-		if err := rows2.Scan(&s.Database, &s.Total, &s.Active, &s.Idle); err != nil {
+	for _, ip := range req.NodeIPs {
+		ip = strings.TrimSpace(ip)
+		if ip == "" {
 			continue
 		}
-		if inDBSet(dbFilter, s.Database) {
-			m.ByDatabase = append(m.ByDatabase, s)
-		}
-	}
-	return m, rows2.Err()
-}
-
-// =============================================================================
-// replication — pg_stat_replication + pg_replication_slots + pg_settings
-// =============================================================================
-
-/**
- * collectReplication.
- *
- * Params:
- *   ctx context.Context - context carrying cancellation signals and deadlines
- *   db *sql.DB - the db (*sql.DB)
- *
- * Returns:
- *   *ReplicationMetric - the resulting *ReplicationMetric
- *   error - error value; non-nil when the operation fails
- */
-func collectReplication(ctx context.Context, db *sql.DB) (*ReplicationMetric, error) {
-	m := &ReplicationMetric{Members: []ReplicationMember{}, Slots: []ReplicationSlot{}}
-
-	// WAL config.
-	const qCfg = `
-		SELECT
-		    max(CASE WHEN name='wal_level'      THEN setting END) AS wal_level,
-		    max(CASE WHEN name='max_wal_senders' THEN setting END) AS max_wal_senders
-		FROM pg_settings
-		WHERE name IN ('wal_level','max_wal_senders')`
-	var maxSendersStr string
-	_ = db.QueryRowContext(ctx, qCfg).Scan(&m.WALLevel, &maxSendersStr)
-	fmt.Sscanf(maxSendersStr, "%d", &m.MaxWALSenders)
-
-	// Streaming members.
-	const qMembers = `
-		SELECT
-		    coalesce(client_addr::text,''),
-		    application_name,
-		    state,
-		    sync_state,
-		    sent_lsn::text,
-		    write_lsn::text,
-		    flush_lsn::text,
-		    replay_lsn::text,
-		    extract(epoch from write_lag)::float,
-		    extract(epoch from flush_lag)::float,
-		    extract(epoch from replay_lag)::float
-		FROM pg_stat_replication
-		ORDER BY application_name`
-
-	rows, err := db.QueryContext(ctx, qMembers)
-	if err != nil {
-		return nil, fmt.Errorf("query replication: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var r ReplicationMember
-		var wl, fl, rl sql.NullFloat64
-		if err := rows.Scan(
-			&r.ClientAddr, &r.ApplicationName, &r.State, &r.SyncState,
-			&r.SentLSN, &r.WriteLSN, &r.FlushLSN, &r.ReplayLSN,
-			&wl, &fl, &rl,
-		); err != nil {
+		url := fmt.Sprintf("http://%s:%d/leader", ip, patroniPort)
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
 			continue
 		}
-		if wl.Valid {
-			v := wl.Float64
-			r.WriteLagSeconds = &v
-		}
-		if fl.Valid {
-			v := fl.Float64
-			r.FlushLagSeconds = &v
-		}
-		if rl.Valid {
-			v := rl.Float64
-			r.ReplayLagSeconds = &v
-		}
-		m.Members = append(m.Members, r)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	m.StandbyCount = len(m.Members)
-
-	// Replication slots.
-	const qSlots = `
-		SELECT
-		    slot_name,
-		    slot_type,
-		    coalesce(database,''),
-		    active,
-		    CASE WHEN pg_is_in_recovery() THEN NULL
-		         ELSE pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)::bigint
-		    END AS lag_bytes
-		FROM pg_replication_slots
-		ORDER BY slot_name`
-
-	rows2, err := db.QueryContext(ctx, qSlots)
-	if err == nil {
-		defer rows2.Close()
-		for rows2.Next() {
-			var s ReplicationSlot
-			var lagBytes sql.NullInt64
-			if err := rows2.Scan(&s.Name, &s.Type, &s.Database, &s.Active, &lagBytes); err != nil {
-				continue
-			}
-			if lagBytes.Valid {
-				v := lagBytes.Int64
-				s.LagBytes = &v
-			}
-			m.Slots = append(m.Slots, s)
-		}
-		_ = rows2.Err()
-	}
-	return m, nil
-}
-
-// =============================================================================
-// performance — throughput, cache hit, checkpoints, bgwriter
-// =============================================================================
-
-/**
- * collectPerformance.
- *
- * Params:
- *   ctx context.Context - context carrying cancellation signals and deadlines
- *   db *sql.DB - the db (*sql.DB)
- *
- * Returns:
- *   *PerformanceMetric - the resulting *PerformanceMetric
- *   error - error value; non-nil when the operation fails
- */
-func collectPerformance(ctx context.Context, db *sql.DB) (*PerformanceMetric, error) {
-	const qDB = `
-		SELECT
-		    sum(xact_commit)                                   AS commits,
-		    sum(xact_rollback)                                 AS rollbacks,
-		    sum(xact_commit) + sum(xact_rollback)              AS total_tx,
-		    CASE WHEN sum(blks_hit + blks_read) = 0 THEN 0::numeric
-		         ELSE round(sum(blks_hit)::numeric / sum(blks_hit + blks_read) * 100, 2)
-		    END                                                AS cache_hit_ratio,
-		    sum(temp_files)                                    AS temp_files,
-		    sum(temp_bytes)                                    AS temp_bytes,
-		    min(stats_reset)                                   AS stats_reset
-		FROM pg_stat_database
-		WHERE datname NOT IN ('template0', 'template1')`
-
-	const qBGW = `
-		SELECT
-		    checkpoints_timed,
-		    checkpoints_req,
-		    buffers_checkpoint,
-		    buffers_clean,
-		    buffers_backend,
-		    buffers_alloc,
-		    checkpoint_write_time,
-		    checkpoint_sync_time
-		FROM pg_stat_bgwriter`
-
-	m := &PerformanceMetric{}
-
-	var statsReset sql.NullTime
-	if err := db.QueryRowContext(ctx, qDB).Scan(
-		&m.TotalCommits, &m.TotalRollbacks, &m.TotalTransactions,
-		&m.CacheHitRatioPct, &m.TempFiles, &m.TempBytes, &statsReset,
-	); err != nil {
-		return nil, fmt.Errorf("scan performance db stats: %w", err)
-	}
-
-	// Calculate avg TPS since stats reset (fall back to server start time).
-	if statsReset.Valid {
-		t := statsReset.Time
-		m.StatsResetAt = &t
-		var secs int64
-		_ = db.QueryRowContext(ctx, `SELECT extract(epoch from now() - $1)::bigint`, t).Scan(&secs)
-		if secs > 0 {
-			m.AvgTPS = math.Round(float64(m.TotalTransactions)/float64(secs)*1000) / 1000
-		}
-	} else {
-		var secs int64
-		_ = db.QueryRowContext(ctx,
-			`SELECT extract(epoch from now() - pg_postmaster_start_time())::bigint`).Scan(&secs)
-		if secs > 0 {
-			m.AvgTPS = math.Round(float64(m.TotalTransactions)/float64(secs)*1000) / 1000
-		}
-	}
-
-	if err := db.QueryRowContext(ctx, qBGW).Scan(
-		&m.CheckpointsTimed, &m.CheckpointsReq,
-		&m.BuffersCheckpoint, &m.BuffersClean, &m.BuffersBackend, &m.BuffersAlloc,
-		&m.CheckpointWriteMs, &m.CheckpointSyncMs,
-	); err != nil {
-		return nil, fmt.Errorf("scan bgwriter: %w", err)
-	}
-	total := m.CheckpointsTimed + m.CheckpointsReq
-	if total > 0 {
-		m.CheckpointRatioPct = math.Round(float64(m.CheckpointsTimed)/float64(total)*10000) / 100
-	}
-	return m, nil
-}
-
-// =============================================================================
-// query — latency, slow queries, locks, scans, row throughput
-// =============================================================================
-
-/**
- * collectQuery.
- *
- * Params:
- *   ctx context.Context - context carrying cancellation signals and deadlines
- *   db *sql.DB - the db (*sql.DB)
- *   limit int - the limit value
- *   from *time.Time - the from (*time.Time)
- *   to *time.Time - the to (*time.Time)
- *   databases []string - the databases ([]string)
- *
- * Returns:
- *   *QueryMetric - the resulting *QueryMetric
- *   error - error value; non-nil when the operation fails
- */
-func collectQuery(ctx context.Context, db *sql.DB, limit int, from, to *time.Time, databases []string) (*QueryMetric, error) {
-	m := &QueryMetric{
-		SlowQueryThresholdMs: 1000,
-		SlowQueries:          []SlowQuery{},
-		HighSeqScanTables:    []ScanEfficiency{},
-	}
-
-	// --- pg_stat_statements (optional extension) ---
-	const qPercentiles = `
-		SELECT
-		    coalesce(avg(mean_exec_time), 0),
-		    coalesce(percentile_disc(0.95) WITHIN GROUP (ORDER BY mean_exec_time), 0),
-		    coalesce(percentile_disc(0.99) WITHIN GROUP (ORDER BY mean_exec_time), 0)
-		FROM pg_stat_statements
-		WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
-		  AND calls > 0`
-
-	const qTopMean = `
-		SELECT left(query,300),calls,mean_exec_time,max_exec_time,min_exec_time,
-		       stddev_exec_time,total_exec_time,rows
-		FROM pg_stat_statements
-		WHERE dbid=(SELECT oid FROM pg_database WHERE datname=current_database())
-		ORDER BY mean_exec_time DESC LIMIT $1`
-
-	const qTopTotal = `
-		SELECT left(query,300),calls,mean_exec_time,max_exec_time,min_exec_time,
-		       stddev_exec_time,total_exec_time,rows
-		FROM pg_stat_statements
-		WHERE dbid=(SELECT oid FROM pg_database WHERE datname=current_database())
-		ORDER BY total_exec_time DESC LIMIT $1`
-
-	if err := db.QueryRowContext(ctx, qPercentiles).Scan(
-		&m.AvgExecMs, &m.P95ExecMs, &m.P99ExecMs,
-	); err == nil {
-		m.StatementsAvailable = true
-		m.TopByMeanExecMs, _ = scanQueryStats(ctx, db, qTopMean, limit)
-		m.TopByTotalExecMs, _ = scanQueryStats(ctx, db, qTopTotal, limit)
-	}
-
-	// --- Slow queries from pg_stat_activity (time-range aware) ---
-	// $1=from (nullable), $2=to (nullable), $3=limit, $4=threshold_ms
-	const qSlow = `
-		SELECT
-		    pid,
-		    coalesce(datname,''),
-		    coalesce(usename,''),
-		    coalesce(state,''),
-		    left(coalesce(query,''),300),
-		    query_start,
-		    extract(epoch from now()-query_start)*1000 AS dur_ms
-		FROM pg_stat_activity
-		WHERE state = 'active'
-		  AND query_start IS NOT NULL
-		  AND pid <> pg_backend_pid()
-		  AND extract(epoch from now()-query_start)*1000 > $4
-		  AND ($1::timestamptz IS NULL OR query_start >= $1)
-		  AND ($2::timestamptz IS NULL OR query_start <= $2)
-		ORDER BY dur_ms DESC
-		LIMIT $3`
-
-	dbFilter := dbSet(databases)
-	rows, err := db.QueryContext(ctx, qSlow, nullTime(from), nullTime(to), limit, m.SlowQueryThresholdMs)
-	if err != nil {
-		return nil, fmt.Errorf("query slow queries: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var s SlowQuery
-		if err := rows.Scan(
-			&s.PID, &s.Database, &s.User, &s.State, &s.Query, &s.StartedAt, &s.DurationMs,
-		); err != nil {
+		resp, err := c.httpClient.Do(httpReq)
+		if err != nil {
 			continue
 		}
-		if !inDBSet(dbFilter, s.Database) {
-			continue
+		status := resp.StatusCode
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if status == http.StatusOK {
+			return ip, nil
 		}
-		s.StartedAt = s.StartedAt.UTC()
-		if s.DurationMs > m.LongestRunningMs {
-			m.LongestRunningMs = s.DurationMs
-		}
-		m.SlowQueries = append(m.SlowQueries, s)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	m.SlowQueryCount = len(m.SlowQueries)
-
-	// --- Lock / deadlock counts ---
-	_ = db.QueryRowContext(ctx, `
-		SELECT count(*) FROM pg_stat_activity
-		WHERE wait_event_type='Lock' AND pid<>pg_backend_pid()`).Scan(&m.LockWaitCount)
-
-	_ = db.QueryRowContext(ctx, `
-		SELECT coalesce(sum(deadlocks),0) FROM pg_stat_database WHERE datname NOT IN ('template0', 'template1')`).Scan(&m.DeadlockCount)
-
-	// --- Row throughput ---
-	_ = db.QueryRowContext(ctx, `
-		SELECT coalesce(sum(tup_returned),0), coalesce(sum(tup_fetched),0)
-		FROM pg_stat_database WHERE datname NOT IN ('template0', 'template1')`).
-		Scan(&m.RowsReturned, &m.RowsFetched)
-
-	// --- Scan efficiency ---
-	_ = db.QueryRowContext(ctx, `
-		SELECT coalesce(sum(seq_scan),0), coalesce(sum(idx_scan),0)
-		FROM pg_stat_user_tables`).Scan(&m.SeqScansTotal, &m.IdxScansTotal)
-
-	total := m.SeqScansTotal + m.IdxScansTotal
-	if total > 0 {
-		m.IdxScanRatioPct = math.Round(float64(m.IdxScansTotal)/float64(total)*10000) / 100
-	}
-
-	const qSeq = `
-		SELECT schemaname, relname,
-		    coalesce(seq_scan,0), coalesce(idx_scan,0),
-		    CASE WHEN coalesce(seq_scan,0)+coalesce(idx_scan,0)=0 THEN 0::numeric
-		         ELSE round(coalesce(idx_scan,0)::numeric /
-		                    (coalesce(seq_scan,0)+coalesce(idx_scan,0))*100,2)
-		    END
-		FROM pg_stat_user_tables
-		WHERE coalesce(seq_scan,0) > 50
-		ORDER BY seq_scan DESC LIMIT $1`
-
-	rows2, err := db.QueryContext(ctx, qSeq, limit)
-	if err == nil {
-		defer rows2.Close()
-		for rows2.Next() {
-			var s ScanEfficiency
-			if rows2.Scan(&s.Schema, &s.Table, &s.SeqScans, &s.IdxScans, &s.IdxScanRatioPct) == nil {
-				m.HighSeqScanTables = append(m.HighSeqScanTables, s)
-			}
-		}
-		_ = rows2.Err()
-	}
-	return m, nil
+	return "", fmt.Errorf("no Patroni leader found among node_ips %v", req.NodeIPs)
 }
 
-/**
- * scanQueryStats.
- *
- * Params:
- *   ctx context.Context - context carrying cancellation signals and deadlines
- *   db *sql.DB - the db (*sql.DB)
- *   q string - the q string
- *   limit int - the limit value
- *
- * Returns:
- *   []QueryStat - the resulting []QueryStat
- *   error - error value; non-nil when the operation fails
- */
-func scanQueryStats(ctx context.Context, db *sql.DB, q string, limit int) ([]QueryStat, error) {
-	rows, err := db.QueryContext(ctx, q, limit)
+func (c *Collector) patroniGET(ctx context.Context, rawURL string) (map[string]any, error) {
+	var out map[string]any
+	return out, c.patroniRequest(ctx, rawURL, &out)
+}
+
+func (c *Collector) patroniGETArray(ctx context.Context, rawURL string) ([]any, error) {
+	var out []any
+	return out, c.patroniRequest(ctx, rawURL, &out)
+}
+
+func (c *Collector) patroniRequest(ctx context.Context, rawURL string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	defer rows.Close()
-	var out []QueryStat
-	for rows.Next() {
-		var s QueryStat
-		if err := rows.Scan(
-			&s.Query, &s.Calls,
-			&s.MeanExecMs, &s.MaxExecMs, &s.MinExecMs, &s.StddevExecMs,
-			&s.TotalExecMs, &s.Rows,
-		); err != nil {
-			continue
-		}
-		out = append(out, s)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
 	}
-	return out, rows.Err()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("patroni %s: HTTP %d", rawURL, resp.StatusCode)
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, patroniBodyLimit)).Decode(out); err != nil {
+		return fmt.Errorf("decode %s: %w", rawURL, err)
+	}
+	return nil
 }
 
 // =============================================================================
-// maintenance — autovacuum, XID age, logical slots, lock grants
+// helpers
 // =============================================================================
 
-/**
- * collectMaintenance.
- *
- * Params:
- *   ctx context.Context - context carrying cancellation signals and deadlines
- *   db *sql.DB - the db (*sql.DB)
- *   limit int - the limit value
- *   databases []string - the databases ([]string)
- *
- * Returns:
- *   *MaintenanceMetric - the resulting *MaintenanceMetric
- *   error - error value; non-nil when the operation fails
- */
-func collectMaintenance(ctx context.Context, db *sql.DB, limit int, databases []string) (*MaintenanceMetric, error) {
-	m := &MaintenanceMetric{
-		Workers:        []VacuumWorker{},
-		StaleTables:    []StaleTable{},
-		LogicalSlotLag: []LogicalSlotStat{},
-	}
-
-	// Running autovacuum workers.
-	const qVacuum = `
-		SELECT p.pid, p.datname, p.phase, n.nspname, c.relname,
-		       to_char(now()-a.query_start,'HH24:MI:SS')
-		FROM pg_stat_progress_vacuum p
-		JOIN pg_class         c ON c.oid = p.relid
-		JOIN pg_namespace     n ON n.oid = c.relnamespace
-		JOIN pg_stat_activity a ON a.pid = p.pid
-		ORDER BY a.query_start`
-
-	dbFilter := dbSet(databases)
-	rows, err := db.QueryContext(ctx, qVacuum)
-	if err != nil {
-		return nil, fmt.Errorf("query vacuum progress: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var w VacuumWorker
-		if rows.Scan(&w.PID, &w.Database, &w.Phase, &w.Schema, &w.Table, &w.Duration) == nil {
-			if inDBSet(dbFilter, w.Database) {
-				m.Workers = append(m.Workers, w)
-			}
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate vacuum workers: %w", err)
-	}
-	m.AutovacuumRunning = len(m.Workers)
-
-	// Stale tables (highest dead tuple count, top-N).
-	const qStale = `
-		SELECT schemaname, relname, last_autovacuum, last_autoanalyze, n_dead_tup
-		FROM pg_stat_user_tables
-		WHERE n_dead_tup > 0
-		ORDER BY n_dead_tup DESC
-		LIMIT $1`
-
-	rows2, err := db.QueryContext(ctx, qStale, limit)
-	if err != nil {
-		return nil, fmt.Errorf("query stale tables: %w", err)
-	}
-	defer rows2.Close()
-	for rows2.Next() {
-		var s StaleTable
-		var lv, la sql.NullTime
-		if rows2.Scan(&s.Schema, &s.Table, &lv, &la, &s.DeadTuples) == nil {
-			if lv.Valid {
-				t := lv.Time
-				s.LastAutovacuum = &t
-			}
-			if la.Valid {
-				t := la.Time
-				s.LastAutoanalyze = &t
-			}
-			m.StaleTables = append(m.StaleTables, s)
-		}
-	}
-	if err := rows2.Err(); err != nil {
-		return nil, fmt.Errorf("iterate stale tables: %w", err)
-	}
-
-	// Tables needing vacuum (dead ratio > 20 %).
-	_ = db.QueryRowContext(ctx, `
-		SELECT count(*) FROM pg_stat_user_tables
-		WHERE n_live_tup+n_dead_tup>0
-		  AND n_dead_tup::float/(n_live_tup+n_dead_tup) > 0.20`).Scan(&m.TablesNeedingVacuum)
-
-	// XID wraparound risk — worst-case database.
-	const qXID = `
-		SELECT max(age(datfrozenxid)) FROM pg_database WHERE datistemplate=false`
-	_ = db.QueryRowContext(ctx, qXID).Scan(&m.OldestXIDAge)
-	switch {
-	case m.OldestXIDAge > 1_500_000_000:
-		m.XIDRiskLevel = "danger"
-	case m.OldestXIDAge > 1_000_000_000:
-		m.XIDRiskLevel = "warning"
-	default:
-		m.XIDRiskLevel = "ok"
-	}
-
-	// Logical replication slot lag.
-	const qSlots = `
-		SELECT slot_name, coalesce(database,''), active,
-		       CASE WHEN pg_is_in_recovery() THEN 0
-		            ELSE pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)::bigint
-		       END
-		FROM pg_replication_slots
-		WHERE slot_type = 'logical'
-		ORDER BY 4 DESC`
-
-	rows3, err := db.QueryContext(ctx, qSlots)
-	if err != nil {
-		return nil, fmt.Errorf("query logical slots: %w", err)
-	}
-	defer rows3.Close()
-	for rows3.Next() {
-		var s LogicalSlotStat
-		if rows3.Scan(&s.Name, &s.Database, &s.Active, &s.LagBytes) == nil {
-			if inDBSet(dbFilter, s.Database) {
-				m.LogicalSlotLag = append(m.LogicalSlotLag, s)
-			}
-		}
-	}
-	if err := rows3.Err(); err != nil {
-		return nil, fmt.Errorf("iterate logical slots: %w", err)
-	}
-
-	// Lock grants vs waits.
-	const qLocks = `
-		SELECT
-		    count(*)                             AS total,
-		    count(*) FILTER (WHERE granted)      AS granted,
-		    count(*) FILTER (WHERE NOT granted)  AS waiting
-		FROM pg_locks`
-	_ = db.QueryRowContext(ctx, qLocks).Scan(&m.TotalLocks, &m.GrantedLocks, &m.WaitingLocks)
-
-	return m, nil
+func isPatroniCategory(cat string) bool {
+	return cat == MetricCategoryCluster || cat == MetricCategoryFailover
 }
 
-// =============================================================================
-// string / map helpers
-// =============================================================================
+func resolvePort(port, def int) int {
+	if port <= 0 {
+		return def
+	}
+	return port
+}
 
-/**
- * getString.
- *
- * Params:
- *   m map[string]any - the m (map[string]any)
- *   key string - the key string
- *
- * Returns:
- *   string - the resulting string
- */
+func resolveCategories(requested []string) []string {
+	if len(requested) == 0 {
+		return allMetricCategories
+	}
+	valid := map[string]bool{}
+	for _, c := range allMetricCategories {
+		valid[c] = true
+	}
+	out := make([]string, 0, len(requested))
+	for _, r := range requested {
+		lc := strings.ToLower(strings.TrimSpace(r))
+		if valid[lc] {
+			out = append(out, lc)
+		}
+	}
+	return out
+}
+
 func getString(m map[string]any, key string) string {
 	v, _ := m[key].(string)
 	return v
 }
 
-/**
- * getInt.
- *
- * Params:
- *   m map[string]any - the m (map[string]any)
- *   key string - the key string
- *
- * Returns:
- *   int - the resulting integer
- */
 func getInt(m map[string]any, key string) int {
 	switch v := m[key].(type) {
 	case float64:
@@ -1450,17 +1150,6 @@ func getInt(m map[string]any, key string) int {
 	return 0
 }
 
-/**
- * splitHostPort.
- *
- * Params:
- *   hostport string - the hostport string
- *   defaultPort int - the defaultPort value
- *
- * Returns:
- *   string - the resulting string
- *   int - the resulting integer
- */
 func splitHostPort(hostport string, defaultPort int) (string, int) {
 	idx := strings.LastIndex(hostport, ":")
 	if idx < 0 {
@@ -1471,21 +1160,11 @@ func splitHostPort(hostport string, defaultPort int) (string, int) {
 	return hostport[:idx], port
 }
 
-/**
- * formatDuration converts seconds to a human-readable string like "3d 14h 22m 5s".
- *
- * Params:
- *   seconds int64 - the seconds value
- *
- * Returns:
- *   string - the resulting string
- */
 func formatDuration(seconds int64) string {
 	days := seconds / 86400
 	hours := (seconds % 86400) / 3600
 	mins := (seconds % 3600) / 60
 	secs := seconds % 60
-
 	var parts []string
 	if days > 0 {
 		parts = append(parts, fmt.Sprintf("%dd", days))
@@ -1500,15 +1179,6 @@ func formatDuration(seconds int64) string {
 	return strings.Join(parts, " ")
 }
 
-/**
- * parsePatroniTime handles the several time formats Patroni uses in /history.
- *
- * Params:
- *   s string - the s string
- *
- * Returns:
- *   time.Time - the resulting time.Time
- */
 func parsePatroniTime(s string) time.Time {
 	for _, f := range []string{
 		time.RFC3339Nano,

@@ -1132,20 +1132,21 @@ func (s *Service) CollectMetrics(ctx context.Context, req MetricRequest) MetricR
  *   password string - the password string
  *   err error - error value; non-nil when the operation fails
  */
-func (s *Service) ConnectionInfo(jobID string) (host string, port int, user, password string, err error) {
+func (s *Service) ConnectionInfo(jobID string) (host string, port int, user, password string, nodeIPs []string, err error) {
 	job, err := s.store.Load(jobID)
 	if err != nil {
-		return "", 0, "", "", fmt.Errorf("load job %q: %w", jobID, err)
+		return "", 0, "", "", nil, fmt.Errorf("load job %q: %w", jobID, err)
 	}
 	secret, err := s.store.LoadSecret(jobID)
 	if err != nil {
-		return "", 0, "", "", fmt.Errorf("load job secret %q: %w", jobID, err)
+		return "", 0, "", "", nil, fmt.Errorf("load job secret %q: %w", jobID, err)
 	}
 	p := job.Request.MySQLPort
 	if p == 0 {
 		p = 3306
 	}
-	return job.Request.PrimaryIP, p, secret.AdminUser, secret.AdminPassword, nil
+	ips := append([]string{job.Request.PrimaryIP}, job.Request.StandbyIPs...)
+	return job.Request.PrimaryIP, p, secret.AdminUser, secret.AdminPassword, ips, nil
 }
 
 /**

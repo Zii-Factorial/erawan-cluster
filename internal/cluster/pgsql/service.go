@@ -57,6 +57,7 @@ func NewService(store *Store, runner *Runner) *Service {
 			{Name: "standby_config", Tag: "standby_config"},
 			{Name: "cluster_bootstrap", Tag: "cluster_bootstrap"},
 			{Name: "verify_cluster", Tag: "verify_cluster"},
+			{Name: "setup_exporters", Tag: "setup_exporters"},
 			{Name: "init_app_db", Tag: "init_app_db", Skippable: true},
 		},
 	}
@@ -193,6 +194,7 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 		ReplicatorPassword: stringOrGenerated(req.ReplicatorPassword),
 		AdminPassword:      stringOrGenerated(req.AdminPassword),
 		NewUserPassword:    req.NewUserPassword,
+		ExporterPassword:   stringOrGenerated(""),
 	}
 	if err := s.store.SaveSecret(job.ID, StoredSecret{
 		PostgresUser:       defaultPostgresSuperuser,
@@ -200,6 +202,7 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 		ReplicatorUser:     defaultReplicationUser,
 		ReplicatorPassword: secrets.ReplicatorPassword,
 		AdminPassword:      secrets.AdminPassword,
+		ExporterPassword:   secrets.ExporterPassword,
 	}); err != nil {
 		return nil, err
 	}
@@ -260,7 +263,7 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 	if job.Request.NewUser != "" && secret.NewUserPassword == "" {
 		return nil, fmt.Errorf("new_user_password is required to resume job %s", jobID)
 	}
-	if secret.PostgresPassword == "" || secret.ReplicatorPassword == "" || secret.AdminPassword == "" {
+	if secret.PostgresPassword == "" || secret.ReplicatorPassword == "" || secret.AdminPassword == "" || secret.ExporterPassword == "" {
 		storedSecret, err := s.store.LoadSecret(job.ID)
 		if err == nil {
 			if secret.PostgresPassword == "" {
@@ -271,6 +274,9 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 			}
 			if secret.AdminPassword == "" {
 				secret.AdminPassword = storedSecret.AdminPassword
+			}
+			if secret.ExporterPassword == "" {
+				secret.ExporterPassword = storedSecret.ExporterPassword
 			}
 		}
 	}
@@ -283,12 +289,16 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 	if secret.AdminPassword == "" {
 		secret.AdminPassword = stringOrGenerated("")
 	}
+	if secret.ExporterPassword == "" {
+		secret.ExporterPassword = stringOrGenerated("")
+	}
 	if err := s.store.SaveSecret(job.ID, StoredSecret{
 		PostgresUser:       defaultPostgresSuperuser,
 		PostgresPassword:   secret.PostgresPassword,
 		ReplicatorUser:     defaultReplicationUser,
 		ReplicatorPassword: secret.ReplicatorPassword,
 		AdminPassword:      secret.AdminPassword,
+		ExporterPassword:   secret.ExporterPassword,
 	}); err != nil {
 		return nil, err
 	}
@@ -352,6 +362,7 @@ func (s *Service) Recover(ctx context.Context, jobID string) (*Job, error) {
 		PostgresPassword:   storedSecret.PostgresPassword,
 		ReplicatorPassword: storedSecret.ReplicatorPassword,
 		AdminPassword:      storedSecret.AdminPassword,
+		ExporterPassword:   storedSecret.ExporterPassword,
 	}
 
 	recoverySteps := s.recoveryStepsFor()

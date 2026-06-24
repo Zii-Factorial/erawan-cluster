@@ -116,7 +116,7 @@ func TestDeployPersistsRunningJobAndSecret(t *testing.T) {
 func TestGetComputesProgressWithSkippedSteps(t *testing.T) {
 	svc, store := newService(t)
 	// Empty spec skips standby_config (no standbys) and init_app_db (no user/db):
-	// 7 steps - 2 skipped = 5 applicable.
+	// 8 steps - 2 skipped = 6 applicable.
 	job := &pgsql.Job{
 		ID:     testJobID,
 		Status: pgsql.JobStatusRunning,
@@ -132,7 +132,7 @@ func TestGetComputesProgressWithSkippedSteps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if got.TotalSteps != 5 || got.CompletedSteps != 1 || got.ProgressPercent != 20 {
+	if got.TotalSteps != 6 || got.CompletedSteps != 1 || got.ProgressPercent != 16 {
 		t.Fatalf("unexpected progress: total=%d completed=%d pct=%d", got.TotalSteps, got.CompletedSteps, got.ProgressPercent)
 	}
 }

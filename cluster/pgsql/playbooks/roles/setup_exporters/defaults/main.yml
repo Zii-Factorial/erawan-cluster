@@ -1,0 +1,5 @@
+---
+postgres_exporter_bin: /usr/local/bin/postgres_exporter
+postgres_exporter_conf_dir: /etc/postgres_exporter
+postgres_exporter_port: 9187
+postgres_exporter_user: exporter

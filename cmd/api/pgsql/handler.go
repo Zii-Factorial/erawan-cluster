@@ -250,13 +250,11 @@ func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.JobID != "" {
-		_, _, user, password, nodeIPs, err := h.cluster.ConnectionInfo(r.Context(), req.JobID)
+		_, _, _, _, nodeIPs, err := h.cluster.ConnectionInfo(r.Context(), req.JobID)
 		if err != nil {
 			render.Error(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}
-		req.User = user
-		req.Password = password
 		req.NodeIPs = nodeIPs
 	}
 

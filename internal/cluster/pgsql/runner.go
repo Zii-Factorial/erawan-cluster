@@ -203,6 +203,7 @@ func (r *Runner) run(ctx context.Context, cfg runConfig) StepResult {
 		"replication_password":        cfg.secret.ReplicatorPassword,
 		"patroni_admin_user":          cfg.spec.AdminUsername,
 		"patroni_admin_password":      cfg.secret.AdminPassword,
+		"postgres_exporter_password":  cfg.secret.ExporterPassword,
 		"new_user":                    cfg.spec.NewUser,
 		"new_user_password":           cfg.secret.NewUserPassword,
 		"new_user_ssl_required":       cfg.spec.NewUserSSLRequired,

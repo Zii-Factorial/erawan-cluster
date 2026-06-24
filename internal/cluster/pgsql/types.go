@@ -70,6 +70,7 @@ type SecretInput struct {
 	ReplicatorPassword string
 	AdminPassword      string
 	NewUserPassword    string
+	ExporterPassword   string
 }
 
 type StoredSecret struct {
@@ -78,6 +79,7 @@ type StoredSecret struct {
 	ReplicatorUser     string `json:"replicator_user"`
 	ReplicatorPassword string `json:"replicator_password"`
 	AdminPassword      string `json:"admin_password"`
+	ExporterPassword   string `json:"exporter_password,omitempty"`
 }
 
 type AddMemberRequest struct {

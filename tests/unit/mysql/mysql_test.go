@@ -229,13 +229,14 @@ func TestConnectionInfoFromStoredJob(t *testing.T) {
 	_ = store.Save(&mysql.Job{ID: testJobID, Status: mysql.JobStatusCompleted, Request: mysql.StoredSpec{PrimaryIP: "10.0.0.9", MySQLPort: 3307}})
 	_ = store.SaveSecret(testJobID, mysql.StoredSecret{AdminUser: "clusteradmin", AdminPassword: "pw"})
 
-	host, port, user, pass, err := svc.ConnectionInfo(testJobID)
+	host, port, user, pass, nodeIPs, err := svc.ConnectionInfo(testJobID)
 	if err != nil {
 		t.Fatalf("connection info: %v", err)
 	}
 	if host != "10.0.0.9" || port != 3307 || user != "clusteradmin" || pass != "pw" {
 		t.Fatalf("unexpected connection info: %s:%d %s/%s", host, port, user, pass)
 	}
+	_ = nodeIPs
 }
 
 // ── database manager (validation through the public API) ─────────────────────

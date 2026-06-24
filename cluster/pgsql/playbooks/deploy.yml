@@ -68,7 +68,18 @@
     - verify_cluster
 
 # ---------------------------------------------------------------------------
-# PLAY 7 — Initialize application database (optional)
+# PLAY 7 — Set up postgres_exporter on every cluster node
+# ---------------------------------------------------------------------------
+- name: PostgreSQL exporter setup
+  hosts: all
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  roles:
+    - setup_exporters
+
+# ---------------------------------------------------------------------------
+# PLAY 8 — Initialize application database (optional)
 # ---------------------------------------------------------------------------
 - name: PostgreSQL application database initialization
   hosts: pgsql_primary
