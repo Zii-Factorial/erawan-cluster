@@ -168,8 +168,8 @@ func ValidateMetricRequest(req *MetricRequest) error {
 	if req.SSLMode == "" {
 		req.SSLMode = "disable"
 	}
-	if req.SSLMode != "disable" && req.SSLMode != "require" && req.SSLMode != "skip-verify" {
-		return fmt.Errorf("ssl_mode must be 'disable', 'require' (verified TLS), or 'skip-verify' (unverified TLS)")
+	if req.SSLMode != "disable" && req.SSLMode != "require" && req.SSLMode != "skip-verify" && req.SSLMode != "verify-full" {
+		return fmt.Errorf("ssl_mode must be 'disable', 'require' (TLS, no cert check), 'verify-full' (TLS + CA verification), or 'skip-verify' (alias for require)")
 	}
 	if req.From != nil && req.To != nil && req.From.After(*req.To) {
 		return fmt.Errorf("from must be before to")
@@ -331,15 +331,15 @@ func openDB(req MetricRequest) (*sql.DB, error) {
 	if timeout <= 0 {
 		timeout = 10
 	}
-	// Map the API ssl_mode to a lib/pq sslmode. "require" is promoted to
-	// "verify-full" (verified TLS, anti-MITM); "skip-verify" maps to pq's
-	// "require" (encrypted but unverified) as an explicit opt-out.
+	// Map the API ssl_mode to a lib/pq sslmode.
+	// "require" / "skip-verify" → pq "require" (encrypted, cert NOT verified — standard behaviour).
+	// "verify-full" → pq "verify-full" (encrypted + CA verification, anti-MITM).
 	sslMode := "disable"
 	switch req.SSLMode {
-	case "require":
-		sslMode = "verify-full"
-	case "skip-verify":
+	case "require", "skip-verify":
 		sslMode = "require"
+	case "verify-full":
+		sslMode = "verify-full"
 	}
 	u := &url.URL{
 		Scheme: "postgres",

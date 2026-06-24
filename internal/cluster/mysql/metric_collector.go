@@ -147,8 +147,8 @@ func ValidateMetricRequest(req *MetricRequest) error {
 	if req.SSLMode == "" {
 		req.SSLMode = "disable"
 	}
-	if req.SSLMode != "disable" && req.SSLMode != "require" && req.SSLMode != "skip-verify" {
-		return fmt.Errorf("ssl_mode must be 'disable', 'require' (verified TLS), or 'skip-verify' (unverified TLS)")
+	if req.SSLMode != "disable" && req.SSLMode != "require" && req.SSLMode != "skip-verify" && req.SSLMode != "verify-full" {
+		return fmt.Errorf("ssl_mode must be 'disable', 'require' (TLS, no cert check), 'verify-full' (TLS + CA verification), or 'skip-verify' (alias for require)")
 	}
 	if req.From != nil && req.To != nil && req.From.After(*req.To) {
 		return fmt.Errorf("from must be before to")
@@ -248,10 +248,10 @@ func openDB(ctx context.Context, req MetricRequest) (*sql.DB, error) {
 	cfg.ParseTime = true
 	cfg.AllowNativePasswords = true
 	switch req.SSLMode {
-	case "require":
-		cfg.TLSConfig = "true" // TLS with full certificate verification (anti-MITM)
-	case "skip-verify":
-		cfg.TLSConfig = "skip-verify" // explicit opt-out: TLS without verification
+	case "require", "skip-verify":
+		cfg.TLSConfig = "skip-verify" // TLS encrypted, certificate NOT verified (standard "require" behaviour)
+	case "verify-full":
+		cfg.TLSConfig = "true" // TLS with full CA certificate verification (anti-MITM)
 	}
 
 	db, err := sql.Open("mysql", cfg.FormatDSN())

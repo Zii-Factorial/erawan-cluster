@@ -160,6 +160,11 @@
       "key": "MEMBER_JOB_ID",
       "value": "",
       "description": "Job ID returned by Add Member / Remove Member — use this to poll the member operation. JOB_ID always stays as the deploy job ID."
+    },
+    {
+      "key": "RECOVERY_JOB_ID",
+      "value": "",
+      "description": "Job ID returned by Recover Job — use this to poll the recovery operation. JOB_ID always stays as the original deploy job ID."
     }
   ],
   "event": [
@@ -255,7 +260,11 @@
           "        pm.collectionVariables.set('LAST_RESPONSE', JSON.stringify(json, null, 2));",
           "        console.log('[erawan] response decrypted:', JSON.stringify(json, null, 2));",
           "        if (json && json.data && json.data.id) {",
-          "            if (json.data.member_op) {",
+          "            if (json.data.recovery_op) {",
+          "                // Recovery job — store separately, keep JOB_ID as the deploy job ID",
+          "                pm.collectionVariables.set('RECOVERY_JOB_ID', json.data.id);",
+          "                console.log('[erawan] RECOVERY_JOB_ID set to:', json.data.id);",
+          "            } else if (json.data.member_op) {",
           "                // Member operation job — store separately, keep JOB_ID as the deploy job ID",
           "                pm.collectionVariables.set('MEMBER_JOB_ID', json.data.id);",
           "                console.log('[erawan] MEMBER_JOB_ID set to:', json.data.id);",
@@ -772,6 +781,51 @@
           }
         },
         {
+          "name": "Recover Job",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Auto-extract RECOVERY_JOB_ID from recover response (no encryption).",
+                  "// JOB_ID is intentionally NOT updated — it stays as the original deploy job ID.",
+                  "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
+                  "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
+                  "try {",
+                  "    const body = pm.response.json();",
+                  "    if (body && body.data && body.data.id) {",
+                  "        pm.collectionVariables.set('RECOVERY_JOB_ID', body.data.id);",
+                  "        console.log('[erawan] RECOVERY_JOB_ID set to:', body.data.id);",
+                  "        console.log('[erawan] Poll GET /cluster/mysql/jobs/' + body.data.id + ' to track progress');",
+                  "    }",
+                  "} catch(e) {}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "description": "Triggers a post-outage recovery for a MySQL InnoDB Cluster. Runs `boot_recovery` (`dba.rebootClusterFromCompleteOutage()`) and `bootstrap_router` (when configured) using the stored credentials — **no request body required**.\n\nUse after a complete datacenter outage where all nodes went offline simultaneously. The cluster cannot reform automatically in this scenario; this endpoint is required to restore service.\n\nWorks on both `completed` and `failed` deploy jobs. Returns a new recovery job immediately (`202 Accepted`). Poll **Get Job** using `RECOVERY_JOB_ID` to track progress.\n\n**Safe** — does not touch data files, user accounts, or databases. The worst outcome is the Ansible step fails and the job is marked `failed`; the endpoint can be called again.\n",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/jobs/{{JOB_ID}}/recover",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "mysql",
+                "jobs",
+                "{{JOB_ID}}",
+                "recover"
+              ]
+            }
+          }
+        },
+        {
           "name": "Rollback Job",
           "request": {
             "method": "POST",
@@ -1109,6 +1163,51 @@
                 "jobs",
                 "{{JOB_ID}}",
                 "resume"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Recover Job",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Auto-extract RECOVERY_JOB_ID from recover response (no encryption).",
+                  "// JOB_ID is intentionally NOT updated — it stays as the original deploy job ID.",
+                  "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
+                  "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
+                  "try {",
+                  "    const body = pm.response.json();",
+                  "    if (body && body.data && body.data.id) {",
+                  "        pm.collectionVariables.set('RECOVERY_JOB_ID', body.data.id);",
+                  "        console.log('[erawan] RECOVERY_JOB_ID set to:', body.data.id);",
+                  "        console.log('[erawan] Poll GET /cluster/pgsql/jobs/' + body.data.id + ' to track progress');",
+                  "    }",
+                  "} catch(e) {}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "description": "Triggers a post-outage recovery for a PostgreSQL/Patroni cluster. Runs `cluster_bootstrap` (re-registers the cluster in DCS and restarts Patroni) and `verify_cluster` using stored credentials — **no request body required**.\n\nUse after a complete datacenter outage where Patroni stopped on all nodes. Patroni cannot automatically elect a primary after a full outage; this endpoint re-bootstraps it safely without touching data directories (`standby_config` / `pg_basebackup` is never run).\n\nWorks on both `completed` and `failed` deploy jobs. Returns a new recovery job immediately (`202 Accepted`). Poll **Get Job** using `RECOVERY_JOB_ID` to track progress. Once the recovery job completes, HAProxy health checks will pass and metrics will resume automatically.\n\n**Safe** — does not run `initdb`, `pg_basebackup`, or any DDL. The worst outcome is the Ansible step fails and the job is marked `failed`; the endpoint can be called again.\n",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/jobs/{{JOB_ID}}/recover",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "pgsql",
+                "jobs",
+                "{{JOB_ID}}",
+                "recover"
               ]
             }
           }
