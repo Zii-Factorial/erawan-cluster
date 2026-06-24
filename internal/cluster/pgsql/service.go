@@ -244,7 +244,7 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 		return nil, err
 	}
 	if job.Status == JobStatusCompleted {
-		return nil, fmt.Errorf("job %s already completed", jobID)
+		return nil, fmt.Errorf("job %s already completed; use the recover endpoint to restart the cluster after an outage", jobID)
 	}
 	if job.Status == JobStatusRunning {
 		return nil, fmt.Errorf("job %s is already running", jobID)
@@ -308,6 +308,143 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 		_ = s.executeFrom(s.ctx, bgJob, startIndex, secret)
 	})
 	return job, nil
+}
+
+/**
+ * Recover launches a new recovery job against the cluster owned by jobID, running
+ * cluster_bootstrap and verify_cluster. Use after a complete datacenter outage:
+ * this re-registers the cluster in the DCS (etcd/consul) and restarts Patroni on
+ * all nodes without touching data directories. Stored secrets are used so no
+ * passwords are required at call time.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   jobID string - ID of the original completed or failed deploy job
+ *
+ * Returns:
+ *   *Job - the new running recovery job
+ *   error - error value; non-nil when the operation fails
+ */
+func (s *Service) Recover(ctx context.Context, jobID string) (*Job, error) {
+	_ = ctx
+	deployJob, err := s.store.Load(jobID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.hydrateStoredSSHConfig(deployJob); err != nil {
+		return nil, err
+	}
+	if deployJob.Status == JobStatusRunning {
+		return nil, fmt.Errorf("job %s is currently running; wait for it to finish before recovering", jobID)
+	}
+	if deployJob.Status == core.JobStatusRolledBack {
+		return nil, fmt.Errorf("job %s was rolled back; run a new deploy instead of recovering", jobID)
+	}
+
+	storedSecret, err := s.store.LoadSecret(jobID)
+	if err != nil {
+		return nil, fmt.Errorf("load job secret: %w", err)
+	}
+	secret := SecretInput{
+		PostgresPassword:   storedSecret.PostgresPassword,
+		ReplicatorPassword: storedSecret.ReplicatorPassword,
+		AdminPassword:      storedSecret.AdminPassword,
+	}
+
+	recoverySteps := s.recoveryStepsFor()
+	recoveryJob := &Job{
+		ID:                newJobID(),
+		Status:            JobStatusRunning,
+		CreatedAt:         time.Now().UTC(),
+		UpdatedAt:         time.Now().UTC(),
+		LastCompletedStep: -1,
+		Request:           deployJob.Request,
+		RecoveryOp:        &core.RecoveryOperation{SourceJobID: jobID},
+		Steps:             make([]StepResult, 0, len(recoverySteps)),
+	}
+	s.updateJobProgress(recoveryJob)
+	if err := s.store.Save(recoveryJob); err != nil {
+		return nil, err
+	}
+
+	bgJob, err := s.store.Load(recoveryJob.ID)
+	if err != nil {
+		return nil, err
+	}
+	bgDeployJob, err := s.store.Load(jobID)
+	if err != nil {
+		return nil, err
+	}
+	s.start(func() {
+		s.executeRecovery(s.ctx, bgJob, bgDeployJob, secret)
+	})
+	return recoveryJob, nil
+}
+
+// recoveryStepsFor returns the ordered Ansible steps for PostgreSQL post-outage
+// recovery: cluster_bootstrap re-registers in DCS and starts Patroni; verify_cluster
+// confirms the cluster is healthy. Both are safe to re-run on existing data.
+func (s *Service) recoveryStepsFor() []step {
+	return []step{
+		{Name: "cluster_bootstrap", Tag: "cluster_bootstrap"},
+		{Name: "verify_cluster", Tag: "verify_cluster"},
+	}
+}
+
+/**
+ * executeRecovery runs the recovery steps for a post-outage recovery job.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   recoveryJob *Job - the new recovery job being tracked
+ *   deployJob *Job - the original deploy job supplying the cluster configuration
+ *   secret SecretInput - the credentials to pass to Ansible
+ */
+func (s *Service) executeRecovery(ctx context.Context, recoveryJob *Job, deployJob *Job, secret SecretInput) {
+	timeout := time.Duration(deployJob.Request.StepTimeoutSeconds) * time.Second
+	recoverySteps := s.recoveryStepsFor()
+
+	for i, st := range recoverySteps {
+		recoveryJob.CurrentStep = st.Name
+		s.updateJobProgress(recoveryJob)
+		_ = s.store.Save(recoveryJob)
+
+		res := s.runDeploy(ctx, runConfig{
+			jobID:   deployJob.ID,
+			spec:    deployJob.Request,
+			secret:  secret,
+			step:    st,
+			timeout: timeout,
+		})
+		recoveryJob.Steps = append(recoveryJob.Steps, res)
+
+		if res.Status != JobStatusCompleted {
+			recoveryJob.Status = JobStatusFailed
+			recoveryJob.Error = res.Message
+			if recoveryJob.Error == "" {
+				recoveryJob.Error = fmt.Sprintf("recovery step %s failed", st.Name)
+			}
+			recoveryJob.LastCompletedStep = i - 1
+			recoveryJob.CurrentStep = ""
+			s.updateJobProgress(recoveryJob)
+			_ = s.store.Save(recoveryJob)
+			return
+		}
+		recoveryJob.LastCompletedStep = i
+		recoveryJob.Error = ""
+	}
+
+	recoveryJob.Status = JobStatusCompleted
+	recoveryJob.CurrentStep = ""
+	recoveryJob.Error = ""
+	s.updateJobProgress(recoveryJob)
+	_ = s.store.Save(recoveryJob)
 }
 
 /**
@@ -947,6 +1084,9 @@ func (s *Service) updateJobProgress(job *Job) {
 	total := s.totalStepsFor(job.Request)
 	if job.MemberOp != nil {
 		total = len(job.MemberOp.MemberIPs)
+	}
+	if job.RecoveryOp != nil {
+		total = len(s.recoveryStepsFor())
 	}
 	core.ApplyProgress(job, total)
 }

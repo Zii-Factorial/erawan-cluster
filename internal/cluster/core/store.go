@@ -5,11 +5,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 )
+
+// jobIDPattern matches the 24-character lowercase hex strings produced by NewJobID.
+// Enforced on every Store read/write to prevent path traversal via caller-supplied IDs.
+var jobIDPattern = regexp.MustCompile(`^[0-9a-f]{24}$`)
+
+func validateJobID(jobID string) error {
+	if !jobIDPattern.MatchString(jobID) {
+		return fmt.Errorf("invalid job ID %q", jobID)
+	}
+	return nil
+}
 
 // Store is a file-backed job/secret store shared by every engine. It is generic
 // over the engine's stored spec (Spec) and stored secret (Sec) types. Jobs are
@@ -96,6 +108,9 @@ func (s *Store[Spec, Sec]) saveLocked(job *Job[Spec]) error {
  *   error - error value; non-nil when the operation fails
  */
 func (s *Store[Spec, Sec]) Update(jobID string, mutate func(*Job[Spec]) error) error {
+	if err := validateJobID(jobID); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	job, err := s.loadLocked(jobID)
@@ -122,6 +137,9 @@ func (s *Store[Spec, Sec]) Update(jobID string, mutate func(*Job[Spec]) error) e
  *   error - error value; non-nil when the operation fails
  */
 func (s *Store[Spec, Sec]) SaveSecret(jobID string, secret Sec) error {
+	if err := validateJobID(jobID); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -146,6 +164,9 @@ func (s *Store[Spec, Sec]) SaveSecret(jobID string, secret Sec) error {
  *   error - error value; non-nil when the operation fails
  */
 func (s *Store[Spec, Sec]) Load(jobID string) (*Job[Spec], error) {
+	if err := validateJobID(jobID); err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.loadLocked(jobID)
@@ -194,6 +215,10 @@ func (s *Store[Spec, Sec]) loadLocked(jobID string) (*Job[Spec], error) {
  *   error - error value; non-nil when the operation fails
  */
 func (s *Store[Spec, Sec]) LoadSecret(jobID string) (Sec, error) {
+	if err := validateJobID(jobID); err != nil {
+		var zero Sec
+		return zero, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

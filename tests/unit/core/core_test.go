@@ -22,6 +22,17 @@ type secret struct {
 	Pass string `json:"pass"`
 }
 
+// Valid 24-char hex job IDs for use in tests.
+const (
+	id1 = "000000000000000000000001"
+	id2 = "000000000000000000000002"
+	id3 = "000000000000000000000003"
+	id4 = "000000000000000000000004"
+	id5 = "000000000000000000000005"
+	id6 = "000000000000000000000006"
+	id7 = "000000000000000000000007"
+)
+
 func newStore(t *testing.T) *core.Store[spec, secret] {
 	t.Helper()
 	s, err := core.NewStore[spec, secret](t.TempDir())
@@ -33,25 +44,25 @@ func newStore(t *testing.T) *core.Store[spec, secret] {
 
 func TestStoreSaveLoadAndSecretRoundTrip(t *testing.T) {
 	s := newStore(t)
-	job := &core.Job[spec]{ID: "job1", Status: core.JobStatusRunning, Request: spec{Name: "cluster-a"}}
+	job := &core.Job[spec]{ID: id1, Status: core.JobStatusRunning, Request: spec{Name: "cluster-a"}}
 	if err := s.Save(job); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 	if job.UpdatedAt.IsZero() {
 		t.Fatal("Save should stamp UpdatedAt")
 	}
-	if err := s.SaveSecret("job1", secret{Pass: "s3cr3t"}); err != nil {
+	if err := s.SaveSecret(id1, secret{Pass: "s3cr3t"}); err != nil {
 		t.Fatalf("save secret: %v", err)
 	}
 
-	loaded, err := s.Load("job1")
+	loaded, err := s.Load(id1)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	if loaded.Request.Name != "cluster-a" {
 		t.Fatalf("round-trip mismatch: %+v", loaded.Request)
 	}
-	sec, err := s.LoadSecret("job1")
+	sec, err := s.LoadSecret(id1)
 	if err != nil {
 		t.Fatalf("load secret: %v", err)
 	}
@@ -62,19 +73,19 @@ func TestStoreSaveLoadAndSecretRoundTrip(t *testing.T) {
 
 func TestStoreLoadMissingReturnsError(t *testing.T) {
 	s := newStore(t)
-	if _, err := s.Load("nope"); err == nil {
+	if _, err := s.Load(id2); err == nil {
 		t.Fatal("expected error loading missing job")
 	}
-	if _, err := s.LoadSecret("nope"); err == nil {
+	if _, err := s.LoadSecret(id2); err == nil {
 		t.Fatal("expected error loading missing secret")
 	}
 }
 
 func TestStoreListNewestFirstAndLimit(t *testing.T) {
 	s := newStore(t)
-	for _, id := range []string{"a", "b", "c"} {
-		if err := s.Save(&core.Job[spec]{ID: id, Status: core.JobStatusCompleted}); err != nil {
-			t.Fatalf("save %s: %v", id, err)
+	for _, jobID := range []string{id3, id4, id5} {
+		if err := s.Save(&core.Job[spec]{ID: jobID, Status: core.JobStatusCompleted}); err != nil {
+			t.Fatalf("save %s: %v", jobID, err)
 		}
 		time.Sleep(10 * time.Millisecond) // distinct mod times for ordering
 	}
@@ -85,17 +96,17 @@ func TestStoreListNewestFirstAndLimit(t *testing.T) {
 	if len(jobs) != 2 {
 		t.Fatalf("expected limit=2 jobs, got %d", len(jobs))
 	}
-	if jobs[0].ID != "c" {
-		t.Fatalf("expected newest job 'c' first, got %q", jobs[0].ID)
+	if jobs[0].ID != id5 {
+		t.Fatalf("expected newest job %q first, got %q", id5, jobs[0].ID)
 	}
 }
 
 func TestStoreListExcludesSecretSidecars(t *testing.T) {
 	s := newStore(t)
-	if err := s.Save(&core.Job[spec]{ID: "x", Status: core.JobStatusCompleted}); err != nil {
+	if err := s.Save(&core.Job[spec]{ID: id1, Status: core.JobStatusCompleted}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	if err := s.SaveSecret("x", secret{Pass: "p"}); err != nil {
+	if err := s.SaveSecret(id1, secret{Pass: "p"}); err != nil {
 		t.Fatalf("save secret: %v", err)
 	}
 	jobs, err := s.List(0)
@@ -109,19 +120,19 @@ func TestStoreListExcludesSecretSidecars(t *testing.T) {
 
 func TestStoreMarkStaleRunningJobsFailed(t *testing.T) {
 	s := newStore(t)
-	_ = s.Save(&core.Job[spec]{ID: "running", Status: core.JobStatusRunning})
-	_ = s.Save(&core.Job[spec]{ID: "done", Status: core.JobStatusCompleted})
+	_ = s.Save(&core.Job[spec]{ID: id6, Status: core.JobStatusRunning})
+	_ = s.Save(&core.Job[spec]{ID: id7, Status: core.JobStatusCompleted})
 
 	s.MarkStaleRunningJobsFailed()
 
-	r, _ := s.Load("running")
+	r, _ := s.Load(id6)
 	if r.Status != core.JobStatusFailed {
 		t.Fatalf("expected stale running job marked failed, got %q", r.Status)
 	}
 	if r.Error == "" {
 		t.Fatal("expected an error message on the failed job")
 	}
-	d, _ := s.Load("done")
+	d, _ := s.Load(id7)
 	if d.Status != core.JobStatusCompleted {
 		t.Fatalf("completed job must be untouched, got %q", d.Status)
 	}
@@ -129,15 +140,15 @@ func TestStoreMarkStaleRunningJobsFailed(t *testing.T) {
 
 func TestStoreUpdateIsAtomicReadModifyWrite(t *testing.T) {
 	s := newStore(t)
-	_ = s.Save(&core.Job[spec]{ID: "j", Status: core.JobStatusRunning, Request: spec{Name: "n0"}})
+	_ = s.Save(&core.Job[spec]{ID: id1, Status: core.JobStatusRunning, Request: spec{Name: "n0"}})
 
-	if err := s.Update("j", func(j *core.Job[spec]) error {
+	if err := s.Update(id1, func(j *core.Job[spec]) error {
 		j.Request.Name = "n1"
 		return nil
 	}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	loaded, _ := s.Load("j")
+	loaded, _ := s.Load(id1)
 	if loaded.Request.Name != "n1" {
 		t.Fatalf("expected update persisted, got %q", loaded.Request.Name)
 	}
@@ -256,6 +267,33 @@ func TestAnsibleRunRejectsUnconfiguredPlaybook(t *testing.T) {
 	res := core.AnsibleRun(context.Background(), core.AnsibleSpec{Bin: "true", StepName: "deploy"})
 	if res.Status != core.JobStatusFailed || !strings.Contains(res.Message, "playbook path is not configured") {
 		t.Fatalf("expected not-configured failure, got %+v", res)
+	}
+}
+
+func TestStoreRejectsPathTraversalJobIDs(t *testing.T) {
+	s := newStore(t)
+	bad := []string{
+		"../etc/passwd",
+		"../../secret",
+		"../pgsql/" + id1,
+		"short",
+		"",
+		"AABBCCDDEE1122334455AABB", // uppercase not allowed
+		id1 + "extra",             // too long
+	}
+	for _, jobID := range bad {
+		if _, err := s.Load(jobID); err == nil {
+			t.Errorf("Load(%q): expected error, got nil", jobID)
+		}
+		if _, err := s.LoadSecret(jobID); err == nil {
+			t.Errorf("LoadSecret(%q): expected error, got nil", jobID)
+		}
+		if err := s.Update(jobID, func(j *core.Job[spec]) error { return nil }); err == nil {
+			t.Errorf("Update(%q): expected error, got nil", jobID)
+		}
+		if err := s.SaveSecret(jobID, secret{}); err == nil {
+			t.Errorf("SaveSecret(%q): expected error, got nil", jobID)
+		}
 	}
 }
 

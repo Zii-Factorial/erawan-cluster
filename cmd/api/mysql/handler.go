@@ -161,6 +161,28 @@ func (h *Handler) ResumeJob(w http.ResponseWriter, r *http.Request) {
 }
 
 /**
+ * RecoverJob triggers a post-outage cluster recovery for the deploy job identified
+ * by {jobID}. It runs the boot_recovery Ansible step (plus bootstrap_router when
+ * configured) using stored credentials — no request body is required.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
+func (h *Handler) RecoverJob(w http.ResponseWriter, r *http.Request) {
+	jobID := chi.URLParam(r, "jobID")
+	job, err := h.cluster.Recover(r.Context(), jobID)
+	if err != nil {
+		render.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	render.Accepted(w, "MySQL cluster recovery started", job)
+}
+
+/**
  * RollbackJob.
  *
  * Receiver:

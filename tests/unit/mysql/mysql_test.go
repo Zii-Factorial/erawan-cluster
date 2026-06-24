@@ -64,15 +64,17 @@ func TestValidateDeployRequestRejectsBadInput(t *testing.T) {
 	}
 }
 
+const testJobID = "aabbccddee1122334455aabb"
+
 func TestValidateMemberRequests(t *testing.T) {
 	if err := mysql.ValidateAddMemberRequest(&mysql.AddMemberRequest{}); err == nil {
 		t.Fatal("expected error for empty add-member request")
 	}
-	add := &mysql.AddMemberRequest{JobID: "j", MemberIPs: []string{"10.0.0.5"}}
+	add := &mysql.AddMemberRequest{JobID: testJobID, MemberIPs: []string{"10.0.0.5"}}
 	if err := mysql.ValidateAddMemberRequest(add); err != nil {
 		t.Fatalf("expected valid add-member request, got %v", err)
 	}
-	if err := mysql.ValidateRemoveMemberRequest(&mysql.RemoveMemberRequest{JobID: "j", MemberIP: "bad"}); err == nil {
+	if err := mysql.ValidateRemoveMemberRequest(&mysql.RemoveMemberRequest{JobID: testJobID, MemberIP: "bad"}); err == nil {
 		t.Fatal("expected error for invalid remove-member IP")
 	}
 }
@@ -121,7 +123,7 @@ func TestDeployRejectsInvalidRequest(t *testing.T) {
 func TestGetComputesProgressWithSkippedSteps(t *testing.T) {
 	svc, store := newService(t)
 	job := &mysql.Job{
-		ID:     "j1",
+		ID:     testJobID,
 		Status: mysql.JobStatusRunning,
 		Request: mysql.StoredSpec{
 			AssumePrepared:  true,
@@ -137,12 +139,75 @@ func TestGetComputesProgressWithSkippedSteps(t *testing.T) {
 	if err := store.Save(job); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	got, err := svc.Get("j1")
+	got, err := svc.Get(testJobID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	if got.TotalSteps != 4 || got.CompletedSteps != 1 || got.ProgressPercent != 25 {
 		t.Fatalf("unexpected progress: total=%d completed=%d pct=%d", got.TotalSteps, got.CompletedSteps, got.ProgressPercent)
+	}
+}
+
+func TestRecoverCreatesJobFromCompletedDeploy(t *testing.T) {
+	svc, store := newService(t)
+	_ = store.Save(&mysql.Job{
+		ID:                testJobID,
+		Status:            mysql.JobStatusCompleted,
+		LastCompletedStep: 8,
+		Request:           mysql.StoredSpec{ClusterName: "prod", PrimaryIP: "10.0.0.1"},
+	})
+	_ = store.SaveSecret(testJobID, mysql.StoredSecret{AdminUser: "admin", AdminPassword: "pw"})
+
+	job, err := svc.Recover(context.Background(), testJobID)
+	if err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+	defer svc.Wait(context.Background())
+
+	if job.Status != mysql.JobStatusRunning || job.ID == "" || job.ID == testJobID {
+		t.Fatalf("expected a new running recovery job, got status=%q id=%q", job.Status, job.ID)
+	}
+	if job.RecoveryOp == nil || job.RecoveryOp.SourceJobID != testJobID {
+		t.Fatalf("expected RecoveryOp.SourceJobID=%q, got %+v", testJobID, job.RecoveryOp)
+	}
+}
+
+func TestRecoverWorksOnFailedJob(t *testing.T) {
+	svc, store := newService(t)
+	_ = store.Save(&mysql.Job{
+		ID:     testJobID,
+		Status: mysql.JobStatusFailed,
+		Request: mysql.StoredSpec{ClusterName: "prod", PrimaryIP: "10.0.0.1"},
+	})
+	_ = store.SaveSecret(testJobID, mysql.StoredSecret{AdminUser: "admin", AdminPassword: "pw"})
+
+	job, err := svc.Recover(context.Background(), testJobID)
+	if err != nil {
+		t.Fatalf("recover on failed job: %v", err)
+	}
+	defer svc.Wait(context.Background())
+	if job.RecoveryOp == nil {
+		t.Fatal("expected RecoveryOp set on recovery job")
+	}
+}
+
+func TestRecoverRejectsRunningJob(t *testing.T) {
+	svc, store := newService(t)
+	_ = store.Save(&mysql.Job{ID: testJobID, Status: mysql.JobStatusRunning})
+	_ = store.SaveSecret(testJobID, mysql.StoredSecret{AdminPassword: "pw"})
+
+	if _, err := svc.Recover(context.Background(), testJobID); err == nil {
+		t.Fatal("expected Recover to reject a running job")
+	}
+}
+
+func TestRecoverRejectsRolledBackJob(t *testing.T) {
+	svc, store := newService(t)
+	_ = store.Save(&mysql.Job{ID: testJobID, Status: mysql.JobStatusRolledBack})
+	_ = store.SaveSecret(testJobID, mysql.StoredSecret{AdminPassword: "pw"})
+
+	if _, err := svc.Recover(context.Background(), testJobID); err == nil {
+		t.Fatal("expected Recover to reject a rolled-back job")
 	}
 }
 
@@ -161,10 +226,10 @@ func TestListReturnsSeededJobs(t *testing.T) {
 
 func TestConnectionInfoFromStoredJob(t *testing.T) {
 	svc, store := newService(t)
-	_ = store.Save(&mysql.Job{ID: "j", Status: mysql.JobStatusCompleted, Request: mysql.StoredSpec{PrimaryIP: "10.0.0.9", MySQLPort: 3307}})
-	_ = store.SaveSecret("j", mysql.StoredSecret{AdminUser: "clusteradmin", AdminPassword: "pw"})
+	_ = store.Save(&mysql.Job{ID: testJobID, Status: mysql.JobStatusCompleted, Request: mysql.StoredSpec{PrimaryIP: "10.0.0.9", MySQLPort: 3307}})
+	_ = store.SaveSecret(testJobID, mysql.StoredSecret{AdminUser: "clusteradmin", AdminPassword: "pw"})
 
-	host, port, user, pass, err := svc.ConnectionInfo("j")
+	host, port, user, pass, err := svc.ConnectionInfo(testJobID)
 	if err != nil {
 		t.Fatalf("connection info: %v", err)
 	}
@@ -186,13 +251,13 @@ func TestDBManagerRejectsInvalidRequests(t *testing.T) {
 	if err := db.CreateUser(ctx, dbmanager.CreateUserRequest{}); err == nil {
 		t.Fatal("expected create-user to require job_id")
 	}
-	if err := db.CreateUser(ctx, dbmanager.CreateUserRequest{JobID: "j", Username: "ok"}); err == nil {
+	if err := db.CreateUser(ctx, dbmanager.CreateUserRequest{JobID: testJobID, Username: "ok"}); err == nil {
 		t.Fatal("expected create-user to require a password")
 	}
-	if err := db.CreateDatabase(ctx, dbmanager.CreateDatabaseRequest{JobID: "j", DBName: "bad name!"}); err == nil {
+	if err := db.CreateDatabase(ctx, dbmanager.CreateDatabaseRequest{JobID: testJobID, DBName: "bad name!"}); err == nil {
 		t.Fatal("expected create-database to reject an invalid name")
 	}
-	if err := db.DeleteUser(ctx, dbmanager.DeleteUserRequest{JobID: "j", Username: "bad user!"}); err == nil {
+	if err := db.DeleteUser(ctx, dbmanager.DeleteUserRequest{JobID: testJobID, Username: "bad user!"}); err == nil {
 		t.Fatal("expected delete-user to reject an invalid username")
 	}
 }

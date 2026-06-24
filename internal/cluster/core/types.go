@@ -55,22 +55,30 @@ type MemberOperation struct {
 	SourceJobID string   `json:"source_job_id"`
 }
 
+// RecoveryOperation records a post-outage cluster-recovery action. It is set on
+// recovery jobs created by the Recover service method, linking them back to the
+// original deploy job whose cluster configuration they use.
+type RecoveryOperation struct {
+	SourceJobID string `json:"source_job_id"`
+}
+
 // Job is the persisted state of one cluster operation, generic over the
 // engine-specific stored spec carried in Request.
 type Job[Spec any] struct {
-	ID                string           `json:"id"`
-	Status            string           `json:"status"`
-	CreatedAt         time.Time        `json:"created_at"`
-	UpdatedAt         time.Time        `json:"updated_at"`
-	CurrentStep       string           `json:"current_step,omitempty"`
-	LastCompletedStep int              `json:"last_completed_step"`
-	CompletedSteps    int              `json:"completed_steps"`
-	TotalSteps        int              `json:"total_steps"`
-	ProgressPercent   int              `json:"progress_percent"`
-	Error             string           `json:"error,omitempty"`
-	Request           Spec             `json:"request"`
-	Steps             []StepResult     `json:"steps"`
-	MemberOp          *MemberOperation `json:"member_op,omitempty"`
+	ID                string              `json:"id"`
+	Status            string              `json:"status"`
+	CreatedAt         time.Time           `json:"created_at"`
+	UpdatedAt         time.Time           `json:"updated_at"`
+	CurrentStep       string              `json:"current_step,omitempty"`
+	LastCompletedStep int                 `json:"last_completed_step"`
+	CompletedSteps    int                 `json:"completed_steps"`
+	TotalSteps        int                 `json:"total_steps"`
+	ProgressPercent   int                 `json:"progress_percent"`
+	Error             string              `json:"error,omitempty"`
+	Request           Spec                `json:"request"`
+	Steps             []StepResult        `json:"steps"`
+	MemberOp          *MemberOperation    `json:"member_op,omitempty"`
+	RecoveryOp        *RecoveryOperation  `json:"recovery_op,omitempty"`
 }
 
 /**

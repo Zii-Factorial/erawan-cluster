@@ -64,15 +64,17 @@ func TestValidateDeployRequestRejectsBadInput(t *testing.T) {
 	}
 }
 
+const testJobID = "aabbccddee1122334455aabb"
+
 func TestValidateMemberRequests(t *testing.T) {
 	if err := pgsql.ValidateAddMemberRequest(&pgsql.AddMemberRequest{}); err == nil {
 		t.Fatal("expected error for empty add-member request")
 	}
-	add := &pgsql.AddMemberRequest{JobID: "j", MemberIPs: []string{"10.0.0.5"}}
+	add := &pgsql.AddMemberRequest{JobID: testJobID, MemberIPs: []string{"10.0.0.5"}}
 	if err := pgsql.ValidateAddMemberRequest(add); err != nil {
 		t.Fatalf("expected valid add-member request, got %v", err)
 	}
-	if err := pgsql.ValidateRemoveMemberRequest(&pgsql.RemoveMemberRequest{JobID: "j", MemberIP: "bad"}); err == nil {
+	if err := pgsql.ValidateRemoveMemberRequest(&pgsql.RemoveMemberRequest{JobID: testJobID, MemberIP: "bad"}); err == nil {
 		t.Fatal("expected error for invalid remove-member IP")
 	}
 }
@@ -116,7 +118,7 @@ func TestGetComputesProgressWithSkippedSteps(t *testing.T) {
 	// Empty spec skips standby_config (no standbys) and init_app_db (no user/db):
 	// 7 steps - 2 skipped = 5 applicable.
 	job := &pgsql.Job{
-		ID:     "j1",
+		ID:     testJobID,
 		Status: pgsql.JobStatusRunning,
 		Steps: []pgsql.StepResult{
 			{Name: "preflight", Status: pgsql.JobStatusCompleted},
@@ -126,7 +128,7 @@ func TestGetComputesProgressWithSkippedSteps(t *testing.T) {
 	if err := store.Save(job); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	got, err := svc.Get("j1")
+	got, err := svc.Get(testJobID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -135,12 +137,60 @@ func TestGetComputesProgressWithSkippedSteps(t *testing.T) {
 	}
 }
 
+func TestRecoverCreatesJobFromCompletedDeploy(t *testing.T) {
+	svc, store := newService(t)
+	_ = store.Save(&pgsql.Job{
+		ID:                testJobID,
+		Status:            pgsql.JobStatusCompleted,
+		LastCompletedStep: 6,
+		Request:           pgsql.StoredSpec{ClusterName: "pg-prod", PrimaryIP: "10.0.0.1"},
+	})
+	_ = store.SaveSecret(testJobID, pgsql.StoredSecret{
+		PostgresPassword:   "pgpw",
+		ReplicatorPassword: "replpw",
+		AdminPassword:      "adminpw",
+	})
+
+	job, err := svc.Recover(context.Background(), testJobID)
+	if err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+	defer svc.Wait(context.Background())
+
+	if job.Status != pgsql.JobStatusRunning || job.ID == "" || job.ID == testJobID {
+		t.Fatalf("expected a new running recovery job, got status=%q id=%q", job.Status, job.ID)
+	}
+	if job.RecoveryOp == nil || job.RecoveryOp.SourceJobID != testJobID {
+		t.Fatalf("expected RecoveryOp.SourceJobID=%q, got %+v", testJobID, job.RecoveryOp)
+	}
+}
+
+func TestRecoverRejectsRunningJob(t *testing.T) {
+	svc, store := newService(t)
+	_ = store.Save(&pgsql.Job{ID: testJobID, Status: pgsql.JobStatusRunning})
+	_ = store.SaveSecret(testJobID, pgsql.StoredSecret{PostgresPassword: "pw"})
+
+	if _, err := svc.Recover(context.Background(), testJobID); err == nil {
+		t.Fatal("expected Recover to reject a running job")
+	}
+}
+
+func TestRecoverRejectsRolledBackJob(t *testing.T) {
+	svc, store := newService(t)
+	_ = store.Save(&pgsql.Job{ID: testJobID, Status: core.JobStatusRolledBack})
+	_ = store.SaveSecret(testJobID, pgsql.StoredSecret{PostgresPassword: "pw"})
+
+	if _, err := svc.Recover(context.Background(), testJobID); err == nil {
+		t.Fatal("expected Recover to reject a rolled-back job")
+	}
+}
+
 func TestConnectionInfoFromStoredJob(t *testing.T) {
 	svc, store := newService(t)
-	_ = store.Save(&pgsql.Job{ID: "j", Status: pgsql.JobStatusCompleted, Request: pgsql.StoredSpec{PrimaryIP: "10.0.0.9", PostgresPort: 5433, StandbyIPs: []string{"10.0.0.10"}}})
-	_ = store.SaveSecret("j", pgsql.StoredSecret{PostgresUser: "postgres", PostgresPassword: "pw"})
+	_ = store.Save(&pgsql.Job{ID: testJobID, Status: pgsql.JobStatusCompleted, Request: pgsql.StoredSpec{PrimaryIP: "10.0.0.9", PostgresPort: 5433, StandbyIPs: []string{"10.0.0.10"}}})
+	_ = store.SaveSecret(testJobID, pgsql.StoredSecret{PostgresUser: "postgres", PostgresPassword: "pw"})
 
-	host, port, user, pass, nodeIPs, err := svc.ConnectionInfo(context.Background(), "j")
+	host, port, user, pass, nodeIPs, err := svc.ConnectionInfo(context.Background(), testJobID)
 	if err != nil {
 		t.Fatalf("connection info: %v", err)
 	}
@@ -163,7 +213,7 @@ func TestDBManagerRejectsInvalidRequests(t *testing.T) {
 	if err := db.CreateUser(ctx, dbmanager.CreateUserRequest{}); err == nil {
 		t.Fatal("expected create-user to require job_id")
 	}
-	if err := db.CreateDatabase(ctx, dbmanager.CreateDatabaseRequest{JobID: "j", DBName: "bad name!"}); err == nil {
+	if err := db.CreateDatabase(ctx, dbmanager.CreateDatabaseRequest{JobID: testJobID, DBName: "bad name!"}); err == nil {
 		t.Fatal("expected create-database to reject an invalid name")
 	}
 }
