@@ -16,6 +16,7 @@ type MetricResponse struct {
 	Host        string            `json:"host"`
 	Port        int               `json:"port"`
 	Databases   []DatabaseInfo    `json:"databases,omitempty"` // user databases with sizes
+	Users       []UserInfo        `json:"users,omitempty"`     // non-system DB users
 	Nodes       []NodeMetric      `json:"nodes"`               // per-node OS metrics (node_exporter)
 	Categories  map[string]any    `json:"categories"`
 	Errors      map[string]string `json:"errors,omitempty"`
@@ -25,6 +26,14 @@ type MetricResponse struct {
 type DatabaseInfo struct {
 	Name      string `json:"name"`
 	SizeBytes int64  `json:"size_bytes"`
+}
+
+// UserInfo describes one non-system database user/role.
+type UserInfo struct {
+	Username  string   `json:"username"`
+	Host      string   `json:"host,omitempty"`      // MySQL: connection host constraint (e.g. "%")
+	SuperUser bool     `json:"superuser"`
+	Databases []string `json:"databases,omitempty"` // databases this user can access
 }
 
 // ---------------------------------------------------------------------------
@@ -50,6 +59,7 @@ type NodeMetric struct {
 type DiskStat struct {
 	Mountpoint string  `json:"mountpoint"`
 	SizeBytes  int64   `json:"size_bytes"`
+	UsedBytes  int64   `json:"used_bytes"`
 	AvailBytes int64   `json:"avail_bytes"`
 	UsedPct    float64 `json:"used_pct"`
 }

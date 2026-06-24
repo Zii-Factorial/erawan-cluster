@@ -2,15 +2,18 @@ package mysql
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"math"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"erawan-cluster/internal/cluster/core"
+	gomysql "github.com/go-sql-driver/mysql"
 )
 
 // Collector gathers live metrics from a MySQL InnoDB Cluster.
@@ -81,6 +84,15 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 	if primaryMetrics != nil {
 		if dbs := normalizeDatabases(primaryMetrics); len(dbs) > 0 {
 			resp.Databases = dbs
+		}
+	}
+
+	// Collect DB users via direct connection (not available from exporters).
+	if req.DBHost != "" && req.DBUser != "" {
+		if users, err := collectMysqlUsers(ctx, req.DBHost, req.DBPort, req.DBUser, req.DBPassword); err != nil {
+			resp.Errors["users"] = err.Error()
+		} else {
+			resp.Users = users
 		}
 	}
 
@@ -286,13 +298,15 @@ func normalizeNodeMetrics(host string, f core.MetricFamily) NodeMetric {
 		diskSeen[mp] = true
 		avail := f.FirstWhere("node_filesystem_avail_bytes", s.Labels, 0)
 		total := s.Value
+		used := total - avail
 		var usedPct float64
 		if total > 0 {
-			usedPct = math.Round((1-avail/total)*10000) / 100
+			usedPct = math.Round(used/total*10000) / 100
 		}
 		nm.Disks = append(nm.Disks, DiskStat{
 			Mountpoint: mp,
 			SizeBytes:  int64(total),
+			UsedBytes:  int64(used),
 			AvailBytes: int64(avail),
 			UsedPct:    usedPct,
 		})
@@ -424,7 +438,10 @@ func collectUptime(f core.MetricFamily) (*UptimeMetric, error) {
 // =============================================================================
 
 func collectConnections(f core.MetricFamily) (*ConnectionMetric, error) {
-	m := &ConnectionMetric{}
+	m := &ConnectionMetric{
+		WaitEvents: []WaitEvent{},
+		ByDatabase: []DBConnStat{},
+	}
 
 	m.MaxConnections = int(f.First("mysql_global_variables_max_connections", 0))
 	m.TotalConnections = int(f.First("mysql_global_status_threads_connected", 0))
@@ -454,6 +471,7 @@ func collectConnections(f core.MetricFamily) (*ConnectionMetric, error) {
 func collectReplication(primaryIP string, standbyIPs []string, primary core.MetricFamily, standbys map[string]core.MetricFamily) (*ReplicationMetric, error) {
 	m := &ReplicationMetric{
 		Members: []ReplicationMember{},
+		Slots:   []ReplicationSlot{},
 	}
 
 	// Primary member — always listed first with zero lag.
@@ -462,7 +480,7 @@ func collectReplication(primaryIP string, standbyIPs []string, primary core.Metr
 	m.Members = append(m.Members, ReplicationMember{
 		Role:             "primary",
 		Host:             primaryIP,
-		State:            "ONLINE",
+		State:            "online",
 		WriteLagSeconds:  &zero,
 		ReplayLagSeconds: &zero,
 		ReplayLagBytes:   &zeroBytes,
@@ -475,7 +493,7 @@ func collectReplication(primaryIP string, standbyIPs []string, primary core.Metr
 			m.Members = append(m.Members, ReplicationMember{
 				Role:  "secondary",
 				Host:  ip,
-				State: "UNKNOWN",
+				State: "unknown",
 			})
 			continue
 		}
@@ -489,9 +507,9 @@ func collectReplication(primaryIP string, standbyIPs []string, primary core.Metr
 		ioRunning := replicaIORunning(f)
 		sqlRunning := replicaSQLRunning(f)
 
-		state := "OFFLINE"
+		state := "offline"
 		if ioRunning == "Yes" && sqlRunning == "Yes" {
-			state = "ONLINE"
+			state = "online"
 		}
 
 		mem := ReplicationMember{
@@ -558,6 +576,9 @@ func collectPerformance(f core.MetricFamily) (*PerformanceMetric, error) {
 	}
 	commits := f.SumAlt("mysql_global_status_com_commit_total", "mysql_global_status_com_commit")
 	rollbacks := f.SumAlt("mysql_global_status_com_rollback_total", "mysql_global_status_com_rollback")
+	m.TotalCommits = int64(commits)
+	m.TotalRollbacks = int64(rollbacks)
+	m.TotalTransactions = m.TotalCommits + m.TotalRollbacks
 	if uptime > 0 {
 		m.TPS = math.Round((commits+rollbacks)/uptime*1000) / 1000
 	}
@@ -666,7 +687,10 @@ func collectQuery(f core.MetricFamily) (*QueryMetric, error) {
 // =============================================================================
 
 func collectMaintenance(f core.MetricFamily) (*MaintenanceMetric, error) {
-	m := &MaintenanceMetric{}
+	m := &MaintenanceMetric{
+		StaleTables:    []StaleTable{},
+		LogicalSlotLag: []LogicalSlotStat{},
+	}
 
 	// InnoDB purge lag (history list length = number of uncommitted old row versions).
 	m.PurgeLagTransactions = int64(f.First("mysql_global_status_innodb_history_list_length", 0))
@@ -747,4 +771,96 @@ func formatDuration(seconds int64) string {
 	}
 	parts = append(parts, fmt.Sprintf("%ds", secs))
 	return strings.Join(parts, " ")
+}
+
+// collectMysqlUsers connects directly to the primary and returns all non-system
+// users with their host constraint, superuser flag, and accessible databases.
+func collectMysqlUsers(ctx context.Context, host string, port int, user, password string) ([]UserInfo, error) {
+	cfg := gomysql.NewConfig()
+	cfg.User = user
+	cfg.Passwd = password
+	cfg.Net = "tcp"
+	cfg.Addr = fmt.Sprintf("%s:%d", host, port)
+	cfg.DBName = "mysql"
+	cfg.Timeout = 10 * time.Second
+	cfg.ParseTime = true
+	cfg.AllowNativePasswords = true
+	cfg.TLSConfig = mysqlMetricTLSMode()
+
+	db, err := sql.Open("mysql", cfg.FormatDSN())
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if err := db.PingContext(ctx); err != nil {
+		return nil, fmt.Errorf("connect %s:%d: %w", host, port, err)
+	}
+
+	// Fetch all non-system users.
+	rows, err := db.QueryContext(ctx, `
+		SELECT User, Host,
+		       IF(Super_priv = 'Y', TRUE, FALSE) AS superuser
+		FROM mysql.user
+		WHERE User NOT IN ('root','mysql.sys','mysql.session','mysql.infoschema')
+		  AND User <> ''
+		ORDER BY User, Host`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	userMap := map[string]*UserInfo{}
+	var order []string
+	for rows.Next() {
+		var username, host string
+		var superuser bool
+		if err := rows.Scan(&username, &host, &superuser); err != nil {
+			return nil, err
+		}
+		if _, exists := userMap[username]; !exists {
+			userMap[username] = &UserInfo{Username: username, Host: host, SuperUser: superuser}
+			order = append(order, username)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Fetch per-user database grants from mysql.db.
+	dbRows, err := db.QueryContext(ctx, `
+		SELECT User, Db
+		FROM mysql.db
+		WHERE User NOT IN ('root','mysql.sys','mysql.session','mysql.infoschema')
+		  AND User <> ''
+		ORDER BY User, Db`)
+	if err == nil {
+		defer dbRows.Close()
+		for dbRows.Next() {
+			var u, d string
+			if err := dbRows.Scan(&u, &d); err == nil {
+				if info, ok := userMap[u]; ok {
+					info.Databases = append(info.Databases, d)
+				}
+			}
+		}
+	}
+
+	out := make([]UserInfo, 0, len(order))
+	for _, name := range order {
+		out = append(out, *userMap[name])
+	}
+	return out, nil
+}
+
+// mysqlMetricTLSMode resolves the TLS mode for metric collector direct connections.
+func mysqlMetricTLSMode() string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CLUSTER_DB_TLS_MODE"))) {
+	case "skip-verify":
+		return "skip-verify"
+	case "false", "disable", "off":
+		return "false"
+	default:
+		return "true"
+	}
 }

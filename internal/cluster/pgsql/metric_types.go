@@ -36,6 +36,7 @@ var allMetricCategories = []string{
 type (
 	MetricResponse    = core.MetricResponse
 	DatabaseInfo      = core.DatabaseInfo
+	UserInfo          = core.UserInfo
 	NodeMetric        = core.NodeMetric
 	DiskStat          = core.DiskStat
 	NetworkStat       = core.NetworkStat
@@ -83,8 +84,12 @@ type MetricRequest struct {
 	To         *time.Time `json:"to"`
 
 	// Server-side only — never accepted from the client.
-	Host string `json:"-"`
-	Port int    `json:"-"`
+	Host       string `json:"-"`
+	Port       int    `json:"-"`
+	DBHost     string `json:"-"` // primary node IP for direct DB user query
+	DBPort     int    `json:"-"` // postgres port for direct DB user query
+	DBUser     string `json:"-"`
+	DBPassword string `json:"-"`
 }
 
 // ---------------------------------------------------------------------------

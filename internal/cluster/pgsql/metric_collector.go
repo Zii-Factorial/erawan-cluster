@@ -2,17 +2,20 @@ package pgsql
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"erawan-cluster/internal/cluster/core"
+	"github.com/lib/pq"
 )
 
 // Collector gathers live metrics from a PostgreSQL / Patroni cluster.
@@ -69,6 +72,15 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 	// Scrape databases list from pg_database_size_bytes.
 	if pgMetrics != nil {
 		resp.Databases = normalizeDatabases(pgMetrics)
+	}
+
+	// Collect DB users via direct connection (not available from exporters).
+	if req.DBHost != "" && req.DBUser != "" {
+		if users, err := collectPgsqlUsers(ctx, req.DBHost, req.DBPort, req.DBUser, req.DBPassword); err != nil {
+			resp.Errors["users"] = err.Error()
+		} else {
+			resp.Users = users
+		}
 	}
 
 	// Scrape node_exporter on every node — collected into resp.Nodes in parallel.
@@ -250,13 +262,15 @@ func normalizeNodeMetrics(host string, f core.MetricFamily) NodeMetric {
 		diskSeen[mp] = true
 		avail := f.FirstWhere("node_filesystem_avail_bytes", s.Labels, 0)
 		total := s.Value
+		used := total - avail
 		var usedPct float64
 		if total > 0 {
-			usedPct = math.Round((1-avail/total)*10000) / 100
+			usedPct = math.Round(used/total*10000) / 100
 		}
 		nm.Disks = append(nm.Disks, DiskStat{
 			Mountpoint: mp,
 			SizeBytes:  int64(total),
+			UsedBytes:  int64(used),
 			AvailBytes: int64(avail),
 			UsedPct:    usedPct,
 		})
@@ -678,6 +692,24 @@ func collectPerformance(f core.MetricFamily) (*PerformanceMetric, error) {
 	sharedBufs := f.First("pg_settings_shared_buffers", 0)
 	if sharedBufs > 0 {
 		m.CacheSizeBytes = int64(sharedBufs) * 8192
+	}
+
+	// Index lookup ratio from pg_stat_user_tables — same concept as MySQL's handler counters.
+	var idxScan, seqScan float64
+	for _, s := range f["pg_stat_user_tables_idx_scan"] {
+		idxScan += s.Value
+	}
+	for _, s := range f["pg_stat_user_tables_idx_scan_total"] {
+		idxScan += s.Value
+	}
+	for _, s := range f["pg_stat_user_tables_seq_scan"] {
+		seqScan += s.Value
+	}
+	for _, s := range f["pg_stat_user_tables_seq_scan_total"] {
+		seqScan += s.Value
+	}
+	if idxScan+seqScan > 0 {
+		m.IdxLookupRatioPct = math.Round(idxScan/(idxScan+seqScan)*10000) / 100
 	}
 
 	return m, nil
@@ -1191,4 +1223,73 @@ func parsePatroniTime(s string) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+// collectPgsqlUsers connects directly to the primary and returns all non-system
+// login roles with their superuser flag and accessible databases.
+func collectPgsqlUsers(ctx context.Context, host string, port int, user, password string) ([]UserInfo, error) {
+	sslmode := pgsqlMetricSSLMode()
+	dsn := fmt.Sprintf("host=%s port=%d dbname=postgres user=%s password=%s sslmode=%s",
+		host, port, pgConnVal(user), pgConnVal(password), sslmode)
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if err := db.PingContext(ctx); err != nil {
+		return nil, fmt.Errorf("connect %s:%d: %w", host, port, err)
+	}
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT r.rolname, r.rolsuper,
+		       ARRAY(
+		           SELECT d.datname
+		           FROM pg_database d
+		           WHERE NOT d.datistemplate
+		             AND d.datname <> 'postgres'
+		             AND has_database_privilege(r.rolname, d.datname, 'CONNECT')
+		           ORDER BY d.datname
+		       ) AS databases
+		FROM pg_roles r
+		WHERE r.rolcanlogin
+		  AND r.rolname NOT LIKE 'pg_%'
+		  AND r.rolname <> 'postgres'
+		  AND r.rolname <> 'exporter'
+		  AND NOT r.rolreplication
+		ORDER BY r.rolname`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []UserInfo
+	for rows.Next() {
+		var u UserInfo
+		var dbs []string
+		if err := rows.Scan(&u.Username, &u.SuperUser, pq.Array(&dbs)); err != nil {
+			return nil, err
+		}
+		u.Databases = dbs
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// pgsqlMetricSSLMode resolves the sslmode for metric collector direct connections.
+// Defaults to verify-full; relax via CLUSTER_DB_SSL_MODE for self-signed clusters.
+func pgsqlMetricSSLMode() string {
+	switch m := strings.ToLower(strings.TrimSpace(os.Getenv("CLUSTER_DB_SSL_MODE"))); m {
+	case "disable", "require", "verify-ca", "verify-full", "prefer", "allow":
+		return m
+	default:
+		return "verify-full"
+	}
+}
+
+// pgConnVal escapes a PostgreSQL connection string value.
+func pgConnVal(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `'`, `\'`)
+	return "'" + s + "'"
 }
