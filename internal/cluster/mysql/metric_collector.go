@@ -856,11 +856,13 @@ func collectMysqlUsers(ctx context.Context, host string, port int, user, passwor
 // mysqlMetricTLSMode resolves the TLS mode for metric collector direct connections.
 func mysqlMetricTLSMode() string {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("CLUSTER_DB_TLS_MODE"))) {
-	case "skip-verify":
-		return "skip-verify"
+	case "true":
+		return "true"
 	case "false", "disable", "off":
 		return "false"
 	default:
-		return "true"
+		// "skip-verify" encrypts without hostname verification — needed when connecting
+		// through HAProxy TCP passthrough where the cert CN is the node IP, not the proxy.
+		return "skip-verify"
 	}
 }

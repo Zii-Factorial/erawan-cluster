@@ -89,6 +89,12 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 		resp.Nodes = append(resp.Nodes, nm)
 	}
 
+	// Primary node uptime from node_exporter — used as fallback for collectUptime.
+	var primaryNodeUptimeSec int64
+	if len(nodeMetrics) > 0 {
+		primaryNodeUptimeSec = nodeMetrics[0].UptimeSeconds
+	}
+
 	// Collect each category concurrently.
 	categories := resolveCategories(req.Categories)
 	type result struct {
@@ -116,7 +122,7 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 			case MetricCategoryFailover:
 				data, err = c.collectFailover(ctx, req)
 			case MetricCategoryUptime:
-				data, err = collectUptime(pgMetrics)
+				data, err = collectUptime(pgMetrics, primaryNodeUptimeSec)
 			case MetricCategoryConnections:
 				data, err = collectConnections(pgMetrics)
 			case MetricCategoryReplication:
@@ -334,9 +340,18 @@ func normalizeDatabases(f core.MetricFamily) []DatabaseInfo {
 // uptime — pg_postmaster_start_time_seconds
 // =============================================================================
 
-func collectUptime(f core.MetricFamily) (*UptimeMetric, error) {
+func collectUptime(f core.MetricFamily, nodeUptimeSec int64) (*UptimeMetric, error) {
 	startUnix := f.First("pg_postmaster_start_time_seconds", 0)
 	if startUnix == 0 {
+		// Fallback: derive uptime from node_boot_time_seconds (node_exporter :9100).
+		if nodeUptimeSec > 0 {
+			startTime := time.Now().UTC().Add(-time.Duration(nodeUptimeSec) * time.Second)
+			return &UptimeMetric{
+				StartTime:     startTime,
+				UptimeSeconds: nodeUptimeSec,
+				UptimeHuman:   formatDuration(nodeUptimeSec),
+			}, nil
+		}
 		return nil, fmt.Errorf("pg_postmaster_start_time_seconds not found in exporter output")
 	}
 	startTime := time.Unix(int64(startUnix), 0).UTC()
@@ -1283,7 +1298,9 @@ func pgsqlMetricSSLMode() string {
 	case "disable", "require", "verify-ca", "verify-full", "prefer", "allow":
 		return m
 	default:
-		return "verify-full"
+		// "require" encrypts without hostname verification — needed when connecting
+		// through HAProxy TCP passthrough where the cert CN is the node IP, not the proxy.
+		return "require"
 	}
 }
 
