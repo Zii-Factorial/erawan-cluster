@@ -83,6 +83,7 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 		if dbs := normalizeDatabases(primaryMetrics); len(dbs) > 0 {
 			resp.Databases = dbs
 		}
+		resp.Users = collectMysqlUsersFromExporter(primaryMetrics)
 	}
 
 
@@ -365,6 +366,35 @@ func normalizeDatabases(f core.MetricFamily) []DatabaseInfo {
 	}
 	sort.Slice(dbs, func(i, j int) bool { return dbs[i].Name < dbs[j].Name })
 	return dbs
+}
+
+// collectMysqlUsersFromExporter extracts non-system users from
+// mysql_mysql_max_connections exposed by mysqld_exporter.
+// Excluded: InnoDB Cluster internals, MySQL Router accounts, system accounts, exporter account.
+func collectMysqlUsersFromExporter(f core.MetricFamily) []UserInfo {
+	skip := map[string]bool{
+		"exporter":         true,
+		"debian-sys-maint": true,
+		"clusteradmin":     true,
+	}
+	seen := map[string]bool{}
+	var users []UserInfo
+	for _, s := range f["mysql_mysql_max_connections"] {
+		user := s.Labels["mysql_user"]
+		if user == "" || seen[user] {
+			continue
+		}
+		if skip[user] ||
+			strings.HasPrefix(user, "mysql.") ||
+			strings.HasPrefix(user, "mysql_innodb_cluster") ||
+			strings.HasPrefix(user, "mysql_router") {
+			continue
+		}
+		seen[user] = true
+		users = append(users, UserInfo{Username: user})
+	}
+	sort.Slice(users, func(i, j int) bool { return users[i].Username < users[j].Username })
+	return users
 }
 
 // =============================================================================
