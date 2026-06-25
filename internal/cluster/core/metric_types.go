@@ -32,7 +32,7 @@ type DatabaseInfo struct {
 type UserInfo struct {
 	Username  string   `json:"username"`
 	Host      string   `json:"host,omitempty"`      // MySQL: connection host constraint (e.g. "%")
-	SuperUser bool     `json:"superuser"`
+	SuperUser bool     `json:"superuser,omitempty"`
 	Databases []string `json:"databases,omitempty"` // databases this user can access
 }
 
