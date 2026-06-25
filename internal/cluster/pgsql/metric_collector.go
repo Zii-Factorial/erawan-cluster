@@ -43,15 +43,20 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 	pgPort := resolvePort(req.PgsqlExporterPort, 9187)
 	nodePort := resolvePort(req.NodeExporterPort, 9100)
 
-	// Primary is the first node IP (set by ConnectionInfo from stored job).
+	// Discover the actual current primary via Patroni /leader — survives failover.
+	// Falls back to nodeIPs[0] when Patroni is unreachable (single-node, non-Patroni setup).
 	primaryIP := ""
 	if len(req.NodeIPs) > 0 {
-		primaryIP = req.NodeIPs[0]
+		if leaderIP, err := c.discoverLeader(ctx, req); err == nil {
+			primaryIP = leaderIP
+		} else {
+			primaryIP = req.NodeIPs[0]
+		}
 	} else if req.Host != "" {
 		primaryIP = req.Host
 	}
 
-	// Scrape postgres_exporter on the primary node — used by most DB categories.
+	// Scrape postgres_exporter on the current primary — used by most DB categories.
 	var pgMetrics core.MetricFamily
 	if primaryIP != "" {
 		url := fmt.Sprintf("http://%s:%d/metrics", primaryIP, pgPort)
@@ -80,8 +85,15 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 	}
 
 	// Primary node uptime from node_exporter — used as fallback for collectUptime.
+	// Match by IP so failover to a different primary is handled correctly.
 	var primaryNodeUptimeSec int64
-	if len(nodeMetrics) > 0 {
+	for _, nm := range nodeMetrics {
+		if nm.Host == primaryIP {
+			primaryNodeUptimeSec = nm.UptimeSeconds
+			break
+		}
+	}
+	if primaryNodeUptimeSec == 0 && len(nodeMetrics) > 0 {
 		primaryNodeUptimeSec = nodeMetrics[0].UptimeSeconds
 	}
 

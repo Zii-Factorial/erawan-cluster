@@ -41,44 +41,47 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 	mysqlPort := resolvePort(req.MysqlExporterPort, 9104)
 	nodePort := resolvePort(req.NodeExporterPort, 9100)
 
-	// Primary is the first node IP (set by ConnectionInfo from stored job).
-	primaryIP := ""
-	if len(req.NodeIPs) > 0 {
-		primaryIP = req.NodeIPs[0]
-	} else if req.Host != "" {
-		primaryIP = req.Host
-	}
-
-	// Scrape mysqld_exporter on the primary node for all DB-level categories.
-	var primaryMetrics core.MetricFamily
-	if primaryIP != "" {
-		url := fmt.Sprintf("http://%s:%d/metrics", primaryIP, mysqlPort)
-		var err error
-		primaryMetrics, err = core.ScrapeMetrics(ctx, c.httpClient, url)
-		if err != nil {
-			for _, cat := range resolveCategories(req.Categories) {
-				if cat != MetricCategorySystem {
-					resp.Errors[cat] = "mysql exporter scrape: " + err.Error()
-				}
-			}
-		}
-	}
-
-	// Standby IPs (everything after the primary).
-	var standbyIPs []string
-	if len(req.NodeIPs) > 1 {
-		standbyIPs = req.NodeIPs[1:]
-	}
-
-	// Scrape mysqld_exporter on each standby to collect per-node replica lag.
-	standbyMetrics := c.scrapeAllMysqlExporters(ctx, standbyIPs, mysqlPort)
-
-	// Scrape node_exporter on every node for OS metrics.
+	// Scrape mysqld_exporter and node_exporter on ALL nodes in parallel.
+	// This ensures metrics survive failover — we discover the actual current
+	// primary from GR member info rather than assuming nodeIPs[0] is always primary.
+	allMysqlMetrics := c.scrapeAllMysqlExporters(ctx, req.NodeIPs, mysqlPort)
 	for _, nm := range c.scrapeAllNodes(ctx, req.NodeIPs, nodePort) {
 		resp.Nodes = append(resp.Nodes, nm)
 	}
 
-	// Database sizes from info_schema tables collector (if enabled on exporter).
+	// Discover current primary from GR member info; fall back to nodeIPs[0].
+	primaryIP := discoverMysqlPrimary(req.NodeIPs, allMysqlMetrics)
+	if primaryIP == "" && req.Host != "" {
+		primaryIP = req.Host
+	}
+
+	// Split into primary metrics and standby metrics map.
+	var primaryMetrics core.MetricFamily
+	standbyMetrics := make(map[string]core.MetricFamily, len(req.NodeIPs))
+	for ip, f := range allMysqlMetrics {
+		if ip == primaryIP {
+			primaryMetrics = f
+		} else {
+			standbyMetrics[ip] = f
+		}
+	}
+
+	standbyIPs := make([]string, 0, len(req.NodeIPs)-1)
+	for _, ip := range req.NodeIPs {
+		if ip != primaryIP {
+			standbyIPs = append(standbyIPs, ip)
+		}
+	}
+
+	if primaryMetrics == nil {
+		for _, cat := range resolveCategories(req.Categories) {
+			if cat != MetricCategorySystem {
+				resp.Errors[cat] = "mysqld_exporter unreachable on all nodes"
+			}
+		}
+	}
+
+	// Database sizes and users from the current primary's exporter.
 	if primaryMetrics != nil {
 		if dbs := normalizeDatabases(primaryMetrics); len(dbs) > 0 {
 			resp.Databases = dbs
@@ -179,6 +182,31 @@ func ValidateMetricRequest(req *MetricRequest) error {
 
 // scrapeAllMysqlExporters scrapes mysqld_exporter on each standby node.
 // Returns a map from node IP to its metric family.
+// discoverMysqlPrimary finds the current primary IP from GR member info available
+// in any scraped node's metrics. Falls back to nodeIPs[0] if not found.
+func discoverMysqlPrimary(nodeIPs []string, allMetrics map[string]core.MetricFamily) string {
+	for _, ip := range nodeIPs {
+		f, ok := allMetrics[ip]
+		if !ok {
+			continue
+		}
+		for _, s := range f["mysql_perf_schema_replication_group_member_info"] {
+			if strings.ToUpper(s.Labels["member_role"]) == "PRIMARY" {
+				host := s.Labels["member_host"]
+				for _, nodeIP := range nodeIPs {
+					if nodeIP == host {
+						return nodeIP
+					}
+				}
+			}
+		}
+	}
+	if len(nodeIPs) > 0 {
+		return nodeIPs[0]
+	}
+	return ""
+}
+
 func (c *Collector) scrapeAllMysqlExporters(ctx context.Context, standbyIPs []string, port int) map[string]core.MetricFamily {
 	if len(standbyIPs) == 0 {
 		return nil
@@ -495,8 +523,18 @@ func collectReplication(primaryIP string, standbyIPs []string, primary core.Metr
 	}
 
 	// InnoDB Cluster / Group Replication: use mysql_perf_schema_replication_group_member_info
-	// from the primary's exporter — contains all members with authoritative state labels.
-	if grSamples := primary["mysql_perf_schema_replication_group_member_info"]; len(grSamples) > 0 {
+	// which is available on any GR member. Try primary first; fall back to any standby
+	// so replication state remains visible even when the original primary is down.
+	grSource := primary
+	if len(grSource["mysql_perf_schema_replication_group_member_info"]) == 0 {
+		for _, f := range standbys {
+			if len(f["mysql_perf_schema_replication_group_member_info"]) > 0 {
+				grSource = f
+				break
+			}
+		}
+	}
+	if grSamples := grSource["mysql_perf_schema_replication_group_member_info"]; len(grSamples) > 0 {
 		zero := float64(0)
 		zeroBytes := int64(0)
 		for _, s := range grSamples {
