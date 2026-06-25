@@ -73,6 +73,12 @@ type MetricRequest struct {
 	// Collection filters.
 	Categories []string `json:"categories"` // empty = all
 
+	// TLSMode controls the TLS mode for the users SQL connection.
+	// Valid values: true (verify cert), skip-verify (encrypt, no hostname check), false (disable).
+	// Use "skip-verify" or "false" when connecting through HAProxy TCP passthrough.
+	// Defaults to CLUSTER_DB_TLS_MODE env var, or "skip-verify" if unset.
+	TLSMode string `json:"tls_mode"`
+
 	// Server-side only — never accepted from the client.
 	Host       string `json:"-"`
 	Port       int    `json:"-"`

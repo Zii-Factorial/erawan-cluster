@@ -89,7 +89,7 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 
 	// Collect DB users via direct connection (not available from exporters).
 	if req.DBHost != "" && req.DBUser != "" {
-		if users, err := collectMysqlUsers(ctx, req.DBHost, req.DBPort, req.DBUser, req.DBPassword); err != nil {
+		if users, err := collectMysqlUsers(ctx, req.DBHost, req.DBPort, req.DBUser, req.DBPassword, req.TLSMode); err != nil {
 			resp.Errors["users"] = err.Error()
 		} else {
 			resp.Users = users
@@ -775,7 +775,7 @@ func formatDuration(seconds int64) string {
 
 // collectMysqlUsers connects directly to the primary and returns all non-system
 // users with their host constraint, superuser flag, and accessible databases.
-func collectMysqlUsers(ctx context.Context, host string, port int, user, password string) ([]UserInfo, error) {
+func collectMysqlUsers(ctx context.Context, host string, port int, user, password, tlsModeOverride string) ([]UserInfo, error) {
 	cfg := gomysql.NewConfig()
 	cfg.User = user
 	cfg.Passwd = password
@@ -785,7 +785,7 @@ func collectMysqlUsers(ctx context.Context, host string, port int, user, passwor
 	cfg.Timeout = 10 * time.Second
 	cfg.ParseTime = true
 	cfg.AllowNativePasswords = true
-	cfg.TLSConfig = mysqlMetricTLSMode()
+	cfg.TLSConfig = mysqlMetricTLSMode(tlsModeOverride)
 
 	db, err := sql.Open("mysql", cfg.FormatDSN())
 	if err != nil {
@@ -854,15 +854,19 @@ func collectMysqlUsers(ctx context.Context, host string, port int, user, passwor
 }
 
 // mysqlMetricTLSMode resolves the TLS mode for metric collector direct connections.
-func mysqlMetricTLSMode() string {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("CLUSTER_DB_TLS_MODE"))) {
-	case "true":
-		return "true"
-	case "false", "disable", "off":
-		return "false"
-	default:
-		// "skip-verify" encrypts without hostname verification — needed when connecting
-		// through HAProxy TCP passthrough where the cert CN is the node IP, not the proxy.
-		return "skip-verify"
+func mysqlMetricTLSMode(override string) string {
+	// Payload value takes priority over env var.
+	for _, m := range []string{override, os.Getenv("CLUSTER_DB_TLS_MODE")} {
+		switch strings.ToLower(strings.TrimSpace(m)) {
+		case "true":
+			return "true"
+		case "skip-verify":
+			return "skip-verify"
+		case "false", "disable", "off":
+			return "false"
+		}
 	}
+	// Default: skip-verify encrypts without hostname verification, compatible with
+	// HAProxy TCP passthrough where the cert CN is the node IP, not the proxy.
+	return "skip-verify"
 }

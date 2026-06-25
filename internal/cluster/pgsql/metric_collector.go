@@ -76,7 +76,7 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 
 	// Collect DB users via direct connection (not available from exporters).
 	if req.DBHost != "" && req.DBUser != "" {
-		if users, err := collectPgsqlUsers(ctx, req.DBHost, req.DBPort, req.DBUser, req.DBPassword); err != nil {
+		if users, err := collectPgsqlUsers(ctx, req.DBHost, req.DBPort, req.DBUser, req.DBPassword, req.SSLMode); err != nil {
 			resp.Errors["users"] = err.Error()
 		} else {
 			resp.Users = users
@@ -1242,8 +1242,8 @@ func parsePatroniTime(s string) time.Time {
 
 // collectPgsqlUsers connects directly to the primary and returns all non-system
 // login roles with their superuser flag and accessible databases.
-func collectPgsqlUsers(ctx context.Context, host string, port int, user, password string) ([]UserInfo, error) {
-	sslmode := pgsqlMetricSSLMode()
+func collectPgsqlUsers(ctx context.Context, host string, port int, user, password, sslModeOverride string) ([]UserInfo, error) {
+	sslmode := pgsqlMetricSSLMode(sslModeOverride)
 	dsn := fmt.Sprintf("host=%s port=%d dbname=postgres user=%s password=%s sslmode=%s",
 		host, port, pgConnVal(user), pgConnVal(password), sslmode)
 	db, err := sql.Open("postgres", dsn)
@@ -1293,16 +1293,16 @@ func collectPgsqlUsers(ctx context.Context, host string, port int, user, passwor
 
 // pgsqlMetricSSLMode resolves the sslmode for metric collector direct connections.
 // Defaults to verify-full; relax via CLUSTER_DB_SSL_MODE for self-signed clusters.
-func pgsqlMetricSSLMode() string {
-	switch m := strings.ToLower(strings.TrimSpace(os.Getenv("CLUSTER_DB_SSL_MODE"))); m {
-	case "disable", "require", "verify-ca", "verify-full", "prefer", "allow":
-		return m
-	default:
-		// "prefer" tries SSL first then falls back to non-SSL — works through HAProxy
-		// TCP passthrough regardless of whether the backend has SSL configured, and
-		// does not verify hostname (cert CN is the node IP, not the proxy).
-		return "prefer"
+func pgsqlMetricSSLMode(override string) string {
+	// Payload value takes priority over env var.
+	for _, m := range []string{override, os.Getenv("CLUSTER_DB_SSL_MODE")} {
+		switch strings.ToLower(strings.TrimSpace(m)) {
+		case "disable", "require", "verify-ca", "verify-full", "prefer", "allow":
+			return strings.ToLower(strings.TrimSpace(m))
+		}
 	}
+	// Default: disable skips SSL negotiation, avoiding EOF through HAProxy TCP passthrough.
+	return "disable"
 }
 
 // pgConnVal escapes a PostgreSQL connection string value.
