@@ -494,7 +494,40 @@ func collectReplication(primaryIP string, standbyIPs []string, primary core.Metr
 		Slots:   []ReplicationSlot{},
 	}
 
-	// Primary member — always listed first with zero lag.
+	// InnoDB Cluster / Group Replication: use mysql_perf_schema_replication_group_member_info
+	// from the primary's exporter — contains all members with authoritative state labels.
+	if grSamples := primary["mysql_perf_schema_replication_group_member_info"]; len(grSamples) > 0 {
+		zero := float64(0)
+		zeroBytes := int64(0)
+		for _, s := range grSamples {
+			role := strings.ToLower(s.Labels["member_role"])
+			state := strings.ToLower(s.Labels["member_state"])
+			mem := ReplicationMember{
+				Role:  role,
+				Host:  s.Labels["member_host"],
+				State: state,
+			}
+			if state == "online" {
+				mem.ReplayLagSeconds = &zero
+				mem.ReplayLagBytes = &zeroBytes
+				if role == "primary" {
+					mem.WriteLagSeconds = &zero
+				}
+			}
+			m.Members = append(m.Members, mem)
+		}
+		// Primary first, then secondaries sorted by host.
+		sort.Slice(m.Members, func(i, j int) bool {
+			if m.Members[i].Role != m.Members[j].Role {
+				return m.Members[i].Role == "primary"
+			}
+			return m.Members[i].Host < m.Members[j].Host
+		})
+		m.StandbyCount = len(m.Members) - 1
+		return m, nil
+	}
+
+	// Fallback: traditional async/semi-sync replication — scrape per-node exporter.
 	zero := float64(0)
 	zeroBytes := int64(0)
 	m.Members = append(m.Members, ReplicationMember{
@@ -506,7 +539,6 @@ func collectReplication(primaryIP string, standbyIPs []string, primary core.Metr
 		ReplayLagBytes:   &zeroBytes,
 	})
 
-	// Each standby: scrape its own mysqld_exporter for replica applier status.
 	for _, ip := range standbyIPs {
 		f, ok := standbys[ip]
 		if !ok {
@@ -518,12 +550,6 @@ func collectReplication(primaryIP string, standbyIPs []string, primary core.Metr
 			continue
 		}
 
-		// Support both pre-8.0.22 (slave) and post-8.0.22 (replica) naming.
-		lagSec := f.FirstAlt(
-			"mysql_slave_status_seconds_behind_master",
-			"mysql_replica_status_seconds_behind_source",
-			-1,
-		)
 		ioRunning := replicaIORunning(f)
 		sqlRunning := replicaSQLRunning(f)
 
@@ -539,6 +565,11 @@ func collectReplication(primaryIP string, standbyIPs []string, primary core.Metr
 			IORunning:  ioRunning,
 			SQLRunning: sqlRunning,
 		}
+		lagSec := f.FirstAlt(
+			"mysql_slave_status_seconds_behind_master",
+			"mysql_replica_status_seconds_behind_source",
+			-1,
+		)
 		if lagSec >= 0 {
 			lagRef := lagSec
 			mem.ReplayLagSeconds = &lagRef
