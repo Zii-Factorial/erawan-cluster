@@ -83,19 +83,9 @@ type MetricRequest struct {
 	From       *time.Time `json:"from"`       // filters failover events
 	To         *time.Time `json:"to"`
 
-	// SSLMode controls the sslmode for the users SQL connection.
-	// Valid values: disable, require, verify-ca, verify-full, prefer, allow.
-	// Use "disable" or "require" when connecting through HAProxy TCP passthrough.
-	// Defaults to CLUSTER_DB_SSL_MODE env var, or "disable" if unset.
-	SSLMode string `json:"ssl_mode"`
-
 	// Server-side only — never accepted from the client.
-	Host       string `json:"-"`
-	Port       int    `json:"-"`
-	DBHost     string `json:"-"` // primary node IP for direct DB user query
-	DBPort     int    `json:"-"` // postgres port for direct DB user query
-	DBUser     string `json:"-"`
-	DBPassword string `json:"-"`
+	Host string `json:"-"`
+	Port int    `json:"-"`
 }
 
 // ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@ type MetricResponse struct {
 	Host        string            `json:"host"`
 	Port        int               `json:"port"`
 	Databases   []DatabaseInfo    `json:"databases,omitempty"` // user databases with sizes
-	Users       []UserInfo        `json:"users,omitempty"`     // non-system DB users
+	Users       []UserInfo        `json:"users"`               // non-system DB users (always [])
 	Nodes       []NodeMetric      `json:"nodes"`               // per-node OS metrics (node_exporter)
 	Categories  map[string]any    `json:"categories"`
 	Errors      map[string]string `json:"errors,omitempty"`

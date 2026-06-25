@@ -2,18 +2,15 @@ package mysql
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"math"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"erawan-cluster/internal/cluster/core"
-	gomysql "github.com/go-sql-driver/mysql"
 )
 
 // Collector gathers live metrics from a MySQL InnoDB Cluster.
@@ -36,6 +33,7 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 		Engine:      "mysql",
 		Host:        req.Host,
 		Port:        resolvePort(req.Port, 3306),
+		Users:       []UserInfo{},
 		Categories:  make(map[string]any),
 		Errors:      make(map[string]string),
 	}
@@ -87,28 +85,6 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 		}
 	}
 
-	// Collect DB users via direct connection to node IPs (mysql.user is replicated,
-	// so any healthy node can answer this query).
-	if req.DBUser != "" && req.DBPort > 0 {
-		nodes := req.NodeIPs
-		if len(nodes) == 0 && req.DBHost != "" {
-			nodes = []string{req.DBHost}
-		}
-		var firstErr error
-		for _, ip := range nodes {
-			users, err := collectMysqlUsers(ctx, ip, req.DBPort, req.DBUser, req.DBPassword, req.TLSMode)
-			if err == nil {
-				resp.Users = users
-				break
-			}
-			if firstErr == nil {
-				firstErr = err
-			}
-		}
-		if resp.Users == nil && firstErr != nil {
-			resp.Errors["users"] = firstErr.Error()
-		}
-	}
 
 	categories := resolveCategories(req.Categories)
 	type result struct {
@@ -787,100 +763,3 @@ func formatDuration(seconds int64) string {
 	return strings.Join(parts, " ")
 }
 
-// collectMysqlUsers connects directly to the primary and returns all non-system
-// users with their host constraint, superuser flag, and accessible databases.
-func collectMysqlUsers(ctx context.Context, host string, port int, user, password, tlsModeOverride string) ([]UserInfo, error) {
-	cfg := gomysql.NewConfig()
-	cfg.User = user
-	cfg.Passwd = password
-	cfg.Net = "tcp"
-	cfg.Addr = fmt.Sprintf("%s:%d", host, port)
-	cfg.DBName = "mysql"
-	cfg.Timeout = 10 * time.Second
-	cfg.ParseTime = true
-	cfg.AllowNativePasswords = true
-	cfg.TLSConfig = mysqlMetricTLSMode(tlsModeOverride)
-
-	db, err := sql.Open("mysql", cfg.FormatDSN())
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-	db.SetMaxOpenConns(1)
-	if err := db.PingContext(ctx); err != nil {
-		return nil, fmt.Errorf("connect %s:%d: %w", host, port, err)
-	}
-
-	// Fetch all non-system users.
-	rows, err := db.QueryContext(ctx, `
-		SELECT User, Host,
-		       IF(Super_priv = 'Y', TRUE, FALSE) AS superuser
-		FROM mysql.user
-		WHERE User NOT IN ('root','mysql.sys','mysql.session','mysql.infoschema')
-		  AND User <> ''
-		ORDER BY User, Host`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	userMap := map[string]*UserInfo{}
-	var order []string
-	for rows.Next() {
-		var username, host string
-		var superuser bool
-		if err := rows.Scan(&username, &host, &superuser); err != nil {
-			return nil, err
-		}
-		if _, exists := userMap[username]; !exists {
-			userMap[username] = &UserInfo{Username: username, Host: host, SuperUser: superuser}
-			order = append(order, username)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	// Fetch per-user database grants from mysql.db.
-	dbRows, err := db.QueryContext(ctx, `
-		SELECT User, Db
-		FROM mysql.db
-		WHERE User NOT IN ('root','mysql.sys','mysql.session','mysql.infoschema')
-		  AND User <> ''
-		ORDER BY User, Db`)
-	if err == nil {
-		defer dbRows.Close()
-		for dbRows.Next() {
-			var u, d string
-			if err := dbRows.Scan(&u, &d); err == nil {
-				if info, ok := userMap[u]; ok {
-					info.Databases = append(info.Databases, d)
-				}
-			}
-		}
-	}
-
-	out := make([]UserInfo, 0, len(order))
-	for _, name := range order {
-		out = append(out, *userMap[name])
-	}
-	return out, nil
-}
-
-// mysqlMetricTLSMode resolves the TLS mode for metric collector direct connections.
-func mysqlMetricTLSMode(override string) string {
-	// Payload value takes priority over env var.
-	for _, m := range []string{override, os.Getenv("CLUSTER_DB_TLS_MODE")} {
-		switch strings.ToLower(strings.TrimSpace(m)) {
-		case "true":
-			return "true"
-		case "skip-verify":
-			return "skip-verify"
-		case "false", "disable", "off":
-			return "false"
-		}
-	}
-	// Default: skip-verify encrypts without hostname verification, compatible with
-	// HAProxy TCP passthrough where the cert CN is the node IP, not the proxy.
-	return "skip-verify"
-}

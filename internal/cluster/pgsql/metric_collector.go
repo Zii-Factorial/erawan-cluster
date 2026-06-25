@@ -2,20 +2,17 @@ package pgsql
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"erawan-cluster/internal/cluster/core"
-	"github.com/lib/pq"
 )
 
 // Collector gathers live metrics from a PostgreSQL / Patroni cluster.
@@ -38,6 +35,7 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 		Engine:      "pgsql",
 		Host:        req.Host,
 		Port:        resolvePort(req.Port, 5432),
+		Users:       []UserInfo{},
 		Categories:  make(map[string]any),
 		Errors:      make(map[string]string),
 	}
@@ -74,28 +72,6 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 		resp.Databases = normalizeDatabases(pgMetrics)
 	}
 
-	// Collect DB users via direct connection to node IPs (pg_roles is replicated,
-	// so any healthy node — primary or standby — can answer this query).
-	if req.DBUser != "" && req.DBPort > 0 {
-		nodes := req.NodeIPs
-		if len(nodes) == 0 && req.DBHost != "" {
-			nodes = []string{req.DBHost}
-		}
-		var firstErr error
-		for _, ip := range nodes {
-			users, err := collectPgsqlUsers(ctx, ip, req.DBPort, req.DBUser, req.DBPassword, req.SSLMode)
-			if err == nil {
-				resp.Users = users
-				break
-			}
-			if firstErr == nil {
-				firstErr = err
-			}
-		}
-		if resp.Users == nil && firstErr != nil {
-			resp.Errors["users"] = firstErr.Error()
-		}
-	}
 
 	// Scrape node_exporter on every node — collected into resp.Nodes in parallel.
 	nodeMetrics := c.scrapeAllNodes(ctx, req.NodeIPs, nodePort)
@@ -1254,74 +1230,3 @@ func parsePatroniTime(s string) time.Time {
 	return time.Time{}
 }
 
-// collectPgsqlUsers connects directly to the primary and returns all non-system
-// login roles with their superuser flag and accessible databases.
-func collectPgsqlUsers(ctx context.Context, host string, port int, user, password, sslModeOverride string) ([]UserInfo, error) {
-	sslmode := pgsqlMetricSSLMode(sslModeOverride)
-	dsn := fmt.Sprintf("host=%s port=%d dbname=postgres user=%s password=%s sslmode=%s",
-		host, port, pgConnVal(user), pgConnVal(password), sslmode)
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-	db.SetMaxOpenConns(1)
-	if err := db.PingContext(ctx); err != nil {
-		return nil, fmt.Errorf("connect %s:%d: %w", host, port, err)
-	}
-
-	rows, err := db.QueryContext(ctx, `
-		SELECT r.rolname, r.rolsuper,
-		       ARRAY(
-		           SELECT d.datname
-		           FROM pg_database d
-		           WHERE NOT d.datistemplate
-		             AND d.datname <> 'postgres'
-		             AND has_database_privilege(r.rolname, d.datname, 'CONNECT')
-		           ORDER BY d.datname
-		       ) AS databases
-		FROM pg_roles r
-		WHERE r.rolcanlogin
-		  AND r.rolname NOT LIKE 'pg_%'
-		  AND r.rolname <> 'postgres'
-		  AND r.rolname <> 'exporter'
-		  AND NOT r.rolreplication
-		ORDER BY r.rolname`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var out []UserInfo
-	for rows.Next() {
-		var u UserInfo
-		var dbs []string
-		if err := rows.Scan(&u.Username, &u.SuperUser, pq.Array(&dbs)); err != nil {
-			return nil, err
-		}
-		u.Databases = dbs
-		out = append(out, u)
-	}
-	return out, rows.Err()
-}
-
-// pgsqlMetricSSLMode resolves the sslmode for metric collector direct connections.
-// Defaults to verify-full; relax via CLUSTER_DB_SSL_MODE for self-signed clusters.
-func pgsqlMetricSSLMode(override string) string {
-	// Payload value takes priority over env var.
-	for _, m := range []string{override, os.Getenv("CLUSTER_DB_SSL_MODE")} {
-		switch strings.ToLower(strings.TrimSpace(m)) {
-		case "disable", "require", "verify-ca", "verify-full", "prefer", "allow":
-			return strings.ToLower(strings.TrimSpace(m))
-		}
-	}
-	// Default: disable skips SSL negotiation, avoiding EOF through HAProxy TCP passthrough.
-	return "disable"
-}
-
-// pgConnVal escapes a PostgreSQL connection string value.
-func pgConnVal(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `'`, `\'`)
-	return "'" + s + "'"
-}
