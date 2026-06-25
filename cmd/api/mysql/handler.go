@@ -276,20 +276,20 @@ func (h *Handler) Metrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.JobID != "" {
-		dbHost, dbPort, dbUser, dbPass, nodeIPs, err := h.cluster.ConnectionInfo(req.JobID)
+		_, _, dbUser, dbPass, nodeIPs, err := h.cluster.ConnectionInfo(req.JobID)
 		if err != nil {
 			render.Error(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}
 		req.NodeIPs = nodeIPs
-		req.DBHost = dbHost
-		req.DBPort = dbPort
 		req.DBUser = dbUser
 		req.DBPassword = dbPass
 	}
 
 	req.Host = h.proxyHost
 	req.Port = req.ProxyPort
+	req.DBHost = h.proxyHost
+	req.DBPort = req.ProxyPort
 
 	if err := mysqlcluster.ValidateMetricRequest(&req); err != nil {
 		render.Error(w, http.StatusBadRequest, err.Error())
