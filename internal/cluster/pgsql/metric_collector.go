@@ -40,7 +40,7 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 		Errors:      make(map[string]string),
 	}
 
-	pgPort := resolvePort(req.PgsqlExporterPort, 9187)
+	pgPort := resolvePort(req.DBMetricExporterPort, 9187)
 	nodePort := resolvePort(req.NodeExporterPort, 9100)
 
 	// Discover the actual current primary via Patroni /leader — survives failover.
@@ -1373,4 +1373,3 @@ func parsePatroniTime(s string) time.Time {
 	}
 	return time.Time{}
 }
-

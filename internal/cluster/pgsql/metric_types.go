@@ -56,7 +56,7 @@ type (
 )
 
 // ---------------------------------------------------------------------------
-// Request — pgsql-specific (PatroniPort, PgsqlExporterPort, time filters)
+// Request — pgsql-specific defaults, shared DB exporter payload field.
 // ---------------------------------------------------------------------------
 
 // MetricRequest defines collection parameters.
@@ -70,9 +70,9 @@ type MetricRequest struct {
 	ProxyPort int `json:"proxy_port"`
 
 	// Exporter port overrides — omit to use standard defaults.
-	PgsqlExporterPort int `json:"pgsql_exporter_port"` // default 9187
-	NodeExporterPort  int `json:"node_exporter_port"`  // default 9100
-	PatroniPort       int `json:"patroni_port"`         // default 8008
+	DBMetricExporterPort int `json:"db_metric_exporter_port"` // default 9187
+	NodeExporterPort     int `json:"node_exporter_port"`      // default 9100
+	PatroniPort          int `json:"patroni_port"`            // default 8008
 
 	// NodeIPs lists all cluster member IPs, used to scrape per-node exporters.
 	// Resolved from the stored job when job_id is provided; may be provided directly.

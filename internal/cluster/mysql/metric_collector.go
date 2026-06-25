@@ -38,7 +38,7 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 		Errors:      make(map[string]string),
 	}
 
-	mysqlPort := resolvePort(req.MysqlExporterPort, 9104)
+	mysqlPort := resolvePort(req.DBMetricExporterPort, 9104)
 	nodePort := resolvePort(req.NodeExporterPort, 9100)
 
 	// Scrape mysqld_exporter and node_exporter on ALL nodes in parallel.
@@ -88,7 +88,6 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 		}
 		resp.Users = collectMysqlUsersFromExporter(primaryMetrics)
 	}
-
 
 	categories := resolveCategories(req.Categories)
 	type result struct {
@@ -861,4 +860,3 @@ func formatDuration(seconds int64) string {
 	parts = append(parts, fmt.Sprintf("%ds", secs))
 	return strings.Join(parts, " ")
 }
-

@@ -49,7 +49,7 @@ type (
 )
 
 // ---------------------------------------------------------------------------
-// Request — mysql-specific (MysqlExporterPort, NodeExporterPort)
+// Request — mysql-specific defaults, shared DB exporter payload field.
 // ---------------------------------------------------------------------------
 
 // MetricRequest defines collection parameters.
@@ -63,8 +63,8 @@ type MetricRequest struct {
 	ProxyPort int `json:"proxy_port"`
 
 	// Exporter port overrides — omit to use standard defaults.
-	MysqlExporterPort int `json:"mysql_exporter_port"` // default 9104
-	NodeExporterPort  int `json:"node_exporter_port"`  // default 9100
+	DBMetricExporterPort int `json:"db_metric_exporter_port"` // default 9104
+	NodeExporterPort     int `json:"node_exporter_port"`      // default 9100
 
 	// NodeIPs lists all cluster member IPs, used to scrape per-node exporters.
 	// Resolved from the stored job when job_id is provided; may be provided directly.
