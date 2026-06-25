@@ -146,10 +146,10 @@ type ReplicationMember struct {
 	SyncState       string `json:"sync_state,omitempty"` // pgsql: async | sync | quorum | potential
 
 	// Lag (nil means not applicable or not measurable, e.g. primary self).
-	WriteLagSeconds  *float64 `json:"write_lag_seconds"`
+	WriteLagSeconds  *float64 `json:"write_lag_seconds,omitempty"`
 	FlushLagSeconds  *float64 `json:"flush_lag_seconds,omitempty"` // pgsql pipeline only
-	ReplayLagSeconds *float64 `json:"replay_lag_seconds"`
-	ReplayLagBytes   *int64   `json:"replay_lag_bytes"`
+	ReplayLagSeconds *float64 `json:"replay_lag_seconds,omitempty"`
+	ReplayLagBytes   *int64   `json:"replay_lag_bytes,omitempty"`
 
 	// MySQL replica applier thread status.
 	IORunning  string `json:"io_running,omitempty"`

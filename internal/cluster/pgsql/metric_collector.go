@@ -55,6 +55,7 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 	} else if req.Host != "" {
 		primaryIP = req.Host
 	}
+	req.PrimaryIP = primaryIP
 
 	// Scrape postgres_exporter on the current primary — used by most DB categories.
 	var pgMetrics core.MetricFamily
@@ -473,20 +474,13 @@ func collectReplication(f core.MetricFamily, req MetricRequest) (*ReplicationMet
 	m.MaxWALSenders = int(f.First("pg_settings_max_wal_senders", 0))
 
 	// Primary is always the first member with zero lag.
-	primaryIP := ""
-	if len(req.NodeIPs) > 0 {
-		primaryIP = req.NodeIPs[0]
-	}
 	zero := float64(0)
 	zeroBytes := int64(0)
 	m.Members = append(m.Members, ReplicationMember{
 		Role:             "primary",
-		Host:             primaryIP,
-		ApplicationName:  "primary",
-		State:            "running",
-		SyncState:        "primary",
+		Host:             req.PrimaryIP,
+		State:            "online",
 		WriteLagSeconds:  &zero,
-		FlushLagSeconds:  &zero,
 		ReplayLagSeconds: &zero,
 		ReplayLagBytes:   &zeroBytes,
 	})
@@ -512,10 +506,10 @@ func collectReplication(f core.MetricFamily, req MetricRequest) (*ReplicationMet
 		rbInt := int64(rb)
 
 		mem := ReplicationMember{
-			Role:            "standby",
-			Host:            addr,
-			ApplicationName: app,
-			State:            s.Labels["state"],
+			Role:             "secondary",
+			Host:             addr,
+			ApplicationName:  app,
+			State:            normalizePgsqlMemberState(s.Labels["state"]),
 			SyncState:        s.Labels["sync_state"],
 			WriteLagSeconds:  &wl,
 			FlushLagSeconds:  &fl,
@@ -552,6 +546,22 @@ func collectReplication(f core.MetricFamily, req MetricRequest) (*ReplicationMet
 	}
 
 	return m, nil
+}
+
+// normalizePgsqlMemberState maps pg_stat_replication state values to the
+// common "online" / "offline" / "unknown" format shared with MySQL.
+func normalizePgsqlMemberState(s string) string {
+	switch strings.ToLower(s) {
+	case "streaming", "startup", "catchup", "backup":
+		return "online"
+	case "stopped":
+		return "offline"
+	default:
+		if s == "" {
+			return "unknown"
+		}
+		return "online"
+	}
 }
 
 // =============================================================================

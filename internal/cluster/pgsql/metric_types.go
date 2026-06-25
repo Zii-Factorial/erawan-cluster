@@ -84,8 +84,9 @@ type MetricRequest struct {
 	To         *time.Time `json:"to"`
 
 	// Server-side only — never accepted from the client.
-	Host string `json:"-"`
-	Port int    `json:"-"`
+	Host      string `json:"-"`
+	Port      int    `json:"-"`
+	PrimaryIP string `json:"-"` // resolved current primary IP (after failover discovery)
 }
 
 // ---------------------------------------------------------------------------
