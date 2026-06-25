@@ -1298,9 +1298,10 @@ func pgsqlMetricSSLMode() string {
 	case "disable", "require", "verify-ca", "verify-full", "prefer", "allow":
 		return m
 	default:
-		// "require" encrypts without hostname verification — needed when connecting
-		// through HAProxy TCP passthrough where the cert CN is the node IP, not the proxy.
-		return "require"
+		// "prefer" tries SSL first then falls back to non-SSL — works through HAProxy
+		// TCP passthrough regardless of whether the backend has SSL configured, and
+		// does not verify hostname (cert CN is the node IP, not the proxy).
+		return "prefer"
 	}
 }
 
