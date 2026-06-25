@@ -70,8 +70,8 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 	// Scrape databases list from pg_database_size_bytes.
 	if pgMetrics != nil {
 		resp.Databases = normalizeDatabases(pgMetrics)
+		resp.Users = collectPgsqlUsersFromExporter(pgMetrics)
 	}
-
 
 	// Scrape node_exporter on every node — collected into resp.Nodes in parallel.
 	nodeMetrics := c.scrapeAllNodes(ctx, req.NodeIPs, nodePort)
@@ -324,6 +324,23 @@ func normalizeDatabases(f core.MetricFamily) []DatabaseInfo {
 	}
 	sort.Slice(dbs, func(i, j int) bool { return dbs[i].Name < dbs[j].Name })
 	return dbs
+}
+
+// collectPgsqlUsersFromExporter extracts non-system roles from
+// pg_roles_connection_limit exposed by postgres_exporter.
+// Excluded: all pg_* built-in roles and the internal exporter account.
+func collectPgsqlUsersFromExporter(f core.MetricFamily) []UserInfo {
+	skip := map[string]bool{"exporter": true}
+	var users []UserInfo
+	for _, s := range f["pg_roles_connection_limit"] {
+		role := s.Labels["rolname"]
+		if role == "" || strings.HasPrefix(role, "pg_") || skip[role] {
+			continue
+		}
+		users = append(users, UserInfo{Username: role})
+	}
+	sort.Slice(users, func(i, j int) bool { return users[i].Username < users[j].Username })
+	return users
 }
 
 // =============================================================================
