@@ -607,12 +607,12 @@ func (s *Service) connect(ctx context.Context, host string, port int, dbname, us
  */
 func adminTLSMode() string {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("CLUSTER_DB_TLS_MODE"))) {
-	case "skip-verify":
-		return "skip-verify"
+	case "true":
+		return "true"
 	case "false", "disable", "off":
 		return "false"
 	default:
-		return "true"
+		return "skip-verify"
 	}
 }
 

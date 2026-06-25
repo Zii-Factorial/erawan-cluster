@@ -585,7 +585,7 @@ func adminSSLMode() string {
 	case "disable", "require", "verify-ca", "verify-full", "prefer", "allow":
 		return m
 	default:
-		return "verify-full"
+		return "require"
 	}
 }
 
