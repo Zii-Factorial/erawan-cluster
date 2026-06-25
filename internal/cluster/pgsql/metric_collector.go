@@ -129,7 +129,7 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 			case MetricCategoryConnections:
 				data, err = collectConnections(pgMetrics)
 			case MetricCategoryReplication:
-				data, err = collectReplication(pgMetrics, req)
+				data, err = c.collectReplication(ctx, pgMetrics, req)
 			case MetricCategoryPerformance:
 				data, err = collectPerformance(pgMetrics)
 			case MetricCategoryQuery:
@@ -465,7 +465,7 @@ func collectConnections(f core.MetricFamily) (*ConnectionMetric, error) {
 // replication — pg_stat_replication_* + pg_replication_slots_*
 // =============================================================================
 
-func collectReplication(f core.MetricFamily, req MetricRequest) (*ReplicationMetric, error) {
+func (c *Collector) collectReplication(ctx context.Context, f core.MetricFamily, req MetricRequest) (*ReplicationMetric, error) {
 	m := &ReplicationMetric{
 		Members: []ReplicationMember{},
 		Slots:   []ReplicationSlot{},
@@ -473,79 +473,184 @@ func collectReplication(f core.MetricFamily, req MetricRequest) (*ReplicationMet
 
 	m.MaxWALSenders = int(f.First("pg_settings_max_wal_senders", 0))
 
-	// Primary is always the first member with zero lag.
-	zero := float64(0)
-	zeroBytes := int64(0)
-	m.Members = append(m.Members, ReplicationMember{
-		Role:             "primary",
-		Host:             req.PrimaryIP,
-		State:            "online",
-		WriteLagSeconds:  &zero,
-		ReplayLagSeconds: &zero,
-		ReplayLagBytes:   &zeroBytes,
-	})
-
-	// Standby entries from pg_stat_replication_write_lag_seconds.
-	// Collect all distinct application_name/client_addr pairs.
-	type memberKey struct{ appName, clientAddr string }
-	seen := map[memberKey]bool{}
+	// Build per-standby lag index from pg_stat_replication for supplemental seconds data.
+	type lagInfo struct {
+		writeSec, flushSec, replaySec float64
+		replayBytes                   int64
+		appName, syncState, state     string
+	}
+	lagByAddr := map[string]lagInfo{}
 	for _, s := range f["pg_stat_replication_write_lag_seconds"] {
-		app := s.Labels["application_name"]
 		addr := s.Labels["client_addr"]
-		k := memberKey{app, addr}
-		if seen[k] {
+		if addr == "" {
 			continue
 		}
-		seen[k] = true
-
-		lm := map[string]string{"application_name": app, "client_addr": addr}
-		wl := f.FirstWhere("pg_stat_replication_write_lag_seconds", lm, 0)
-		fl := f.FirstWhere("pg_stat_replication_flush_lag_seconds", lm, 0)
-		rl := f.FirstWhere("pg_stat_replication_replay_lag_seconds", lm, 0)
+		lm := map[string]string{"application_name": s.Labels["application_name"], "client_addr": addr}
 		rb := f.FirstWhere("pg_stat_replication_pg_wal_lsn_diff", lm, 0)
-		rbInt := int64(rb)
-
-		mem := ReplicationMember{
-			Role:             "secondary",
-			Host:             addr,
-			ApplicationName:  app,
-			State:            normalizePgsqlMemberState(s.Labels["state"]),
-			SyncState:        s.Labels["sync_state"],
-			WriteLagSeconds:  &wl,
-			FlushLagSeconds:  &fl,
-			ReplayLagSeconds: &rl,
-			ReplayLagBytes:   &rbInt,
+		lagByAddr[addr] = lagInfo{
+			writeSec:    f.FirstWhere("pg_stat_replication_write_lag_seconds", lm, 0),
+			flushSec:    f.FirstWhere("pg_stat_replication_flush_lag_seconds", lm, 0),
+			replaySec:   f.FirstWhere("pg_stat_replication_replay_lag_seconds", lm, 0),
+			replayBytes: int64(rb),
+			appName:     s.Labels["application_name"],
+			syncState:   s.Labels["sync_state"],
+			state:       s.Labels["state"],
 		}
-		m.Members = append(m.Members, mem)
 	}
-	m.StandbyCount = len(m.Members) - 1
 
-	// Replication slots.
-	slotNames := f.LabelValues("pg_replication_slots_active", "slot_name")
+	// Primary: Patroni /cluster is the authoritative source for all members.
+	// It includes standbys that may not appear in pg_stat_replication when
+	// the connection is lagging or in startup/catchup state.
+	if patroniMembers, err := c.patroniClusterMembers(ctx, req); err == nil && len(patroniMembers) > 0 {
+		zero := float64(0)
+		zeroBytes := int64(0)
+		for _, pm := range patroniMembers {
+			role := "secondary"
+			if pm.role == "leader" || pm.role == "master" {
+				role = "primary"
+			}
+			state := normalizePgsqlMemberState(pm.state)
+			mem := ReplicationMember{
+				Role:  role,
+				Host:  pm.host,
+				State: state,
+			}
+			if role == "primary" {
+				mem.WriteLagSeconds = &zero
+				mem.ReplayLagSeconds = &zero
+				mem.ReplayLagBytes = &zeroBytes
+			} else {
+				lag, ok := lagByAddr[pm.host]
+				if ok {
+					mem.ApplicationName = lag.appName
+					mem.SyncState = lag.syncState
+					mem.WriteLagSeconds = &lag.writeSec
+					if lag.flushSec != 0 {
+						mem.FlushLagSeconds = &lag.flushSec
+					}
+					mem.ReplayLagSeconds = &lag.replaySec
+					mem.ReplayLagBytes = &lag.replayBytes
+				} else {
+					lagBytes := int64(pm.lagBytes)
+					lagF := float64(0)
+					mem.ReplayLagSeconds = &lagF
+					mem.ReplayLagBytes = &lagBytes
+				}
+			}
+			m.Members = append(m.Members, mem)
+		}
+		// Primary first, then secondaries sorted by host.
+		sort.Slice(m.Members, func(i, j int) bool {
+			if m.Members[i].Role != m.Members[j].Role {
+				return m.Members[i].Role == "primary"
+			}
+			return m.Members[i].Host < m.Members[j].Host
+		})
+		m.StandbyCount = len(m.Members) - 1
+	} else {
+		// Fallback: build from pg_stat_replication only.
+		zero := float64(0)
+		zeroBytes := int64(0)
+		m.Members = append(m.Members, ReplicationMember{
+			Role:             "primary",
+			Host:             req.PrimaryIP,
+			State:            "online",
+			WriteLagSeconds:  &zero,
+			ReplayLagSeconds: &zero,
+			ReplayLagBytes:   &zeroBytes,
+		})
+		for addr, lag := range lagByAddr {
+			wl, fl, rl := lag.writeSec, lag.flushSec, lag.replaySec
+			rb := lag.replayBytes
+			mem := ReplicationMember{
+				Role:             "secondary",
+				Host:             addr,
+				ApplicationName:  lag.appName,
+				State:            normalizePgsqlMemberState(lag.state),
+				SyncState:        lag.syncState,
+				WriteLagSeconds:  &wl,
+				ReplayLagSeconds: &rl,
+				ReplayLagBytes:   &rb,
+			}
+			if fl != 0 {
+				mem.FlushLagSeconds = &fl
+			}
+			m.Members = append(m.Members, mem)
+		}
+		sort.Slice(m.Members, func(i, j int) bool {
+			if m.Members[i].Role != m.Members[j].Role {
+				return m.Members[i].Role == "primary"
+			}
+			return m.Members[i].Host < m.Members[j].Host
+		})
+		m.StandbyCount = len(m.Members) - 1
+	}
+
+	// Replication slots — actual metric names from postgres_exporter 0.19+:
+	//   pg_replication_slot_slot_is_active{slot_name, slot_type, ...}
+	//   pg_replication_slot_slot_current_wal_lsn{slot_name, slot_type, ...}
+	slotNames := f.LabelValues("pg_replication_slot_slot_is_active", "slot_name")
 	for _, name := range slotNames {
 		lm := map[string]string{"slot_name": name}
-		active := f.FirstWhere("pg_replication_slots_active", lm, 0) == 1
-		lagBytes := int64(f.FirstWhere("pg_replication_slots_pg_wal_lsn_diff", lm, 0))
+		active := f.FirstWhere("pg_replication_slot_slot_is_active", lm, 0) == 1
 		slotType := ""
 		database := ""
-		for _, s := range f["pg_replication_slots_active"] {
+		for _, s := range f["pg_replication_slot_slot_is_active"] {
 			if s.Labels["slot_name"] == name {
 				slotType = s.Labels["slot_type"]
 				database = s.Labels["database"]
 				break
 			}
 		}
-		lagRef := lagBytes
 		m.Slots = append(m.Slots, ReplicationSlot{
 			Name:     name,
 			Type:     slotType,
 			Database: database,
 			Active:   active,
-			LagBytes: &lagRef,
 		})
 	}
 
 	return m, nil
+}
+
+// patroniClusterMember is a minimal Patroni /cluster member used by collectReplication.
+type patroniClusterMember struct {
+	host, role, state string
+	lagBytes          float64
+}
+
+// patroniClusterMembers fetches /cluster from the current Patroni leader and returns
+// all members with their host IPs, roles, states, and WAL lag.
+func (c *Collector) patroniClusterMembers(ctx context.Context, req MetricRequest) ([]patroniClusterMember, error) {
+	leaderIP, err := c.discoverLeader(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	patroniPort := resolvePort(req.PatroniPort, 8008)
+	clusterState, err := c.patroniGET(ctx, fmt.Sprintf("http://%s:%d/cluster", leaderIP, patroniPort))
+	if err != nil {
+		return nil, err
+	}
+	rawMembers, ok := clusterState["members"].([]any)
+	if !ok {
+		return nil, fmt.Errorf("no members in patroni /cluster")
+	}
+	var out []patroniClusterMember
+	for _, raw := range rawMembers {
+		mm, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		host, _ := splitHostPort(getString(mm, "host"), 5432)
+		role := strings.ToLower(getString(mm, "role"))
+		state := strings.ToLower(getString(mm, "state"))
+		var lagBytes float64
+		if v, ok := mm["lag"].(float64); ok {
+			lagBytes = v
+		}
+		out = append(out, patroniClusterMember{host: host, role: role, state: state, lagBytes: lagBytes})
+	}
+	return out, nil
 }
 
 // normalizePgsqlMemberState maps pg_stat_replication state values to the

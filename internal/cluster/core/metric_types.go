@@ -162,7 +162,7 @@ type ReplicationSlot struct {
 	Type     string `json:"type"`
 	Database string `json:"database,omitempty"`
 	Active   bool   `json:"active"`
-	LagBytes *int64 `json:"lag_bytes"`
+	LagBytes *int64 `json:"lag_bytes,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
