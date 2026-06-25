@@ -13,27 +13,38 @@ import (
 	"erawan-cluster/internal/security"
 )
 
-// buildApplication wires every subsystem from resolved configuration and
-// returns an application ready to serve HTTP. It fails fast: if any dependency
-// cannot be initialised it returns an error (wrapped with context) so main can
-// abort start-up cleanly instead of running half-configured.
-//
-// This is the single place where the engines are assembled. Adding a new engine
-// (Redis, MongoDB, MariaDB, ...) means: load its clusterEngineConfig in
-// config.go, add a buildXCluster helper below, and attach the resulting service
-// to the application here — no change to main's control flow.
+/**
+ * buildApplication wires every subsystem from resolved configuration and returns
+ * an application ready to serve HTTP. It fails fast: if any dependency cannot be
+ * initialised it returns an error (wrapped with context) so main can abort
+ * start-up cleanly. This is the single place where the engines are assembled —
+ * adding a new engine means loading its clusterEngineConfig, adding a
+ * buildXCluster helper, and attaching the service here.
+ *
+ * Params:
+ *   ctx context.Context - the process base context; handed to each engine's
+ *     background job runner so a shutdown cancels in-flight Ansible runs.
+ *   cfg runtimeConfig - the fully-resolved process configuration.
+ * Returns:
+ *   *application - the assembled dependency container, on success.
+ *   error - the first subsystem init/validation failure, wrapped with context.
+ */
 func buildApplication(ctx context.Context, cfg runtimeConfig) (*application, error) {
+	if err := validateSecurityConfig(cfg); err != nil {
+		return nil, err
+	}
+
 	haproxySvc, err := buildHAProxy(cfg.haproxy)
 	if err != nil {
 		return nil, err
 	}
 
-	mysqlStore, mysqlSvc, err := buildMySQLCluster(ctx, cfg.mysql, cfg.ssh)
+	mysqlStore, mysqlSvc, err := buildMySQLCluster(ctx, cfg.mysql, cfg.ssh, cfg.maxConcurrentJobs)
 	if err != nil {
 		return nil, err
 	}
 
-	pgsqlStore, pgsqlSvc, err := buildPGSQLCluster(ctx, cfg.pgsql, cfg.ssh)
+	pgsqlStore, pgsqlSvc, err := buildPGSQLCluster(ctx, cfg.pgsql, cfg.ssh, cfg.maxConcurrentJobs)
 	if err != nil {
 		return nil, err
 	}
@@ -52,12 +63,34 @@ func buildApplication(ctx context.Context, cfg runtimeConfig) (*application, err
 		mysqlDB:      mysqldbmanager.NewService(mysqlStore),
 		cipher:       cipher,
 		baseDir:      cfg.baseDir,
+		enablePprof:  cfg.enablePprof,
 	}, nil
 }
 
-// buildHAProxy constructs the HAProxy service that renders per-tenant config
-// fragments and reloads the proxy. It applies the optional list of operator
-// "main" config files that tenant operations must never touch.
+/**
+ * validateSecurityConfig fails start-up closed when the API is unauthenticated
+ * outside development (see security.ValidateAuthConfig).
+ *
+ * Params:
+ *   cfg runtimeConfig - the resolved configuration; only env and apiKey are read.
+ * Returns:
+ *   error - non-nil when ENV != dev and no API key is set; nil otherwise.
+ */
+func validateSecurityConfig(cfg runtimeConfig) error {
+	return security.ValidateAuthConfig(cfg.server.env, cfg.server.apiKey)
+}
+
+/**
+ * buildHAProxy constructs the HAProxy service that renders per-tenant config
+ * fragments and reloads the proxy. It applies the optional list of operator
+ * "main" config files that tenant operations must never touch.
+ *
+ * Params:
+ *   cfg haproxyConfig - tenants dir, reload command/timeout and main configs.
+ * Returns:
+ *   *haproxy.Service - the configured service, on success.
+ *   error - if the tenants directory cannot be initialised.
+ */
 func buildHAProxy(cfg haproxyConfig) (*haproxy.Service, error) {
 	svc, err := haproxy.NewService(cfg.tenantsDir, cfg.reloadCmd, cfg.reloadTimeout)
 	if err != nil {
@@ -69,15 +102,24 @@ func buildHAProxy(cfg haproxyConfig) (*haproxy.Service, error) {
 	return svc, nil
 }
 
-// buildMySQLCluster assembles the MySQL cluster engine: a persistent job store,
-// an Ansible runner bound to the MySQL playbooks, and the service that ties
-// them together. It returns the store as well as the service because the store
-// is reused by the MySQL database manager (users/databases) wired in
-// buildApplication.
-//
-// The store's stale jobs are marked failed on boot so that a crash mid-deploy
-// does not leave jobs stuck in a perpetual "running" state.
-func buildMySQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConfig) (*mysqlcluster.Store, *mysqlcluster.Service, error) {
+/**
+ * buildMySQLCluster assembles the MySQL cluster engine: a persistent job store,
+ * an Ansible runner bound to the MySQL playbooks, and the service that ties them
+ * together. Stale running jobs are marked failed on boot so a crash mid-deploy
+ * never leaves a job stuck running. The store is returned as well as the service
+ * because it is reused by the MySQL database manager.
+ *
+ * Params:
+ *   ctx context.Context - base context for the service's background jobs.
+ *   cfg clusterEngineConfig - state dir, playbook paths and Ansible tunables.
+ *   ssh sshConfig - shared SSH credentials and host-key policy.
+ *   maxConcurrentJobs int - cap on concurrent background jobs for this engine.
+ * Returns:
+ *   *mysqlcluster.Store - the job store (reused by the DB manager).
+ *   *mysqlcluster.Service - the assembled cluster service.
+ *   error - if the store cannot be created or SSH config is invalid.
+ */
+func buildMySQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConfig, maxConcurrentJobs int) (*mysqlcluster.Store, *mysqlcluster.Service, error) {
 	store, err := mysqlcluster.NewStore(cfg.stateDir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("init mysql cluster store: %w", err)
@@ -88,8 +130,10 @@ func buildMySQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConf
 	runner.SetAddMemberPlaybook(cfg.addMemberPlaybook)
 	runner.SetRemoveMemberPlaybook(cfg.removeMemberPlaybook)
 	runner.SetDebug(cfg.ansible.verbosity, cfg.ansible.debug, cfg.ansible.stepOutputMaxChars)
+	runner.SetSSHPolicy(ssh.policy())
 
 	svc := mysqlcluster.NewService(store, runner)
+	svc.SetMaxConcurrentJobs(maxConcurrentJobs)
 	svc.SetContext(ctx)
 	if err := applySSHConfig(ssh, svc.SetSSHConfig); err != nil {
 		return nil, nil, fmt.Errorf("init mysql ssh config: %w", err)
@@ -99,11 +143,23 @@ func buildMySQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConf
 	return store, svc, nil
 }
 
-// buildPGSQLCluster assembles the PostgreSQL cluster engine. It mirrors
-// buildMySQLCluster but its runner has no rollback playbook, because the
-// PostgreSQL deploy flow does not support rollback. The store is returned for
-// reuse by the PostgreSQL database manager.
-func buildPGSQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConfig) (*pgsqlcluster.Store, *pgsqlcluster.Service, error) {
+/**
+ * buildPGSQLCluster assembles the PostgreSQL cluster engine. It mirrors
+ * buildMySQLCluster but its runner has no rollback playbook, because the
+ * PostgreSQL deploy flow does not support rollback. The store is returned for
+ * reuse by the PostgreSQL database manager.
+ *
+ * Params:
+ *   ctx context.Context - base context for the service's background jobs.
+ *   cfg clusterEngineConfig - state dir, playbook paths and Ansible tunables.
+ *   ssh sshConfig - shared SSH credentials and host-key policy.
+ *   maxConcurrentJobs int - cap on concurrent background jobs for this engine.
+ * Returns:
+ *   *pgsqlcluster.Store - the job store (reused by the DB manager).
+ *   *pgsqlcluster.Service - the assembled cluster service.
+ *   error - if the store cannot be created or SSH config is invalid.
+ */
+func buildPGSQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConfig, maxConcurrentJobs int) (*pgsqlcluster.Store, *pgsqlcluster.Service, error) {
 	store, err := pgsqlcluster.NewStore(cfg.stateDir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("init pgsql cluster store: %w", err)
@@ -114,8 +170,10 @@ func buildPGSQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConf
 	runner.SetAddMemberPlaybook(cfg.addMemberPlaybook)
 	runner.SetRemoveMemberPlaybook(cfg.removeMemberPlaybook)
 	runner.SetDebug(cfg.ansible.verbosity, cfg.ansible.debug, cfg.ansible.stepOutputMaxChars)
+	runner.SetSSHPolicy(ssh.policy())
 
 	svc := pgsqlcluster.NewService(store, runner)
+	svc.SetMaxConcurrentJobs(maxConcurrentJobs)
 	svc.SetContext(ctx)
 	if err := applySSHConfig(ssh, svc.SetSSHConfig); err != nil {
 		return nil, nil, fmt.Errorf("init pgsql ssh config: %w", err)
@@ -125,10 +183,18 @@ func buildPGSQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConf
 	return store, svc, nil
 }
 
-// buildCipher constructs the AES-256-GCM cipher used by the encrypt/decrypt
-// middleware to protect request and response payloads. Encryption is optional:
-// when no key is configured the function returns a nil cipher and the
-// middleware degrades to a pass-through.
+/**
+ * buildCipher constructs the AES-256-GCM cipher used by the encrypt/decrypt
+ * middleware to protect request and response payloads. Encryption is optional:
+ * when no key is configured the function returns a nil cipher and the middleware
+ * degrades to a pass-through.
+ *
+ * Params:
+ *   key string - hex-encoded 32-byte key, or "" to disable encryption.
+ * Returns:
+ *   *security.Cipher - the cipher, or nil when key is empty.
+ *   error - if a non-empty key is invalid.
+ */
 func buildCipher(key string) (*security.Cipher, error) {
 	if key == "" {
 		return nil, nil
@@ -141,10 +207,18 @@ func buildCipher(key string) (*security.Cipher, error) {
 	return cipher, nil
 }
 
-// applySSHConfig pushes the shared SSH credentials into a cluster service, but
-// only when credentials were actually provided. The setter differs per engine,
-// so it is passed in as a function; this keeps the "only set if present" guard
-// in one place instead of duplicated in every builder.
+/**
+ * applySSHConfig pushes the shared SSH credentials into a cluster service, but
+ * only when credentials were actually provided. The setter differs per engine,
+ * so it is passed in as a function; this keeps the "only set if present" guard
+ * in one place instead of duplicated in every builder.
+ *
+ * Params:
+ *   ssh sshConfig - the shared SSH credentials; ignored when none are present.
+ *   set func(user, keyPath string) error - the engine's SSH-config setter.
+ * Returns:
+ *   error - whatever set returns, or nil when no credentials were provided.
+ */
 func applySSHConfig(ssh sshConfig, set func(user, keyPath string) error) error {
 	if !ssh.hasCredentials() {
 		return nil
@@ -152,8 +226,14 @@ func applySSHConfig(ssh sshConfig, set func(user, keyPath string) error) error {
 	return set(ssh.user, ssh.privateKeyPath)
 }
 
-// logAnsibleDebug emits a one-line summary of the Ansible debug settings for an
-// engine, but only when debugging is enabled — so normal runs stay quiet.
+/**
+ * logAnsibleDebug emits a one-line summary of the Ansible debug settings for an
+ * engine, but only when debugging is enabled — so normal runs stay quiet.
+ *
+ * Params:
+ *   engine string - engine label for the log line, e.g. "mysql".
+ *   cfg ansibleConfig - the Ansible tunables; nothing is logged unless debug.
+ */
 func logAnsibleDebug(engine string, cfg ansibleConfig) {
 	if !cfg.debug {
 		return

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -20,6 +21,15 @@ type Service struct {
 	httpClient *http.Client
 }
 
+/**
+ * NewService.
+ *
+ * Params:
+ *   store *pgsql.Store - the store (*pgsql.Store)
+ *
+ * Returns:
+ *   *Service - the resulting *Service
+ */
 func NewService(store *pgsql.Store) *Service {
 	return &Service{
 		store:      store,
@@ -27,9 +37,25 @@ func NewService(store *pgsql.Store) *Service {
 	}
 }
 
-// resolve loads the current primary IP, port, and postgres superuser credentials.
-// It probes each node's Patroni /master endpoint so the result is correct even
-// after a failover since the original deploy.
+/**
+ * resolve loads the current primary IP, port, and postgres superuser credentials.
+ * It probes each node's Patroni /master endpoint so the result is correct even
+ * after a failover since the original deploy.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   jobID string - the jobID string
+ *
+ * Returns:
+ *   host string - the host string
+ *   port int - the port value
+ *   user string - the user string
+ *   password string - the password string
+ *   err error - error value; non-nil when the operation fails
+ */
 func (s *Service) resolve(ctx context.Context, jobID string) (host string, port int, user, password string, err error) {
 	job, err := s.store.Load(jobID)
 	if err != nil {
@@ -51,8 +77,21 @@ func (s *Service) resolve(ctx context.Context, jobID string) (host string, port 
 	return primary, p, secret.PostgresUser, secret.PostgresPassword, nil
 }
 
-// findPrimary probes each node's Patroni /master endpoint (port 8008) and
-// returns the first node that responds 200 — that is the current read-write leader.
+/**
+ * findPrimary probes each node's Patroni /master endpoint (port 8008) and
+ * returns the first node that responds 200 — that is the current read-write leader.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   candidates []string - the candidates ([]string)
+ *
+ * Returns:
+ *   string - the resulting string
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) findPrimary(ctx context.Context, candidates []string) (string, error) {
 	for _, ip := range candidates {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet,
@@ -74,6 +113,19 @@ func (s *Service) findPrimary(ctx context.Context, candidates []string) (string,
 	return "", fmt.Errorf("no primary found among nodes %v", candidates)
 }
 
+/**
+ * CreateUser.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req CreateUserRequest - the req (CreateUserRequest)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) error {
 	if err := req.validate(); err != nil {
 		return err
@@ -165,6 +217,19 @@ func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) error {
 	return nil
 }
 
+/**
+ * ResetPassword.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req ResetPasswordRequest - the req (ResetPasswordRequest)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) ResetPassword(ctx context.Context, req ResetPasswordRequest) error {
 	if err := req.validate(); err != nil {
 		return err
@@ -203,6 +268,19 @@ func (s *Service) ResetPassword(ctx context.Context, req ResetPasswordRequest) e
 	return nil
 }
 
+/**
+ * UpdateUser.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req UpdateUserRequest - the req (UpdateUserRequest)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) UpdateUser(ctx context.Context, req UpdateUserRequest) error {
 	if err := req.validate(); err != nil {
 		return err
@@ -251,6 +329,19 @@ func (s *Service) UpdateUser(ctx context.Context, req UpdateUserRequest) error {
 	return nil
 }
 
+/**
+ * DeleteUser.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req DeleteUserRequest - the req (DeleteUserRequest)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) DeleteUser(ctx context.Context, req DeleteUserRequest) error {
 	if err := req.validate(); err != nil {
 		return err
@@ -309,6 +400,19 @@ func (s *Service) DeleteUser(ctx context.Context, req DeleteUserRequest) error {
 	return nil
 }
 
+/**
+ * CreateDatabase.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req CreateDatabaseRequest - the req (CreateDatabaseRequest)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) CreateDatabase(ctx context.Context, req CreateDatabaseRequest) error {
 	if err := req.validate(); err != nil {
 		return err
@@ -333,6 +437,19 @@ func (s *Service) CreateDatabase(ctx context.Context, req CreateDatabaseRequest)
 	return nil
 }
 
+/**
+ * UpdateDatabase.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req UpdateDatabaseRequest - the req (UpdateDatabaseRequest)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) UpdateDatabase(ctx context.Context, req UpdateDatabaseRequest) error {
 	if err := req.validate(); err != nil {
 		return err
@@ -370,6 +487,19 @@ func (s *Service) UpdateDatabase(ctx context.Context, req UpdateDatabaseRequest)
 	return nil
 }
 
+/**
+ * DeleteDatabase.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req DeleteDatabaseRequest - the req (DeleteDatabaseRequest)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) DeleteDatabase(ctx context.Context, req DeleteDatabaseRequest) error {
 	if err := req.validate(); err != nil {
 		return err
@@ -407,9 +537,29 @@ func (s *Service) DeleteDatabase(ctx context.Context, req DeleteDatabaseRequest)
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+/**
+ * connect.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   host string - the host string
+ *   port int - the port value
+ *   dbname string - the dbname string
+ *   user string - the user string
+ *   password string - the password string
+ *
+ * Returns:
+ *   *sql.DB - the resulting *sql.DB
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) connect(ctx context.Context, host string, port int, dbname, user, password string) (*sql.DB, error) {
-	dsn := fmt.Sprintf("host=%s port=%d dbname=%s user=%s password=%s sslmode=require",
-		host, port, pgConnVal(dbname), pgConnVal(user), pgConnVal(password))
+	// Secure by default: verify-full validates the server certificate and host
+	// name (anti-MITM). Relax via CLUSTER_DB_SSL_MODE for self-signed clusters.
+	dsn := fmt.Sprintf("host=%s port=%d dbname=%s user=%s password=%s sslmode=%s",
+		host, port, pgConnVal(dbname), pgConnVal(user), pgConnVal(password), adminSSLMode())
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, err
@@ -422,12 +572,49 @@ func (s *Service) connect(ctx context.Context, host string, port int, dbname, us
 	return db, nil
 }
 
+/**
+ * adminSSLMode resolves the lib/pq sslmode for admin connections. Defaults to
+ * "verify-full"; operators may relax it via CLUSTER_DB_SSL_MODE (e.g. require,
+ * verify-ca, disable) for clusters using self-signed certificates.
+ *
+ * Returns:
+ *   string - the resulting string
+ */
+func adminSSLMode() string {
+	switch m := strings.ToLower(strings.TrimSpace(os.Getenv("CLUSTER_DB_SSL_MODE"))); m {
+	case "disable", "require", "verify-ca", "verify-full", "prefer", "allow":
+		return m
+	default:
+		return "require"
+	}
+}
+
+/**
+ * pgConnVal.
+ *
+ * Params:
+ *   v string - the v string
+ *
+ * Returns:
+ *   string - the resulting string
+ */
 func pgConnVal(v string) string {
 	v = strings.ReplaceAll(v, `\`, `\\`)
 	v = strings.ReplaceAll(v, `'`, `\'`)
 	return "'" + v + "'"
 }
 
+/**
+ * appDatabases.
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *
+ * Returns:
+ *   []string - the resulting []string
+ *   error - error value; non-nil when the operation fails
+ */
 func appDatabases(ctx context.Context, db *sql.DB) ([]string, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT datname FROM pg_database
@@ -448,6 +635,17 @@ func appDatabases(ctx context.Context, db *sql.DB) ([]string, error) {
 	return out, rows.Err()
 }
 
+/**
+ * appUsers.
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   db *sql.DB - the db (*sql.DB)
+ *
+ * Returns:
+ *   []string - the resulting []string
+ *   error - error value; non-nil when the operation fails
+ */
 func appUsers(ctx context.Context, db *sql.DB) ([]string, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT rolname FROM pg_roles
@@ -472,6 +670,25 @@ func appUsers(ctx context.Context, db *sql.DB) ([]string, error) {
 	return out, rows.Err()
 }
 
+/**
+ * grantInDatabase.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   host string - the host string
+ *   port int - the port value
+ *   dbname string - the dbname string
+ *   adminUser string - the adminUser string
+ *   adminPass string - the adminPass string
+ *   targetUser string - the targetUser string
+ *   peers []string - the peers ([]string)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) grantInDatabase(ctx context.Context, host string, port int,
 	dbname, adminUser, adminPass, targetUser string, peers []string) error {
 
@@ -504,6 +721,24 @@ func (s *Service) grantInDatabase(ctx context.Context, host string, port int,
 	return nil
 }
 
+/**
+ * revokeInDatabase.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   host string - the host string
+ *   port int - the port value
+ *   dbname string - the dbname string
+ *   adminUser string - the adminUser string
+ *   adminPass string - the adminPass string
+ *   targetUser string - the targetUser string
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) revokeInDatabase(ctx context.Context, host string, port int,
 	dbname, adminUser, adminPass, targetUser string) error {
 
@@ -709,6 +944,16 @@ func (s *Service) readPgHbaRules(ctx context.Context, host string, port int, use
 	return rules, rows.Err()
 }
 
+/**
+ * without.
+ *
+ * Params:
+ *   slice []string - the slice ([]string)
+ *   target string - the target string
+ *
+ * Returns:
+ *   []string - the resulting []string
+ */
 func without(slice []string, target string) []string {
 	out := make([]string, 0, len(slice))
 	for _, v := range slice {

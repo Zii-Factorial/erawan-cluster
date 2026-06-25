@@ -2,15 +2,19 @@ package pgsql
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
+
+	"erawan-cluster/internal/cluster/core"
 )
 
 type Service struct {
+	// ctx is the long-lived base context for background jobs, which intentionally
+	// outlive the originating HTTP request. It is set once at start-up via
+	// SetContext to the process signal context, so a shutdown cancels in-flight
+	// Ansible runs. It is never derived from a per-request context.
 	ctx              context.Context
 	store            *Store
 	runner           *Runner
@@ -18,18 +22,28 @@ type Service struct {
 	steps            []step
 	sshUser          string
 	sshKeyPath       string
+	launcher         *core.Launcher
 	start            func(func())
 	runDeployStep    func(context.Context, runConfig) StepResult
 	runAddMemberStep func(context.Context, memberRunConfig) StepResult
 	runRemMemberStep func(context.Context, memberRunConfig) StepResult
 }
 
-type step struct {
-	Name      string
-	Tag       string
-	Skippable bool
-}
+type step = core.Step
 
+// defaultMaxConcurrentJobs bounds concurrent background jobs until configured.
+const defaultMaxConcurrentJobs = 4
+
+/**
+ * NewService.
+ *
+ * Params:
+ *   store *Store - the store (*Store)
+ *   runner *Runner - the runner (*Runner)
+ *
+ * Returns:
+ *   *Service - the resulting *Service
+ */
 func NewService(store *Store, runner *Runner) *Service {
 	svc := &Service{
 		ctx:       context.Background(),
@@ -43,10 +57,12 @@ func NewService(store *Store, runner *Runner) *Service {
 			{Name: "standby_config", Tag: "standby_config"},
 			{Name: "cluster_bootstrap", Tag: "cluster_bootstrap"},
 			{Name: "verify_cluster", Tag: "verify_cluster"},
+			{Name: "setup_exporters", Tag: "setup_exporters"},
 			{Name: "init_app_db", Tag: "init_app_db", Skippable: true},
 		},
 	}
-	svc.start = func(fn func()) { go fn() }
+	svc.launcher = core.NewLauncher(defaultMaxConcurrentJobs)
+	svc.start = svc.launcher.Go
 	if runner != nil {
 		svc.runDeployStep = runner.RunDeployStep
 		svc.runAddMemberStep = runner.RunAddMember
@@ -55,10 +71,61 @@ func NewService(store *Store, runner *Runner) *Service {
 	return svc
 }
 
+/**
+ * SetContext.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ */
 func (s *Service) SetContext(ctx context.Context) {
 	s.ctx = ctx
 }
 
+/**
+ * SetMaxConcurrentJobs bounds how many background jobs run at once. It must be
+ * called at start-up, before any job is launched.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   n int - the n value
+ */
+func (s *Service) SetMaxConcurrentJobs(n int) {
+	s.launcher = core.NewLauncher(n)
+	s.start = s.launcher.Go
+}
+
+/**
+ * Wait blocks until all in-flight background jobs finish or ctx is done. Used
+ * during graceful shutdown to drain running jobs.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ */
+func (s *Service) Wait(ctx context.Context) {
+	s.launcher.Wait(ctx)
+}
+
+/**
+ * SetSSHConfig.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   user string - the user string
+ *   privateKeyPath string - the privateKeyPath string
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) SetSSHConfig(user, privateKeyPath string) error {
 	normalizedUser, normalizedKeyPath, err := ValidateServiceSSHConfig(user, privateKeyPath)
 	if err != nil {
@@ -69,6 +136,20 @@ func (s *Service) SetSSHConfig(user, privateKeyPath string) error {
 	return nil
 }
 
+/**
+ * Deploy.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req DeployRequest - the req (DeployRequest)
+ *
+ * Returns:
+ *   *Job - the resulting *Job
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 	_ = ctx
 	if err := ValidateDeployRequest(&req); err != nil {
@@ -113,6 +194,7 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 		ReplicatorPassword: stringOrGenerated(req.ReplicatorPassword),
 		AdminPassword:      stringOrGenerated(req.AdminPassword),
 		NewUserPassword:    req.NewUserPassword,
+		ExporterPassword:   stringOrGenerated(""),
 	}
 	if err := s.store.SaveSecret(job.ID, StoredSecret{
 		PostgresUser:       defaultPostgresSuperuser,
@@ -120,6 +202,7 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 		ReplicatorUser:     defaultReplicationUser,
 		ReplicatorPassword: secrets.ReplicatorPassword,
 		AdminPassword:      secrets.AdminPassword,
+		ExporterPassword:   secrets.ExporterPassword,
 	}); err != nil {
 		return nil, err
 	}
@@ -134,6 +217,21 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 	return job, nil
 }
 
+/**
+ * Resume.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   jobID string - the jobID string
+ *   req ResumeRequest - the req (ResumeRequest)
+ *
+ * Returns:
+ *   *Job - the resulting *Job
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (*Job, error) {
 	_ = ctx
 	secret, err := ValidateResumeSecrets(req)
@@ -149,7 +247,7 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 		return nil, err
 	}
 	if job.Status == JobStatusCompleted {
-		return nil, fmt.Errorf("job %s already completed", jobID)
+		return nil, fmt.Errorf("job %s already completed; use the recover endpoint to restart the cluster after an outage", jobID)
 	}
 	if job.Status == JobStatusRunning {
 		return nil, fmt.Errorf("job %s is already running", jobID)
@@ -165,7 +263,7 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 	if job.Request.NewUser != "" && secret.NewUserPassword == "" {
 		return nil, fmt.Errorf("new_user_password is required to resume job %s", jobID)
 	}
-	if secret.PostgresPassword == "" || secret.ReplicatorPassword == "" || secret.AdminPassword == "" {
+	if secret.PostgresPassword == "" || secret.ReplicatorPassword == "" || secret.AdminPassword == "" || secret.ExporterPassword == "" {
 		storedSecret, err := s.store.LoadSecret(job.ID)
 		if err == nil {
 			if secret.PostgresPassword == "" {
@@ -176,6 +274,9 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 			}
 			if secret.AdminPassword == "" {
 				secret.AdminPassword = storedSecret.AdminPassword
+			}
+			if secret.ExporterPassword == "" {
+				secret.ExporterPassword = storedSecret.ExporterPassword
 			}
 		}
 	}
@@ -188,12 +289,16 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 	if secret.AdminPassword == "" {
 		secret.AdminPassword = stringOrGenerated("")
 	}
+	if secret.ExporterPassword == "" {
+		secret.ExporterPassword = stringOrGenerated("")
+	}
 	if err := s.store.SaveSecret(job.ID, StoredSecret{
 		PostgresUser:       defaultPostgresSuperuser,
 		PostgresPassword:   secret.PostgresPassword,
 		ReplicatorUser:     defaultReplicationUser,
 		ReplicatorPassword: secret.ReplicatorPassword,
 		AdminPassword:      secret.AdminPassword,
+		ExporterPassword:   secret.ExporterPassword,
 	}); err != nil {
 		return nil, err
 	}
@@ -215,6 +320,158 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 	return job, nil
 }
 
+/**
+ * Recover launches a new recovery job against the cluster owned by jobID, running
+ * cluster_bootstrap and verify_cluster. Use after a complete datacenter outage:
+ * this re-registers the cluster in the DCS (etcd/consul) and restarts Patroni on
+ * all nodes without touching data directories. Stored secrets are used so no
+ * passwords are required at call time.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   jobID string - ID of the original completed or failed deploy job
+ *
+ * Returns:
+ *   *Job - the new running recovery job
+ *   error - error value; non-nil when the operation fails
+ */
+func (s *Service) Recover(ctx context.Context, jobID string) (*Job, error) {
+	_ = ctx
+	deployJob, err := s.store.Load(jobID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.hydrateStoredSSHConfig(deployJob); err != nil {
+		return nil, err
+	}
+	if deployJob.Status == JobStatusRunning {
+		return nil, fmt.Errorf("job %s is currently running; wait for it to finish before recovering", jobID)
+	}
+	if deployJob.Status == core.JobStatusRolledBack {
+		return nil, fmt.Errorf("job %s was rolled back; run a new deploy instead of recovering", jobID)
+	}
+
+	storedSecret, err := s.store.LoadSecret(jobID)
+	if err != nil {
+		return nil, fmt.Errorf("load job secret: %w", err)
+	}
+	secret := SecretInput{
+		PostgresPassword:   storedSecret.PostgresPassword,
+		ReplicatorPassword: storedSecret.ReplicatorPassword,
+		AdminPassword:      storedSecret.AdminPassword,
+		ExporterPassword:   storedSecret.ExporterPassword,
+	}
+
+	recoverySteps := s.recoveryStepsFor()
+	recoveryJob := &Job{
+		ID:                newJobID(),
+		Status:            JobStatusRunning,
+		CreatedAt:         time.Now().UTC(),
+		UpdatedAt:         time.Now().UTC(),
+		LastCompletedStep: -1,
+		Request:           deployJob.Request,
+		RecoveryOp:        &core.RecoveryOperation{SourceJobID: jobID},
+		Steps:             make([]StepResult, 0, len(recoverySteps)),
+	}
+	s.updateJobProgress(recoveryJob)
+	if err := s.store.Save(recoveryJob); err != nil {
+		return nil, err
+	}
+
+	bgJob, err := s.store.Load(recoveryJob.ID)
+	if err != nil {
+		return nil, err
+	}
+	bgDeployJob, err := s.store.Load(jobID)
+	if err != nil {
+		return nil, err
+	}
+	s.start(func() {
+		s.executeRecovery(s.ctx, bgJob, bgDeployJob, secret)
+	})
+	return recoveryJob, nil
+}
+
+// recoveryStepsFor returns the ordered Ansible steps for PostgreSQL post-outage
+// recovery: cluster_bootstrap re-registers in DCS and starts Patroni; verify_cluster
+// confirms the cluster is healthy. Both are safe to re-run on existing data.
+func (s *Service) recoveryStepsFor() []step {
+	return []step{
+		{Name: "cluster_bootstrap", Tag: "cluster_bootstrap"},
+		{Name: "verify_cluster", Tag: "verify_cluster"},
+	}
+}
+
+/**
+ * executeRecovery runs the recovery steps for a post-outage recovery job.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   recoveryJob *Job - the new recovery job being tracked
+ *   deployJob *Job - the original deploy job supplying the cluster configuration
+ *   secret SecretInput - the credentials to pass to Ansible
+ */
+func (s *Service) executeRecovery(ctx context.Context, recoveryJob *Job, deployJob *Job, secret SecretInput) {
+	timeout := time.Duration(deployJob.Request.StepTimeoutSeconds) * time.Second
+	recoverySteps := s.recoveryStepsFor()
+
+	for i, st := range recoverySteps {
+		recoveryJob.CurrentStep = st.Name
+		s.updateJobProgress(recoveryJob)
+		_ = s.store.Save(recoveryJob)
+
+		res := s.runDeploy(ctx, runConfig{
+			jobID:   deployJob.ID,
+			spec:    deployJob.Request,
+			secret:  secret,
+			step:    st,
+			timeout: timeout,
+		})
+		recoveryJob.Steps = append(recoveryJob.Steps, res)
+
+		if res.Status != JobStatusCompleted {
+			recoveryJob.Status = JobStatusFailed
+			recoveryJob.Error = res.Message
+			if recoveryJob.Error == "" {
+				recoveryJob.Error = fmt.Sprintf("recovery step %s failed", st.Name)
+			}
+			recoveryJob.LastCompletedStep = i - 1
+			recoveryJob.CurrentStep = ""
+			s.updateJobProgress(recoveryJob)
+			_ = s.store.Save(recoveryJob)
+			return
+		}
+		recoveryJob.LastCompletedStep = i
+		recoveryJob.Error = ""
+	}
+
+	recoveryJob.Status = JobStatusCompleted
+	recoveryJob.CurrentStep = ""
+	recoveryJob.Error = ""
+	s.updateJobProgress(recoveryJob)
+	_ = s.store.Save(recoveryJob)
+}
+
+/**
+ * AddMember.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req AddMemberRequest - the req (AddMemberRequest)
+ *
+ * Returns:
+ *   *Job - the resulting *Job
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) AddMember(ctx context.Context, req AddMemberRequest) (*Job, error) {
 	_ = ctx
 	if err := ValidateAddMemberRequest(&req); err != nil {
@@ -276,6 +533,20 @@ func (s *Service) AddMember(ctx context.Context, req AddMemberRequest) (*Job, er
 	return memberJob, nil
 }
 
+/**
+ * RemoveMember.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req RemoveMemberRequest - the req (RemoveMemberRequest)
+ *
+ * Returns:
+ *   *Job - the resulting *Job
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) RemoveMember(ctx context.Context, req RemoveMemberRequest) (*Job, error) {
 	_ = ctx
 	if err := ValidateRemoveMemberRequest(&req); err != nil {
@@ -341,6 +612,17 @@ func (s *Service) RemoveMember(ctx context.Context, req RemoveMemberRequest) (*J
 	return memberJob, nil
 }
 
+/**
+ * executeMemberAdd.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   memberJob *Job - the memberJob (*Job)
+ *   deployJob *Job - the deployJob (*Job)
+ */
 func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJob *Job) {
 	storedSecret, err := s.store.LoadSecret(deployJob.ID)
 	if err != nil {
@@ -388,12 +670,12 @@ func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJo
 	wg.Wait()
 
 	// Collect results; add successful nodes to the deploy job's standby list.
-	var failed []string
+	var failed, added []string
 	for i, result := range results {
 		memberJob.Steps = append(memberJob.Steps, result)
 		ip := newIPs[i]
 		if result.Status == JobStatusCompleted {
-			deployJob.Request.StandbyIPs = append(deployJob.Request.StandbyIPs, ip)
+			added = append(added, ip)
 		} else {
 			msg := result.Message
 			if msg == "" {
@@ -402,8 +684,14 @@ func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJo
 			failed = append(failed, msg)
 		}
 	}
+	// Re-read and persist the deploy job under the store lock so a concurrent
+	// member operation on the same cluster cannot clobber the standby list.
+	_ = s.store.Update(deployJob.ID, func(j *Job) error {
+		j.Request.StandbyIPs = append(j.Request.StandbyIPs, added...)
+		deployJob.Request.StandbyIPs = j.Request.StandbyIPs
+		return nil
+	})
 	memberJob.Request.StandbyIPs = deployJob.Request.StandbyIPs
-	_ = s.store.Save(deployJob)
 
 	memberJob.CurrentStep = ""
 	if len(failed) > 0 {
@@ -420,6 +708,18 @@ func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJo
 	_ = s.store.Save(memberJob)
 }
 
+/**
+ * executeMemberRemove.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   memberJob *Job - the memberJob (*Job)
+ *   deployJob *Job - the deployJob (*Job)
+ *   force bool - the force flag
+ */
 func (s *Service) executeMemberRemove(ctx context.Context, memberJob *Job, deployJob *Job, force bool) {
 	storedSecret, err := s.store.LoadSecret(deployJob.ID)
 	if err != nil {
@@ -452,15 +752,14 @@ func (s *Service) executeMemberRemove(ctx context.Context, memberJob *Job, deplo
 	memberJob.Steps = append(memberJob.Steps, result)
 
 	if result.Status == JobStatusCompleted {
-		updated := make([]string, 0, len(deployJob.Request.StandbyIPs))
-		for _, existingIP := range deployJob.Request.StandbyIPs {
-			if existingIP != ip {
-				updated = append(updated, existingIP)
-			}
-		}
-		deployJob.Request.StandbyIPs = updated
-		memberJob.Request.StandbyIPs = updated
-		_ = s.store.Save(deployJob)
+		// Re-read and persist the deploy job under the store lock so a concurrent
+		// member operation on the same cluster cannot clobber the standby list.
+		_ = s.store.Update(deployJob.ID, func(j *Job) error {
+			j.Request.StandbyIPs = without(j.Request.StandbyIPs, ip)
+			deployJob.Request.StandbyIPs = j.Request.StandbyIPs
+			return nil
+		})
+		memberJob.Request.StandbyIPs = deployJob.Request.StandbyIPs
 		memberJob.Status = JobStatusCompleted
 		memberJob.Error = ""
 	} else {
@@ -475,6 +774,19 @@ func (s *Service) executeMemberRemove(ctx context.Context, memberJob *Job, deplo
 	_ = s.store.Save(memberJob)
 }
 
+/**
+ * doAddMember.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   cfg memberRunConfig - the cfg (memberRunConfig)
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
 func (s *Service) doAddMember(ctx context.Context, cfg memberRunConfig) StepResult {
 	if s.runAddMemberStep == nil {
 		return StepResult{
@@ -489,6 +801,19 @@ func (s *Service) doAddMember(ctx context.Context, cfg memberRunConfig) StepResu
 	return s.runAddMemberStep(ctx, cfg)
 }
 
+/**
+ * doRemoveMember.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   cfg memberRunConfig - the cfg (memberRunConfig)
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
 func (s *Service) doRemoveMember(ctx context.Context, cfg memberRunConfig) StepResult {
 	if s.runRemMemberStep == nil {
 		return StepResult{
@@ -503,16 +828,19 @@ func (s *Service) doRemoveMember(ctx context.Context, cfg memberRunConfig) StepR
 	return s.runRemMemberStep(ctx, cfg)
 }
 
-func stepError(result StepResult) error {
-	if result.Status != JobStatusCompleted {
-		if result.Message != "" {
-			return fmt.Errorf("%s", result.Message)
-		}
-		return fmt.Errorf("step %s failed", result.Name)
-	}
-	return nil
-}
-
+/**
+ * Get.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   jobID string - the jobID string
+ *
+ * Returns:
+ *   *Job - the resulting *Job
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) Get(jobID string) (*Job, error) {
 	job, err := s.store.Load(jobID)
 	if err != nil {
@@ -522,6 +850,19 @@ func (s *Service) Get(jobID string) (*Job, error) {
 	return job, nil
 }
 
+/**
+ * GetSecret.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   jobID string - the jobID string
+ *
+ * Returns:
+ *   *StoredSecret - the resulting *StoredSecret
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) GetSecret(jobID string) (*StoredSecret, error) {
 	secret, err := s.store.LoadSecret(jobID)
 	if err != nil {
@@ -530,6 +871,19 @@ func (s *Service) GetSecret(jobID string) (*StoredSecret, error) {
 	return &secret, nil
 }
 
+/**
+ * List.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   limit int - the limit value
+ *
+ * Returns:
+ *   []Job - the resulting []Job
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) List(limit int) ([]Job, error) {
 	jobs, err := s.store.List(limit)
 	if err != nil {
@@ -541,6 +895,18 @@ func (s *Service) List(limit int) ([]Job, error) {
 	return jobs, nil
 }
 
+/**
+ * hydrateStoredSSHConfig.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   job *Job - the job (*Job)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) hydrateStoredSSHConfig(job *Job) error {
 	if s.sshUser == "" || s.sshKeyPath == "" {
 		return fmt.Errorf("ssh service configuration is incomplete")
@@ -556,6 +922,21 @@ func (s *Service) hydrateStoredSSHConfig(job *Job) error {
 	return nil
 }
 
+/**
+ * executeFrom.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   job *Job - the job (*Job)
+ *   startIndex int - the startIndex value
+ *   secret SecretInput - the secret (SecretInput)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) executeFrom(ctx context.Context, job *Job, startIndex int, secret SecretInput) error {
 	timeout := time.Duration(job.Request.StepTimeoutSeconds) * time.Second
 	for i := startIndex; i < len(s.steps); i++ {
@@ -622,6 +1003,19 @@ func (s *Service) executeFrom(ctx context.Context, job *Job, startIndex int, sec
 	return nil
 }
 
+/**
+ * runDeploy.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   cfg runConfig - the cfg (runConfig)
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
 func (s *Service) runDeploy(ctx context.Context, cfg runConfig) StepResult {
 	if s.runDeployStep == nil {
 		return StepResult{
@@ -636,10 +1030,41 @@ func (s *Service) runDeploy(ctx context.Context, cfg runConfig) StepResult {
 	return s.runDeployStep(ctx, cfg)
 }
 
+/**
+ * CollectMetrics.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req MetricRequest - the req (MetricRequest)
+ *
+ * Returns:
+ *   MetricResponse - the resulting MetricResponse
+ */
 func (s *Service) CollectMetrics(ctx context.Context, req MetricRequest) MetricResponse {
 	return s.collector.Collect(ctx, req)
 }
 
+/**
+ * ConnectionInfo.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   jobID string - the jobID string
+ *
+ * Returns:
+ *   host string - the host string
+ *   port int - the port value
+ *   user string - the user string
+ *   password string - the password string
+ *   nodeIPs []string - the nodeIPs ([]string)
+ *   err error - error value; non-nil when the operation fails
+ */
 func (s *Service) ConnectionInfo(ctx context.Context, jobID string) (host string, port int, user, password string, nodeIPs []string, err error) {
 	job, err := s.store.Load(jobID)
 	if err != nil {
@@ -657,26 +1082,38 @@ func (s *Service) ConnectionInfo(ctx context.Context, jobID string) (host string
 	return job.Request.PrimaryIP, p, secret.PostgresUser, secret.PostgresPassword, ips, nil
 }
 
+/**
+ * updateJobProgress.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   job *Job - the job (*Job)
+ */
 func (s *Service) updateJobProgress(job *Job) {
+	total := s.totalStepsFor(job.Request)
 	if job.MemberOp != nil {
-		job.TotalSteps = len(job.MemberOp.MemberIPs)
-	} else {
-		job.TotalSteps = s.totalStepsFor(job.Request)
+		total = len(job.MemberOp.MemberIPs)
 	}
-	job.CompletedSteps = completedSteps(job)
-	if job.Status == JobStatusCompleted && job.TotalSteps > 0 {
-		job.CompletedSteps = job.TotalSteps
+	if job.RecoveryOp != nil {
+		total = len(s.recoveryStepsFor())
 	}
-	if job.CompletedSteps > job.TotalSteps {
-		job.CompletedSteps = job.TotalSteps
-	}
-	if job.CompletedSteps < 0 || job.TotalSteps == 0 {
-		job.ProgressPercent = 0
-		return
-	}
-	job.ProgressPercent = job.CompletedSteps * 100 / job.TotalSteps
+	core.ApplyProgress(job, total)
 }
 
+/**
+ * totalStepsFor.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   spec StoredSpec - the spec (StoredSpec)
+ *
+ * Returns:
+ *   int - the resulting integer
+ */
 func (s *Service) totalStepsFor(spec StoredSpec) int {
 	total := 0
 	for _, st := range s.steps {
@@ -688,16 +1125,17 @@ func (s *Service) totalStepsFor(spec StoredSpec) int {
 	return total
 }
 
-func completedSteps(job *Job) int {
-	count := 0
-	for _, step := range job.Steps {
-		if step.Status == JobStatusCompleted {
-			count++
-		}
-	}
-	return count
-}
-
+/**
+ * shouldSkipStep.
+ *
+ * Params:
+ *   st step - the st (step)
+ *   spec StoredSpec - the spec (StoredSpec)
+ *
+ * Returns:
+ *   string - the resulting string
+ *   bool - boolean result
+ */
 func shouldSkipStep(st step, spec StoredSpec) (string, bool) {
 	if st.Name == "standby_config" && len(spec.StandbyIPs) == 0 {
 		return "standby_ips is empty", true
@@ -708,17 +1146,41 @@ func shouldSkipStep(st step, spec StoredSpec) (string, bool) {
 	return "", false
 }
 
-func newJobID() string {
-	raw := make([]byte, 12)
-	_, _ = rand.Read(raw)
-	return hex.EncodeToString(raw)
+/**
+ * without returns slice with every occurrence of target removed.
+ *
+ * Params:
+ *   slice []string - the slice ([]string)
+ *   target string - the target string
+ *
+ * Returns:
+ *   []string - the resulting []string
+ */
+func without(slice []string, target string) []string {
+	out := make([]string, 0, len(slice))
+	for _, v := range slice {
+		if v != target {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
-func stringOrGenerated(value string) string {
-	if value != "" {
-		return value
-	}
-	raw := make([]byte, 24)
-	_, _ = rand.Read(raw)
-	return hex.EncodeToString(raw)
-}
+/**
+ * newJobID.
+ *
+ * Returns:
+ *   string - the resulting string
+ */
+func newJobID() string { return core.NewJobID() }
+
+/**
+ * stringOrGenerated.
+ *
+ * Params:
+ *   value string - the value string
+ *
+ * Returns:
+ *   string - the resulting string
+ */
+func stringOrGenerated(value string) string { return core.OrRandomSecret(value) }

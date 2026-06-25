@@ -162,7 +162,7 @@ Deploy a MySQL InnoDB Cluster. Returns immediately with a job ID; the deployment
 | `admin_password` | string | yes | Password for the admin user |
 | `new_user` | string | no | Application user to create |
 | `new_user_password` | string | no | Password for the application user |
-| `new_user_ssl_required` | bool | no | Require SSL for the application user (default `false`) |
+| `new_user_ssl_required` | bool | no | Require SSL for the application user. Omit to use default (`true`) |
 | `new_user_superuser` | bool | no | `true` = grant `ALL PRIVILEGES ON *.*` + all dynamic privileges (full server-level superuser). `false` = `ALL PRIVILEGES ON new_db.*` only. Default `true` |
 | `new_db` | string | no | Application database to create |
 | `assume_prepared` | bool | no | Skip node preparation steps if already prepared (default `false`) |
@@ -410,7 +410,7 @@ Connects as the **cluster admin** user (`clusteradmin`) resolved from the deploy
 | `username` | string | yes | New user name |
 | `password` | string | yes | Password |
 | `superuser` | bool | no | `true` = `GRANT ALL PRIVILEGES ON *.*` + all dynamic privileges (same as deploy-time superuser). `false` = scoped grants on `database` only. Default `false` |
-| `ssl_required` | bool | no | Require SSL (`REQUIRE SSL`) for this user (default `false`) |
+| `ssl_required` | bool | no | Require SSL (`REQUIRE SSL`) for this user. Omit to use default (`true`) |
 | `database` | string | no | Database to grant scoped access on (ignored when `superuser: true`) |
 
 **Protection rules** — the following users cannot be deleted or renamed via this API:
@@ -667,7 +667,7 @@ Connects as the **`postgres`** superuser resolved from the deploy job.
 | `username` | string | yes | New role name |
 | `password` | string | yes | Password |
 | `superuser` | bool | no | `true` = `LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS` (same as deploy-time superuser). `false` = `LOGIN NOSUPERUSER NOCREATEROLE INHERIT` scoped to `database`. Default `false` |
-| `ssl_required` | bool | no | `true` = `hostssl` + `hostnossl reject` rule in `pg_hba.conf`. `false` = plain `host` rule. Patroni DCS is patched automatically. Default `false` |
+| `ssl_required` | bool | no | `true` = `hostssl` + `hostnossl reject` rule in `pg_hba.conf`. `false` = plain `host` rule. Patroni DCS is patched automatically. Omit to use default (`true`) |
 | `database` | string | no | Database to grant scoped access on (ignored when `superuser: true`) |
 
 **Protection rules** — the following roles cannot be deleted or renamed via this API:

@@ -2,33 +2,47 @@ package mysql
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"time"
+
+	"erawan-cluster/internal/cluster/core"
 )
 
 type Service struct {
-	ctx               context.Context
-	store             *Store
-	runner            *Runner
-	collector         *Collector
-	steps             []step
-	sshUser           string
-	sshKeyPath        string
-	start             func(func())
-	runDeployStep     func(context.Context, runConfig) StepResult
-	runRollbackStep   func(context.Context, string, StoredSpec, SecretInput, time.Duration) StepResult
-	runAddMemberStep  func(context.Context, memberRunConfig) StepResult
-	runRemMemberStep  func(context.Context, memberRunConfig) StepResult
+	// ctx is the long-lived base context for background jobs, which intentionally
+	// outlive the originating HTTP request. It is set once at start-up via
+	// SetContext to the process signal context, so a shutdown cancels in-flight
+	// Ansible runs. It is never derived from a per-request context.
+	ctx              context.Context
+	store            *Store
+	runner           *Runner
+	collector        *Collector
+	steps            []step
+	sshUser          string
+	sshKeyPath       string
+	launcher         *core.Launcher
+	start            func(func())
+	runDeployStep    func(context.Context, runConfig) StepResult
+	runRollbackStep  func(context.Context, string, StoredSpec, SecretInput, time.Duration) StepResult
+	runAddMemberStep func(context.Context, memberRunConfig) StepResult
+	runRemMemberStep func(context.Context, memberRunConfig) StepResult
 }
 
-type step struct {
-	Name      string
-	Tag       string
-	Skippable bool
-}
+// defaultMaxConcurrentJobs bounds concurrent background jobs until configured.
+const defaultMaxConcurrentJobs = 4
 
+type step = core.Step
+
+/**
+ * NewService.
+ *
+ * Params:
+ *   store *Store - the store (*Store)
+ *   runner *Runner - the runner (*Runner)
+ *
+ * Returns:
+ *   *Service - the resulting *Service
+ */
 func NewService(store *Store, runner *Runner) *Service {
 	svc := &Service{
 		ctx:       context.Background(),
@@ -47,7 +61,8 @@ func NewService(store *Store, runner *Runner) *Service {
 			{Name: "bootstrap_router", Tag: "bootstrap_router", Skippable: true},
 		},
 	}
-	svc.start = func(fn func()) { go fn() }
+	svc.launcher = core.NewLauncher(defaultMaxConcurrentJobs)
+	svc.start = svc.launcher.Go
 	if runner != nil {
 		svc.runDeployStep = runner.RunDeployStep
 		svc.runRollbackStep = runner.RunRollback
@@ -57,10 +72,61 @@ func NewService(store *Store, runner *Runner) *Service {
 	return svc
 }
 
+/**
+ * SetContext.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ */
 func (s *Service) SetContext(ctx context.Context) {
 	s.ctx = ctx
 }
 
+/**
+ * SetMaxConcurrentJobs bounds how many background jobs run at once. It must be
+ * called at start-up, before any job is launched.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   n int - the n value
+ */
+func (s *Service) SetMaxConcurrentJobs(n int) {
+	s.launcher = core.NewLauncher(n)
+	s.start = s.launcher.Go
+}
+
+/**
+ * Wait blocks until all in-flight background jobs finish or ctx is done. Used
+ * during graceful shutdown to drain running jobs.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ */
+func (s *Service) Wait(ctx context.Context) {
+	s.launcher.Wait(ctx)
+}
+
+/**
+ * SetSSHConfig.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   user string - the user string
+ *   privateKeyPath string - the privateKeyPath string
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) SetSSHConfig(user, privateKeyPath string) error {
 	normalizedUser, normalizedKeyPath, err := ValidateServiceSSHConfig(user, privateKeyPath)
 	if err != nil {
@@ -71,6 +137,20 @@ func (s *Service) SetSSHConfig(user, privateKeyPath string) error {
 	return nil
 }
 
+/**
+ * Deploy.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req DeployRequest - the req (DeployRequest)
+ *
+ * Returns:
+ *   *Job - the resulting *Job
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 	_ = ctx
 	if err := ValidateDeployRequest(&req); err != nil {
@@ -87,22 +167,22 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 		UpdatedAt:         time.Now().UTC(),
 		LastCompletedStep: -1,
 		Request: StoredSpec{
-			AdminUsername: req.AdminUsername,
-			ClusterName:          req.ClusterName,
-			PrimaryIP:            req.PrimaryIP,
-			StandbyIPs:           req.StandbyIPs,
-			NewUser:              req.NewUser,
-			NewUserSSLRequired:   req.NewUserSSLRequiredEnabled(),
-			NewUserSuperuser:     req.NewUserSuperuser,
-			NewDB:                req.NewDB,
-			AssumePrepared:       req.AssumePrepared,
-			BootstrapRouter:      req.BootstrapRouterEnabled(),
-			SSHUser:              s.sshUser,
-			SSHPrivateKeyPath:    s.sshKeyPath,
-			SSHPort:              req.SSHPort,
-			MySQLPort:            req.MySQLPort,
-			MySQLVersion:         req.MySQLVersion,
-			StepTimeoutSeconds:   req.StepTimeoutSeconds,
+			AdminUsername:      req.AdminUsername,
+			ClusterName:        req.ClusterName,
+			PrimaryIP:          req.PrimaryIP,
+			StandbyIPs:         req.StandbyIPs,
+			NewUser:            req.NewUser,
+			NewUserSSLRequired: req.NewUserSSLRequiredEnabled(),
+			NewUserSuperuser:   req.NewUserSuperuser,
+			NewDB:              req.NewDB,
+			AssumePrepared:     req.AssumePrepared,
+			BootstrapRouter:    req.BootstrapRouterEnabled(),
+			SSHUser:            s.sshUser,
+			SSHPrivateKeyPath:  s.sshKeyPath,
+			SSHPort:            req.SSHPort,
+			MySQLPort:          req.MySQLPort,
+			MySQLVersion:       req.MySQLVersion,
+			StepTimeoutSeconds: req.StepTimeoutSeconds,
 		},
 		Steps: make([]StepResult, 0, len(s.steps)+1),
 	}
@@ -113,9 +193,9 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 	}
 
 	secrets := SecretInput{
-		RootPassword:         req.RootPassword,
-		AdminPassword: stringOrGenerated(req.AdminPassword),
-		NewUserPassword:      req.NewUserPassword,
+		RootPassword:    req.RootPassword,
+		AdminPassword:   stringOrGenerated(req.AdminPassword),
+		NewUserPassword: req.NewUserPassword,
 	}
 	if err := s.store.SaveSecret(job.ID, StoredSecret{AdminUser: req.AdminUsername, AdminPassword: secrets.AdminPassword}); err != nil {
 		return nil, err
@@ -131,6 +211,21 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 	return job, nil
 }
 
+/**
+ * Resume.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   jobID string - the jobID string
+ *   req ResumeRequest - the req (ResumeRequest)
+ *
+ * Returns:
+ *   *Job - the resulting *Job
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (*Job, error) {
 	_ = ctx
 	secret, err := ValidateResumeSecrets(req)
@@ -146,10 +241,10 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 		return nil, err
 	}
 	if job.Status == JobStatusCompleted {
-		return nil, fmt.Errorf("job %s already completed", jobID)
+		return nil, fmt.Errorf("job %s already completed; use the recover endpoint to restart the cluster after an outage", jobID)
 	}
 	if job.Status == JobStatusRolledBack {
-		return nil, fmt.Errorf("job %s already rolled back", jobID)
+		return nil, fmt.Errorf("job %s already rolled back; run a new deploy instead", jobID)
 	}
 	if job.Status == JobStatusRunning {
 		return nil, fmt.Errorf("job %s is already running", jobID)
@@ -195,6 +290,169 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 	return job, nil
 }
 
+/**
+ * Recover launches a new recovery job against the cluster owned by jobID, running
+ * the boot_recovery Ansible step (and bootstrap_router when configured). Use after
+ * a complete datacenter outage: MySQL InnoDB Cluster cannot reform automatically
+ * without dba.rebootClusterFromCompleteOutage(), which this step executes. The
+ * stored secret is used so no passwords are required at call time.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   jobID string - ID of the original completed or failed deploy job
+ *
+ * Returns:
+ *   *Job - the new running recovery job
+ *   error - error value; non-nil when the operation fails
+ */
+func (s *Service) Recover(ctx context.Context, jobID string) (*Job, error) {
+	_ = ctx
+	deployJob, err := s.store.Load(jobID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.hydrateStoredSSHConfig(deployJob); err != nil {
+		return nil, err
+	}
+	if deployJob.Status == JobStatusRunning {
+		return nil, fmt.Errorf("job %s is currently running; wait for it to finish before recovering", jobID)
+	}
+	if deployJob.Status == JobStatusRolledBack {
+		return nil, fmt.Errorf("job %s was rolled back; run a new deploy instead of recovering", jobID)
+	}
+
+	storedSecret, err := s.store.LoadSecret(jobID)
+	if err != nil {
+		return nil, fmt.Errorf("load job secret: %w", err)
+	}
+	secret := SecretInput{AdminPassword: storedSecret.AdminPassword}
+
+	recoverySteps := s.recoveryStepsFor(deployJob.Request)
+	recoveryJob := &Job{
+		ID:                newJobID(),
+		Status:            JobStatusRunning,
+		CreatedAt:         time.Now().UTC(),
+		UpdatedAt:         time.Now().UTC(),
+		LastCompletedStep: -1,
+		Request:           deployJob.Request,
+		RecoveryOp:        &core.RecoveryOperation{SourceJobID: jobID},
+		Steps:             make([]StepResult, 0, len(recoverySteps)),
+	}
+	s.updateJobProgress(recoveryJob)
+	if err := s.store.Save(recoveryJob); err != nil {
+		return nil, err
+	}
+
+	bgJob, err := s.store.Load(recoveryJob.ID)
+	if err != nil {
+		return nil, err
+	}
+	bgDeployJob, err := s.store.Load(jobID)
+	if err != nil {
+		return nil, err
+	}
+	s.start(func() {
+		s.executeRecovery(s.ctx, bgJob, bgDeployJob, secret)
+	})
+	return recoveryJob, nil
+}
+
+/**
+ * recoveryStepsFor returns the ordered Ansible steps to run for a post-outage
+ * recovery: always boot_recovery, plus bootstrap_router when configured.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   spec StoredSpec - the stored deploy specification
+ *
+ * Returns:
+ *   []step - ordered recovery steps
+ */
+func (s *Service) recoveryStepsFor(spec StoredSpec) []step {
+	steps := []step{{Name: "boot_recovery", Tag: "boot_recovery"}}
+	for _, st := range s.steps {
+		if st.Name == "bootstrap_router" {
+			if _, skip := shouldSkipStep(st, spec); !skip {
+				steps = append(steps, st)
+			}
+		}
+	}
+	return steps
+}
+
+/**
+ * executeRecovery runs the recovery steps for a post-outage recovery job.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   recoveryJob *Job - the new recovery job being tracked
+ *   deployJob *Job - the original deploy job supplying the cluster configuration
+ *   secret SecretInput - the credentials to pass to Ansible
+ */
+func (s *Service) executeRecovery(ctx context.Context, recoveryJob *Job, deployJob *Job, secret SecretInput) {
+	timeout := time.Duration(deployJob.Request.StepTimeoutSeconds) * time.Second
+	recoverySteps := s.recoveryStepsFor(deployJob.Request)
+
+	for i, st := range recoverySteps {
+		recoveryJob.CurrentStep = st.Name
+		s.updateJobProgress(recoveryJob)
+		_ = s.store.Save(recoveryJob)
+
+		res := s.runDeploy(ctx, runConfig{
+			jobID:   deployJob.ID,
+			spec:    deployJob.Request,
+			secret:  secret,
+			step:    st,
+			timeout: timeout,
+		})
+		recoveryJob.Steps = append(recoveryJob.Steps, res)
+
+		if res.Status != JobStatusCompleted {
+			recoveryJob.Status = JobStatusFailed
+			recoveryJob.Error = res.Message
+			if recoveryJob.Error == "" {
+				recoveryJob.Error = fmt.Sprintf("recovery step %s failed", st.Name)
+			}
+			recoveryJob.LastCompletedStep = i - 1
+			recoveryJob.CurrentStep = ""
+			s.updateJobProgress(recoveryJob)
+			_ = s.store.Save(recoveryJob)
+			return
+		}
+		recoveryJob.LastCompletedStep = i
+		recoveryJob.Error = ""
+	}
+
+	recoveryJob.Status = JobStatusCompleted
+	recoveryJob.CurrentStep = ""
+	recoveryJob.Error = ""
+	s.updateJobProgress(recoveryJob)
+	_ = s.store.Save(recoveryJob)
+}
+
+/**
+ * Rollback.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   jobID string - the jobID string
+ *   req RollbackRequest - the req (RollbackRequest)
+ *
+ * Returns:
+ *   *Job - the resulting *Job
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) Rollback(ctx context.Context, jobID string, req RollbackRequest) (*Job, error) {
 	secret, err := ValidateRollbackSecrets(req)
 	if err != nil {
@@ -229,6 +487,20 @@ func (s *Service) Rollback(ctx context.Context, jobID string, req RollbackReques
 	return job, nil
 }
 
+/**
+ * AddMember.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req AddMemberRequest - the req (AddMemberRequest)
+ *
+ * Returns:
+ *   *Job - the resulting *Job
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) AddMember(ctx context.Context, req AddMemberRequest) (*Job, error) {
 	_ = ctx
 	if err := ValidateAddMemberRequest(&req); err != nil {
@@ -290,6 +562,20 @@ func (s *Service) AddMember(ctx context.Context, req AddMemberRequest) (*Job, er
 	return memberJob, nil
 }
 
+/**
+ * RemoveMember.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req RemoveMemberRequest - the req (RemoveMemberRequest)
+ *
+ * Returns:
+ *   *Job - the resulting *Job
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) RemoveMember(ctx context.Context, req RemoveMemberRequest) (*Job, error) {
 	_ = ctx
 	if err := ValidateRemoveMemberRequest(&req); err != nil {
@@ -355,6 +641,17 @@ func (s *Service) RemoveMember(ctx context.Context, req RemoveMemberRequest) (*J
 	return memberJob, nil
 }
 
+/**
+ * executeMemberAdd.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   memberJob *Job - the memberJob (*Job)
+ *   deployJob *Job - the deployJob (*Job)
+ */
 func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJob *Job) {
 	storedSecret, err := s.store.LoadSecret(deployJob.ID)
 	if err != nil {
@@ -382,9 +679,15 @@ func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJo
 		memberJob.Steps = append(memberJob.Steps, result)
 
 		if result.Status == JobStatusCompleted {
-			deployJob.Request.StandbyIPs = append(deployJob.Request.StandbyIPs, ip)
+			// Re-read and persist the deploy job under the store lock so a
+			// concurrent member operation on the same cluster cannot clobber the
+			// standby list.
+			_ = s.store.Update(deployJob.ID, func(j *Job) error {
+				j.Request.StandbyIPs = append(j.Request.StandbyIPs, ip)
+				deployJob.Request.StandbyIPs = j.Request.StandbyIPs
+				return nil
+			})
 			memberJob.Request.StandbyIPs = deployJob.Request.StandbyIPs
-			_ = s.store.Save(deployJob)
 		} else {
 			memberJob.Status = JobStatusFailed
 			memberJob.Error = result.Message
@@ -405,6 +708,18 @@ func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJo
 	_ = s.store.Save(memberJob)
 }
 
+/**
+ * executeMemberRemove.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   memberJob *Job - the memberJob (*Job)
+ *   deployJob *Job - the deployJob (*Job)
+ *   force bool - the force flag
+ */
 func (s *Service) executeMemberRemove(ctx context.Context, memberJob *Job, deployJob *Job, force bool) {
 	storedSecret, err := s.store.LoadSecret(deployJob.ID)
 	if err != nil {
@@ -433,15 +748,14 @@ func (s *Service) executeMemberRemove(ctx context.Context, memberJob *Job, deplo
 	memberJob.Steps = append(memberJob.Steps, result)
 
 	if result.Status == JobStatusCompleted {
-		updated := make([]string, 0, len(deployJob.Request.StandbyIPs))
-		for _, existingIP := range deployJob.Request.StandbyIPs {
-			if existingIP != ip {
-				updated = append(updated, existingIP)
-			}
-		}
-		deployJob.Request.StandbyIPs = updated
-		memberJob.Request.StandbyIPs = updated
-		_ = s.store.Save(deployJob)
+		// Re-read and persist the deploy job under the store lock so a concurrent
+		// member operation on the same cluster cannot clobber the standby list.
+		_ = s.store.Update(deployJob.ID, func(j *Job) error {
+			j.Request.StandbyIPs = without(j.Request.StandbyIPs, ip)
+			deployJob.Request.StandbyIPs = j.Request.StandbyIPs
+			return nil
+		})
+		memberJob.Request.StandbyIPs = deployJob.Request.StandbyIPs
 		memberJob.Status = JobStatusCompleted
 		memberJob.Error = ""
 	} else {
@@ -456,6 +770,19 @@ func (s *Service) executeMemberRemove(ctx context.Context, memberJob *Job, deplo
 	_ = s.store.Save(memberJob)
 }
 
+/**
+ * doAddMember.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   cfg memberRunConfig - the cfg (memberRunConfig)
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
 func (s *Service) doAddMember(ctx context.Context, cfg memberRunConfig) StepResult {
 	if s.runAddMemberStep == nil {
 		return StepResult{
@@ -470,6 +797,19 @@ func (s *Service) doAddMember(ctx context.Context, cfg memberRunConfig) StepResu
 	return s.runAddMemberStep(ctx, cfg)
 }
 
+/**
+ * doRemoveMember.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   cfg memberRunConfig - the cfg (memberRunConfig)
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
 func (s *Service) doRemoveMember(ctx context.Context, cfg memberRunConfig) StepResult {
 	if s.runRemMemberStep == nil {
 		return StepResult{
@@ -484,16 +824,19 @@ func (s *Service) doRemoveMember(ctx context.Context, cfg memberRunConfig) StepR
 	return s.runRemMemberStep(ctx, cfg)
 }
 
-func stepError(result StepResult) error {
-	if result.Status != JobStatusCompleted {
-		if result.Message != "" {
-			return fmt.Errorf("%s", result.Message)
-		}
-		return fmt.Errorf("step %s failed", result.Name)
-	}
-	return nil
-}
-
+/**
+ * Get.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   jobID string - the jobID string
+ *
+ * Returns:
+ *   *Job - the resulting *Job
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) Get(jobID string) (*Job, error) {
 	job, err := s.store.Load(jobID)
 	if err != nil {
@@ -503,6 +846,19 @@ func (s *Service) Get(jobID string) (*Job, error) {
 	return job, nil
 }
 
+/**
+ * GetSecret.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   jobID string - the jobID string
+ *
+ * Returns:
+ *   *StoredSecret - the resulting *StoredSecret
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) GetSecret(jobID string) (*StoredSecret, error) {
 	secret, err := s.store.LoadSecret(jobID)
 	if err != nil {
@@ -511,6 +867,19 @@ func (s *Service) GetSecret(jobID string) (*StoredSecret, error) {
 	return &secret, nil
 }
 
+/**
+ * List.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   limit int - the limit value
+ *
+ * Returns:
+ *   []Job - the resulting []Job
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) List(limit int) ([]Job, error) {
 	jobs, err := s.store.List(limit)
 	if err != nil {
@@ -522,6 +891,18 @@ func (s *Service) List(limit int) ([]Job, error) {
 	return jobs, nil
 }
 
+/**
+ * hydrateStoredSSHConfig.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   job *Job - the job (*Job)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) hydrateStoredSSHConfig(job *Job) error {
 	if s.sshUser == "" || s.sshKeyPath == "" {
 		return fmt.Errorf("ssh service configuration is incomplete")
@@ -537,6 +918,21 @@ func (s *Service) hydrateStoredSSHConfig(job *Job) error {
 	return nil
 }
 
+/**
+ * executeFrom.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   job *Job - the job (*Job)
+ *   startIndex int - the startIndex value
+ *   secret SecretInput - the secret (SecretInput)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) executeFrom(ctx context.Context, job *Job, startIndex int, secret SecretInput) error {
 	timeout := time.Duration(job.Request.StepTimeoutSeconds) * time.Second
 	for i := startIndex; i < len(s.steps); i++ {
@@ -603,6 +999,19 @@ func (s *Service) executeFrom(ctx context.Context, job *Job, startIndex int, sec
 	return nil
 }
 
+/**
+ * runDeploy.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   cfg runConfig - the cfg (runConfig)
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
 func (s *Service) runDeploy(ctx context.Context, cfg runConfig) StepResult {
 	if s.runDeployStep == nil {
 		return StepResult{
@@ -617,6 +1026,22 @@ func (s *Service) runDeploy(ctx context.Context, cfg runConfig) StepResult {
 	return s.runDeployStep(ctx, cfg)
 }
 
+/**
+ * runRollback.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   jobID string - the jobID string
+ *   spec StoredSpec - the spec (StoredSpec)
+ *   secret SecretInput - the secret (SecretInput)
+ *   timeout time.Duration - the timeout (time.Duration)
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
 func (s *Service) runRollback(ctx context.Context, jobID string, spec StoredSpec, secret SecretInput, timeout time.Duration) StepResult {
 	if s.runRollbackStep == nil {
 		return StepResult{
@@ -631,26 +1056,38 @@ func (s *Service) runRollback(ctx context.Context, jobID string, spec StoredSpec
 	return s.runRollbackStep(ctx, jobID, spec, secret, timeout)
 }
 
+/**
+ * updateJobProgress.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   job *Job - the job (*Job)
+ */
 func (s *Service) updateJobProgress(job *Job) {
+	total := s.totalStepsFor(job.Request)
 	if job.MemberOp != nil {
-		job.TotalSteps = len(job.MemberOp.MemberIPs)
-	} else {
-		job.TotalSteps = s.totalStepsFor(job.Request)
+		total = len(job.MemberOp.MemberIPs)
 	}
-	job.CompletedSteps = completedSteps(job)
-	if job.Status == JobStatusCompleted && job.TotalSteps > 0 {
-		job.CompletedSteps = job.TotalSteps
+	if job.RecoveryOp != nil {
+		total = len(s.recoveryStepsFor(job.Request))
 	}
-	if job.CompletedSteps > job.TotalSteps {
-		job.CompletedSteps = job.TotalSteps
-	}
-	if job.CompletedSteps < 0 || job.TotalSteps == 0 {
-		job.ProgressPercent = 0
-		return
-	}
-	job.ProgressPercent = job.CompletedSteps * 100 / job.TotalSteps
+	core.ApplyProgress(job, total)
 }
 
+/**
+ * totalStepsFor.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   spec StoredSpec - the spec (StoredSpec)
+ *
+ * Returns:
+ *   int - the resulting integer
+ */
 func (s *Service) totalStepsFor(spec StoredSpec) int {
 	total := 0
 	for _, st := range s.steps {
@@ -662,36 +1099,67 @@ func (s *Service) totalStepsFor(spec StoredSpec) int {
 	return total
 }
 
-func completedSteps(job *Job) int {
-	count := 0
-	for _, step := range job.Steps {
-		if step.Status == JobStatusCompleted {
-			count++
-		}
-	}
-	return count
-}
-
+/**
+ * CollectMetrics.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req MetricRequest - the req (MetricRequest)
+ *
+ * Returns:
+ *   MetricResponse - the resulting MetricResponse
+ */
 func (s *Service) CollectMetrics(ctx context.Context, req MetricRequest) MetricResponse {
 	return s.collector.Collect(ctx, req)
 }
 
-func (s *Service) ConnectionInfo(jobID string) (host string, port int, user, password string, err error) {
+/**
+ * ConnectionInfo.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   jobID string - the jobID string
+ *
+ * Returns:
+ *   host string - the host string
+ *   port int - the port value
+ *   user string - the user string
+ *   password string - the password string
+ *   err error - error value; non-nil when the operation fails
+ */
+func (s *Service) ConnectionInfo(jobID string) (host string, port int, user, password string, nodeIPs []string, err error) {
 	job, err := s.store.Load(jobID)
 	if err != nil {
-		return "", 0, "", "", fmt.Errorf("load job %q: %w", jobID, err)
+		return "", 0, "", "", nil, fmt.Errorf("load job %q: %w", jobID, err)
 	}
 	secret, err := s.store.LoadSecret(jobID)
 	if err != nil {
-		return "", 0, "", "", fmt.Errorf("load job secret %q: %w", jobID, err)
+		return "", 0, "", "", nil, fmt.Errorf("load job secret %q: %w", jobID, err)
 	}
 	p := job.Request.MySQLPort
 	if p == 0 {
 		p = 3306
 	}
-	return job.Request.PrimaryIP, p, secret.AdminUser, secret.AdminPassword, nil
+	ips := append([]string{job.Request.PrimaryIP}, job.Request.StandbyIPs...)
+	return job.Request.PrimaryIP, p, secret.AdminUser, secret.AdminPassword, ips, nil
 }
 
+/**
+ * shouldSkipStep.
+ *
+ * Params:
+ *   st step - the st (step)
+ *   spec StoredSpec - the spec (StoredSpec)
+ *
+ * Returns:
+ *   string - the resulting string
+ *   bool - boolean result
+ */
 func shouldSkipStep(st step, spec StoredSpec) (string, bool) {
 	if st.Name == "add_instances" && len(spec.StandbyIPs) == 0 {
 		return "standby_ips is empty", true
@@ -708,17 +1176,41 @@ func shouldSkipStep(st step, spec StoredSpec) (string, bool) {
 	return "", false
 }
 
-func newJobID() string {
-	raw := make([]byte, 12)
-	_, _ = rand.Read(raw)
-	return hex.EncodeToString(raw)
+/**
+ * without returns slice with every occurrence of target removed.
+ *
+ * Params:
+ *   slice []string - the slice ([]string)
+ *   target string - the target string
+ *
+ * Returns:
+ *   []string - the resulting []string
+ */
+func without(slice []string, target string) []string {
+	out := make([]string, 0, len(slice))
+	for _, v := range slice {
+		if v != target {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
-func stringOrGenerated(value string) string {
-	if value != "" {
-		return value
-	}
-	raw := make([]byte, 24)
-	_, _ = rand.Read(raw)
-	return hex.EncodeToString(raw)
-}
+/**
+ * newJobID.
+ *
+ * Returns:
+ *   string - the resulting string
+ */
+func newJobID() string { return core.NewJobID() }
+
+/**
+ * stringOrGenerated.
+ *
+ * Params:
+ *   value string - the value string
+ *
+ * Returns:
+ *   string - the resulting string
+ */
+func stringOrGenerated(value string) string { return core.OrRandomSecret(value) }

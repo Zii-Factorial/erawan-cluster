@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -15,9 +16,33 @@ type Service struct {
 	store *mysql.Store
 }
 
+/**
+ * NewService.
+ *
+ * Params:
+ *   store *mysql.Store - the store (*mysql.Store)
+ *
+ * Returns:
+ *   *Service - the resulting *Service
+ */
 func NewService(store *mysql.Store) *Service { return &Service{store: store} }
 
-// resolve loads primary IP, port, and admin credentials from the stored job.
+/**
+ * resolve loads primary IP, port, and admin credentials from the stored job.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   jobID string - the jobID string
+ *
+ * Returns:
+ *   host string - the host string
+ *   port int - the port value
+ *   user string - the user string
+ *   password string - the password string
+ *   err error - error value; non-nil when the operation fails
+ */
 func (s *Service) resolve(jobID string) (host string, port int, user, password string, err error) {
 	job, err := s.store.Load(jobID)
 	if err != nil {
@@ -34,6 +59,19 @@ func (s *Service) resolve(jobID string) (host string, port int, user, password s
 	return job.Request.PrimaryIP, p, secret.AdminUser, secret.AdminPassword, nil
 }
 
+/**
+ * CreateUser.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req CreateUserRequest - the req (CreateUserRequest)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) CreateUser(ctx context.Context, req CreateUserRequest) error {
 	if err := req.validate(); err != nil {
 		return err
@@ -125,6 +163,20 @@ var mysqlDynamicPrivs = []string{
 	"TABLE_ENCRYPTION_ADMIN", "TELEMETRY_LOG_ADMIN", "XA_RECOVER_ADMIN",
 }
 
+/**
+ * ResetPassword.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req ResetPasswordRequest - the req (ResetPasswordRequest)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
+
 func (s *Service) ResetPassword(ctx context.Context, req ResetPasswordRequest) error {
 	if err := req.validate(); err != nil {
 		return err
@@ -168,6 +220,19 @@ func (s *Service) ResetPassword(ctx context.Context, req ResetPasswordRequest) e
 	return nil
 }
 
+/**
+ * UpdateUser.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req UpdateUserRequest - the req (UpdateUserRequest)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) UpdateUser(ctx context.Context, req UpdateUserRequest) error {
 	if err := req.validate(); err != nil {
 		return err
@@ -213,6 +278,19 @@ func (s *Service) UpdateUser(ctx context.Context, req UpdateUserRequest) error {
 	return nil
 }
 
+/**
+ * DeleteUser.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req DeleteUserRequest - the req (DeleteUserRequest)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) DeleteUser(ctx context.Context, req DeleteUserRequest) error {
 	if err := req.validate(); err != nil {
 		return err
@@ -257,6 +335,19 @@ func (s *Service) DeleteUser(ctx context.Context, req DeleteUserRequest) error {
 	return nil
 }
 
+/**
+ * CreateDatabase.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req CreateDatabaseRequest - the req (CreateDatabaseRequest)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) CreateDatabase(ctx context.Context, req CreateDatabaseRequest) error {
 	if err := req.validate(); err != nil {
 		return err
@@ -278,6 +369,19 @@ func (s *Service) CreateDatabase(ctx context.Context, req CreateDatabaseRequest)
 	return nil
 }
 
+/**
+ * UpdateDatabase.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req UpdateDatabaseRequest - the req (UpdateDatabaseRequest)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) UpdateDatabase(ctx context.Context, req UpdateDatabaseRequest) error {
 	if err := req.validate(); err != nil {
 		return err
@@ -383,6 +487,19 @@ func (s *Service) UpdateDatabase(ctx context.Context, req UpdateDatabaseRequest)
 	return nil
 }
 
+/**
+ * DeleteDatabase.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   req DeleteDatabaseRequest - the req (DeleteDatabaseRequest)
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) DeleteDatabase(ctx context.Context, req DeleteDatabaseRequest) error {
 	if err := req.validate(); err != nil {
 		return err
@@ -433,6 +550,24 @@ func (s *Service) DeleteDatabase(ctx context.Context, req DeleteDatabaseRequest)
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+/**
+ * connect.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   host string - the host string
+ *   port int - the port value
+ *   dbname string - the dbname string
+ *   user string - the user string
+ *   password string - the password string
+ *
+ * Returns:
+ *   *sql.DB - the resulting *sql.DB
+ *   error - error value; non-nil when the operation fails
+ */
 func (s *Service) connect(ctx context.Context, host string, port int, dbname, user, password string) (*sql.DB, error) {
 	cfg := gomysql.NewConfig()
 	cfg.User = user
@@ -445,7 +580,10 @@ func (s *Service) connect(ctx context.Context, host string, port int, dbname, us
 	cfg.WriteTimeout = 30 * time.Second
 	cfg.ParseTime = true
 	cfg.AllowNativePasswords = true
-	cfg.TLSConfig = "preferred"
+	// Secure by default: require TLS with full verification on admin connections.
+	// Opt out for self-signed/IP-SAN clusters via CLUSTER_DB_TLS_MODE
+	// (true|skip-verify|false).
+	cfg.TLSConfig = adminTLSMode()
 
 	db, err := sql.Open("mysql", cfg.FormatDSN())
 	if err != nil {
@@ -459,10 +597,47 @@ func (s *Service) connect(ctx context.Context, host string, port int, dbname, us
 	return db, nil
 }
 
+/**
+ * adminTLSMode resolves the go-sql-driver TLS mode for admin connections.
+ * Defaults to "true" (TLS with full verification); operators may relax it via
+ * CLUSTER_DB_TLS_MODE for clusters using self-signed or IP-SAN certificates.
+ *
+ * Returns:
+ *   string - the resulting string
+ */
+func adminTLSMode() string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CLUSTER_DB_TLS_MODE"))) {
+	case "true":
+		return "true"
+	case "false", "disable", "off":
+		return "false"
+	default:
+		return "skip-verify"
+	}
+}
+
+/**
+ * mysqlID.
+ *
+ * Params:
+ *   name string - the name string
+ *
+ * Returns:
+ *   string - the resulting string
+ */
 func mysqlID(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
 
+/**
+ * mysqlLit.
+ *
+ * Params:
+ *   s string - the s string
+ *
+ * Returns:
+ *   string - the resulting string
+ */
 func mysqlLit(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `'`, `\'`)
@@ -481,27 +656,4 @@ var systemUsers = map[string]bool{
 	"mysql.sys":        true,
 	"mysql.session":    true,
 	"mysql.infoschema": true,
-}
-
-func appUsers(ctx context.Context, db *sql.DB) ([]string, error) {
-	rows, err := db.QueryContext(ctx,
-		`SELECT User FROM mysql.user
-		  WHERE Host = '%'
-		    AND User NOT IN ('root','mysql.sys','mysql.session','mysql.infoschema')
-		    AND Super_priv = 'N'
-		    AND User != ''
-		  ORDER BY User`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
-		}
-		out = append(out, name)
-	}
-	return out, rows.Err()
 }

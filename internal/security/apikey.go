@@ -8,6 +8,15 @@ import (
 
 const apiKeyHeader = "X-API-Key"
 
+/**
+ * APIKeyMiddleware.
+ *
+ * Params:
+ *   apiKey string - the apiKey string
+ *
+ * Returns:
+ *   func(http.Handler) http.Handler - the resulting func(http.Handler) http.Handler
+ */
 func APIKeyMiddleware(apiKey string) func(http.Handler) http.Handler {
 	if strings.TrimSpace(apiKey) == "" {
 		return func(next http.Handler) http.Handler {

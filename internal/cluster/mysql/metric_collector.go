@@ -2,67 +2,106 @@ package mysql
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"math"
+	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	gomysql "github.com/go-sql-driver/mysql"
+	"erawan-cluster/internal/cluster/core"
 )
 
 // Collector gathers live metrics from a MySQL InnoDB Cluster.
-// Each category is collected independently — a failure in one never suppresses the others.
-type Collector struct{}
+// Data is sourced from mysqld_exporter (:9104) and node_exporter (:9100).
+// No direct database connection is required.
+type Collector struct {
+	httpClient *http.Client
+}
 
-// NewCollector returns a ready-to-use Collector.
 func NewCollector() *Collector {
-	return &Collector{}
+	return &Collector{
+		httpClient: &http.Client{Timeout: 15 * time.Second},
+	}
 }
 
 // Collect gathers every requested category and returns a MetricResponse.
 func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricResponse {
 	resp := MetricResponse{
 		CollectedAt: time.Now().UTC(),
+		Engine:      "mysql",
 		Host:        req.Host,
 		Port:        resolvePort(req.Port, 3306),
+		Users:       []UserInfo{},
 		Categories:  make(map[string]any),
 		Errors:      make(map[string]string),
 	}
 
-	categories := resolveCategories(req.Categories)
+	mysqlPort := resolvePort(req.DBMetricExporterPort, 9104)
+	nodePort := resolvePort(req.NodeExporterPort, 9100)
 
-	db, err := openDB(ctx, req)
-	if err != nil {
-		for _, cat := range categories {
-			resp.Errors[cat] = "db connect: " + err.Error()
+	// Scrape mysqld_exporter and node_exporter on ALL nodes in parallel.
+	// This ensures metrics survive failover — we discover the actual current
+	// primary from GR member info rather than assuming nodeIPs[0] is always primary.
+	allMysqlMetrics := c.scrapeAllMysqlExporters(ctx, req.NodeIPs, mysqlPort)
+	for _, nm := range c.scrapeAllNodes(ctx, req.NodeIPs, nodePort) {
+		resp.Nodes = append(resp.Nodes, nm)
+	}
+
+	// Discover current primary from GR member info; fall back to nodeIPs[0].
+	primaryIP := discoverMysqlPrimary(req.NodeIPs, allMysqlMetrics)
+	if primaryIP == "" && req.Host != "" {
+		primaryIP = req.Host
+	}
+
+	// Split into primary metrics and standby metrics map.
+	var primaryMetrics core.MetricFamily
+	standbyMetrics := make(map[string]core.MetricFamily, len(req.NodeIPs))
+	for ip, f := range allMysqlMetrics {
+		if ip == primaryIP {
+			primaryMetrics = f
+		} else {
+			standbyMetrics[ip] = f
 		}
-		return resp
-	}
-	defer db.Close()
-
-	resp.DatabaseCount, _ = collectDatabaseCount(ctx, db)
-	resp.Users, _ = collectUsers(ctx, db)
-	resp.Databases, _ = collectDatabases(ctx, db)
-
-	limit := req.Limit
-	if limit <= 0 {
-		limit = 20
-	}
-	if limit > 500 {
-		limit = 500
 	}
 
-	type catResult struct {
+	standbyIPs := make([]string, 0, len(req.NodeIPs)-1)
+	for _, ip := range req.NodeIPs {
+		if ip != primaryIP {
+			standbyIPs = append(standbyIPs, ip)
+		}
+	}
+
+	if primaryMetrics == nil {
+		for _, cat := range resolveCategories(req.Categories) {
+			if cat != MetricCategorySystem {
+				resp.Errors[cat] = "mysqld_exporter unreachable on all nodes"
+			}
+		}
+	}
+
+	// Database sizes and users from the current primary's exporter.
+	if primaryMetrics != nil {
+		if dbs := normalizeDatabases(primaryMetrics); len(dbs) > 0 {
+			resp.Databases = dbs
+		}
+		resp.Users = collectMysqlUsersFromExporter(primaryMetrics)
+	}
+
+	categories := resolveCategories(req.Categories)
+	type result struct {
 		data any
 		err  error
 	}
-	results := make(map[string]catResult, len(categories))
+	results := make(map[string]result, len(categories))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
 	for _, cat := range categories {
+		if primaryMetrics == nil && cat != MetricCategorySystem {
+			continue
+		}
 		cat := cat
 		wg.Add(1)
 		go func() {
@@ -71,31 +110,38 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 			var err error
 			switch cat {
 			case MetricCategoryCluster:
-				data, err = collectCluster(ctx, db)
+				data, err = collectCluster(primaryMetrics)
 			case MetricCategoryUptime:
-				data, err = collectUptime(ctx, db)
+				data, err = collectUptime(primaryMetrics)
 			case MetricCategoryConnections:
-				data, err = collectConnections(ctx, db, req.Databases)
+				data, err = collectConnections(primaryMetrics)
 			case MetricCategoryReplication:
-				data, err = collectReplication(ctx, db)
+				data, err = collectReplication(primaryIP, standbyIPs, primaryMetrics, standbyMetrics)
 			case MetricCategoryPerformance:
-				data, err = collectPerformance(ctx, db)
+				data, err = collectPerformance(primaryMetrics)
 			case MetricCategoryQuery:
-				data, err = collectQuery(ctx, db, limit, req.From, req.To, req.Databases)
+				data, err = collectQuery(primaryMetrics)
 			case MetricCategoryMaintenance:
-				data, err = collectMaintenance(ctx, db, limit, req.Databases)
+				data, err = collectMaintenance(primaryMetrics)
+			case MetricCategorySystem:
+				// Already in resp.Nodes.
 			}
 			mu.Lock()
-			results[cat] = catResult{data, err}
+			results[cat] = result{data, err}
 			mu.Unlock()
 		}()
 	}
 	wg.Wait()
 
 	for cat, r := range results {
+		if cat == MetricCategorySystem {
+			continue
+		}
 		if r.err != nil {
-			resp.Errors[cat] = r.err.Error()
-		} else {
+			if _, already := resp.Errors[cat]; !already {
+				resp.Errors[cat] = r.err.Error()
+			}
+		} else if r.data != nil {
 			resp.Categories[cat] = r.data
 		}
 	}
@@ -108,37 +154,663 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 
 // ValidateMetricRequest applies defaults and validates required fields.
 func ValidateMetricRequest(req *MetricRequest) error {
-	req.Host = strings.TrimSpace(req.Host)
-	if req.Port == 0 {
-		return fmt.Errorf("proxy_port is required (HAProxy frontend port, e.g. 25041)")
+	if req.ProxyPort == 0 {
+		return fmt.Errorf("proxy_port is required (HAProxy frontend port, e.g. 23306)")
 	}
-	if req.Port < 1 || req.Port > 65535 {
+	if req.ProxyPort < 1 || req.ProxyPort > 65535 {
 		return fmt.Errorf("proxy_port must be between 1 and 65535")
 	}
-	req.User = strings.TrimSpace(req.User)
-	if req.User == "" {
-		return fmt.Errorf("user is required")
+	if len(req.NodeIPs) == 0 && req.JobID == "" {
+		return fmt.Errorf("job_id or node_ips is required to locate cluster exporters")
 	}
-	if req.SSLMode == "" {
-		req.SSLMode = "disable"
-	}
-	if req.SSLMode != "disable" && req.SSLMode != "require" {
-		return fmt.Errorf("ssl_mode must be 'disable' or 'require'")
-	}
-	if req.From != nil && req.To != nil && req.From.After(*req.To) {
-		return fmt.Errorf("from must be before to")
-	}
-	valid := make(map[string]bool, len(allMetricCategories))
+	valid := map[string]bool{}
 	for _, c := range allMetricCategories {
 		valid[c] = true
 	}
 	for _, cat := range req.Categories {
 		if !valid[strings.ToLower(strings.TrimSpace(cat))] {
-			return fmt.Errorf("unknown category %q; valid: %s",
-				cat, strings.Join(allMetricCategories, ", "))
+			return fmt.Errorf("unknown category %q; valid: %s", cat, strings.Join(allMetricCategories, ", "))
 		}
 	}
 	return nil
+}
+
+// =============================================================================
+// Multi-node mysqld_exporter scraping
+// =============================================================================
+
+// scrapeAllMysqlExporters scrapes mysqld_exporter on each standby node.
+// Returns a map from node IP to its metric family.
+// discoverMysqlPrimary finds the current primary IP from GR member info available
+// in any scraped node's metrics. Falls back to nodeIPs[0] if not found.
+func discoverMysqlPrimary(nodeIPs []string, allMetrics map[string]core.MetricFamily) string {
+	for _, ip := range nodeIPs {
+		f, ok := allMetrics[ip]
+		if !ok {
+			continue
+		}
+		for _, s := range f["mysql_perf_schema_replication_group_member_info"] {
+			if strings.ToUpper(s.Labels["member_role"]) == "PRIMARY" {
+				host := s.Labels["member_host"]
+				for _, nodeIP := range nodeIPs {
+					if nodeIP == host {
+						return nodeIP
+					}
+				}
+			}
+		}
+	}
+	if len(nodeIPs) > 0 {
+		return nodeIPs[0]
+	}
+	return ""
+}
+
+func (c *Collector) scrapeAllMysqlExporters(ctx context.Context, standbyIPs []string, port int) map[string]core.MetricFamily {
+	if len(standbyIPs) == 0 {
+		return nil
+	}
+	type scrapeResult struct {
+		ip      string
+		metrics core.MetricFamily
+	}
+	results := make([]scrapeResult, len(standbyIPs))
+	var wg sync.WaitGroup
+	for i, ip := range standbyIPs {
+		i, ip := i, ip
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			url := fmt.Sprintf("http://%s:%d/metrics", ip, port)
+			m, err := core.ScrapeMetrics(ctx, c.httpClient, url)
+			if err == nil {
+				results[i] = scrapeResult{ip: ip, metrics: m}
+			}
+		}()
+	}
+	wg.Wait()
+	out := make(map[string]core.MetricFamily, len(standbyIPs))
+	for _, r := range results {
+		if r.metrics != nil {
+			out[r.ip] = r.metrics
+		}
+	}
+	return out
+}
+
+// =============================================================================
+// Node exporter — system metrics (identical logic to pgsql)
+// =============================================================================
+
+type nodeResult struct {
+	metric NodeMetric
+	err    error
+}
+
+func (c *Collector) scrapeAllNodes(ctx context.Context, nodeIPs []string, port int) []NodeMetric {
+	if len(nodeIPs) == 0 {
+		return nil
+	}
+	results := make([]nodeResult, len(nodeIPs))
+	var wg sync.WaitGroup
+	for i, ip := range nodeIPs {
+		i, ip := i, ip
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			url := fmt.Sprintf("http://%s:%d/metrics", ip, port)
+			m, err := core.ScrapeMetrics(ctx, c.httpClient, url)
+			if err != nil {
+				results[i] = nodeResult{err: err}
+				return
+			}
+			results[i] = nodeResult{metric: normalizeNodeMetrics(ip, m)}
+		}()
+	}
+	wg.Wait()
+	var out []NodeMetric
+	for _, r := range results {
+		if r.err == nil {
+			out = append(out, r.metric)
+		}
+	}
+	return out
+}
+
+func normalizeNodeMetrics(host string, f core.MetricFamily) NodeMetric {
+	nm := NodeMetric{Host: host}
+
+	bootTime := f.First("node_boot_time_seconds", 0)
+	if bootTime > 0 {
+		nm.UptimeSeconds = int64(time.Now().Unix()) - int64(bootTime)
+	}
+
+	nm.Load1 = f.First("node_load1", 0)
+	nm.Load5 = f.First("node_load5", 0)
+	nm.Load15 = f.First("node_load15", 0)
+
+	nm.MemTotalBytes = int64(f.First("node_memory_MemTotal_bytes", 0))
+	nm.MemAvailableBytes = int64(f.First("node_memory_MemAvailable_bytes", 0))
+	if nm.MemTotalBytes > 0 {
+		used := nm.MemTotalBytes - nm.MemAvailableBytes
+		nm.MemUsedPct = math.Round(float64(used)/float64(nm.MemTotalBytes)*10000) / 100
+	}
+
+	idleTotal := f.SumWhere("node_cpu_seconds_total", "mode", "idle")
+	allTotal := f.Sum("node_cpu_seconds_total")
+	if allTotal > 0 {
+		nm.CPUUsagePct = math.Round((1-idleTotal/allTotal)*10000) / 100
+	}
+
+	excludedFSTypes := map[string]bool{
+		"tmpfs": true, "devtmpfs": true, "devfs": true,
+		"overlay": true, "squashfs": true, "nsfs": true,
+	}
+	diskSeen := map[string]bool{}
+	for _, s := range f["node_filesystem_size_bytes"] {
+		mp := s.Labels["mountpoint"]
+		fstype := s.Labels["fstype"]
+		if excludedFSTypes[fstype] || diskSeen[mp] {
+			continue
+		}
+		diskSeen[mp] = true
+		avail := f.FirstWhere("node_filesystem_avail_bytes", s.Labels, 0)
+		total := s.Value
+		used := total - avail
+		var usedPct float64
+		if total > 0 {
+			usedPct = math.Round(used/total*10000) / 100
+		}
+		nm.Disks = append(nm.Disks, DiskStat{
+			Mountpoint: mp,
+			SizeBytes:  int64(total),
+			UsedBytes:  int64(used),
+			AvailBytes: int64(avail),
+			UsedPct:    usedPct,
+		})
+	}
+	sort.Slice(nm.Disks, func(i, j int) bool {
+		return nm.Disks[i].Mountpoint < nm.Disks[j].Mountpoint
+	})
+
+	excludedDevPrefixes := []string{"lo", "veth", "docker", "br-", "virbr"}
+	netSeen := map[string]bool{}
+	for _, s := range f["node_network_receive_bytes_total"] {
+		dev := s.Labels["device"]
+		if netSeen[dev] {
+			continue
+		}
+		excluded := false
+		for _, pfx := range excludedDevPrefixes {
+			if strings.HasPrefix(dev, pfx) {
+				excluded = true
+				break
+			}
+		}
+		if excluded {
+			continue
+		}
+		netSeen[dev] = true
+		tx := f.FirstWhere("node_network_transmit_bytes_total", map[string]string{"device": dev}, 0)
+		nm.NetworkInterfaces = append(nm.NetworkInterfaces, NetworkStat{
+			Interface:    dev,
+			RxBytesTotal: int64(s.Value),
+			TxBytesTotal: int64(tx),
+		})
+	}
+	sort.Slice(nm.NetworkInterfaces, func(i, j int) bool {
+		return nm.NetworkInterfaces[i].Interface < nm.NetworkInterfaces[j].Interface
+	})
+
+	return nm
+}
+
+// =============================================================================
+// Databases — from info_schema tables collector (--collector.info_schema.tables)
+// =============================================================================
+
+func normalizeDatabases(f core.MetricFamily) []DatabaseInfo {
+	excludeDB := map[string]bool{
+		"information_schema": true,
+		"performance_schema": true,
+		"mysql":              true,
+		"sys":                true,
+	}
+	dbSizes := map[string]int64{}
+	for _, s := range f["mysql_info_schema_table_size_bytes"] {
+		schema := s.Labels["schema"]
+		comp := s.Labels["component"]
+		if excludeDB[schema] {
+			continue
+		}
+		if comp == "data_length" || comp == "index_length" {
+			dbSizes[schema] += int64(s.Value)
+		}
+	}
+	var dbs []DatabaseInfo
+	for name, size := range dbSizes {
+		dbs = append(dbs, DatabaseInfo{Name: name, SizeBytes: size})
+	}
+	sort.Slice(dbs, func(i, j int) bool { return dbs[i].Name < dbs[j].Name })
+	return dbs
+}
+
+// collectMysqlUsersFromExporter extracts non-system users from
+// mysql_mysql_max_connections exposed by mysqld_exporter.
+// Excluded: InnoDB Cluster internals, MySQL Router accounts, system accounts, exporter account.
+func collectMysqlUsersFromExporter(f core.MetricFamily) []UserInfo {
+	skip := map[string]bool{
+		"exporter":         true,
+		"debian-sys-maint": true,
+		"clusteradmin":     true,
+	}
+	seen := map[string]bool{}
+	var users []UserInfo
+	for _, s := range f["mysql_mysql_max_connections"] {
+		user := s.Labels["mysql_user"]
+		if user == "" || seen[user] {
+			continue
+		}
+		if skip[user] ||
+			strings.HasPrefix(user, "mysql.") ||
+			strings.HasPrefix(user, "mysql_innodb_cluster") ||
+			strings.HasPrefix(user, "mysql_router") {
+			continue
+		}
+		seen[user] = true
+		users = append(users, UserInfo{Username: user})
+	}
+	sort.Slice(users, func(i, j int) bool { return users[i].Username < users[j].Username })
+	return users
+}
+
+// =============================================================================
+// cluster — Group Replication membership
+// =============================================================================
+
+func collectCluster(f core.MetricFamily) (*ClusterMetric, error) {
+	m := &ClusterMetric{Members: []ClusterMember{}}
+
+	// Detect GR by presence of any GR-related metric.
+	grEnabled := false
+	for k := range f {
+		if strings.HasPrefix(k, "mysql_global_status_group_replication") {
+			grEnabled = true
+			break
+		}
+	}
+	m.GREnabled = grEnabled
+
+	// Parse member details if the exporter exposes them via custom queries.
+	for _, s := range f["mysql_gr_member_state"] {
+		host := s.Labels["member_host"]
+		port := 0
+		fmt.Sscanf(s.Labels["member_port"], "%d", &port)
+		role := s.Labels["member_role"]
+		state := s.Labels["member_state"]
+		if role == "PRIMARY" {
+			m.PrimaryHost = host
+		}
+		m.Members = append(m.Members, ClusterMember{
+			Host:  host,
+			Port:  port,
+			State: state,
+			Role:  role,
+		})
+	}
+	m.MemberCount = len(m.Members)
+
+	return m, nil
+}
+
+// =============================================================================
+// uptime — mysql_global_status_uptime
+// =============================================================================
+
+func collectUptime(f core.MetricFamily) (*UptimeMetric, error) {
+	uptimeSec := int64(f.First("mysql_global_status_uptime", 0))
+	if uptimeSec == 0 {
+		return nil, fmt.Errorf("mysql_global_status_uptime not found in exporter output")
+	}
+	startTime := time.Now().UTC().Add(-time.Duration(uptimeSec) * time.Second)
+	return &UptimeMetric{
+		StartTime:     startTime,
+		UptimeSeconds: uptimeSec,
+		UptimeHuman:   formatDuration(uptimeSec),
+	}, nil
+}
+
+// =============================================================================
+// connections — mysql_global_status_threads_*
+// =============================================================================
+
+func collectConnections(f core.MetricFamily) (*ConnectionMetric, error) {
+	m := &ConnectionMetric{
+		WaitEvents: []WaitEvent{},
+		ByDatabase: []DBConnStat{},
+	}
+
+	m.MaxConnections = int(f.First("mysql_global_variables_max_connections", 0))
+	m.TotalConnections = int(f.First("mysql_global_status_threads_connected", 0))
+	m.Active = int(f.First("mysql_global_status_threads_running", 0))
+	m.Idle = m.TotalConnections - m.Active
+	if m.Idle < 0 {
+		m.Idle = 0
+	}
+	m.MaxUsedConnections = int(f.First("mysql_global_status_max_used_connections", 0))
+	m.AbortedConnects = int64(f.SumAlt(
+		"mysql_global_status_aborted_connects_total",
+		"mysql_global_status_aborted_connects",
+	))
+	// WaitingForLock: use innodb_row_lock_current_waits as the best proxy.
+	m.WaitingForLock = int(f.First("mysql_global_status_innodb_row_lock_current_waits", 0))
+
+	if m.MaxConnections > 0 {
+		m.UtilizationPct = math.Round(float64(m.TotalConnections)/float64(m.MaxConnections)*10000) / 100
+	}
+	return m, nil
+}
+
+// =============================================================================
+// replication — multi-node: primary + each standby's replica status
+// =============================================================================
+
+func collectReplication(primaryIP string, standbyIPs []string, primary core.MetricFamily, standbys map[string]core.MetricFamily) (*ReplicationMetric, error) {
+	m := &ReplicationMetric{
+		Members: []ReplicationMember{},
+		Slots:   []ReplicationSlot{},
+	}
+
+	// InnoDB Cluster / Group Replication: use mysql_perf_schema_replication_group_member_info
+	// which is available on any GR member. Try primary first; fall back to any standby
+	// so replication state remains visible even when the original primary is down.
+	grSource := primary
+	if len(grSource["mysql_perf_schema_replication_group_member_info"]) == 0 {
+		for _, f := range standbys {
+			if len(f["mysql_perf_schema_replication_group_member_info"]) > 0 {
+				grSource = f
+				break
+			}
+		}
+	}
+	if grSamples := grSource["mysql_perf_schema_replication_group_member_info"]; len(grSamples) > 0 {
+		zero := float64(0)
+		zeroBytes := int64(0)
+		for _, s := range grSamples {
+			role := strings.ToLower(s.Labels["member_role"])
+			state := strings.ToLower(s.Labels["member_state"])
+			mem := ReplicationMember{
+				Role:  role,
+				Host:  s.Labels["member_host"],
+				State: state,
+			}
+			if state == "online" {
+				mem.ReplayLagSeconds = &zero
+				mem.ReplayLagBytes = &zeroBytes
+				if role == "primary" {
+					mem.WriteLagSeconds = &zero
+				}
+			}
+			m.Members = append(m.Members, mem)
+		}
+		// Primary first, then secondaries sorted by host.
+		sort.Slice(m.Members, func(i, j int) bool {
+			if m.Members[i].Role != m.Members[j].Role {
+				return m.Members[i].Role == "primary"
+			}
+			return m.Members[i].Host < m.Members[j].Host
+		})
+		m.StandbyCount = len(m.Members) - 1
+		return m, nil
+	}
+
+	// Fallback: traditional async/semi-sync replication — scrape per-node exporter.
+	zero := float64(0)
+	zeroBytes := int64(0)
+	m.Members = append(m.Members, ReplicationMember{
+		Role:             "primary",
+		Host:             primaryIP,
+		State:            "online",
+		WriteLagSeconds:  &zero,
+		ReplayLagSeconds: &zero,
+		ReplayLagBytes:   &zeroBytes,
+	})
+
+	for _, ip := range standbyIPs {
+		f, ok := standbys[ip]
+		if !ok {
+			m.Members = append(m.Members, ReplicationMember{
+				Role:  "secondary",
+				Host:  ip,
+				State: "unknown",
+			})
+			continue
+		}
+
+		ioRunning := replicaIORunning(f)
+		sqlRunning := replicaSQLRunning(f)
+
+		state := "offline"
+		if ioRunning == "Yes" && sqlRunning == "Yes" {
+			state = "online"
+		}
+
+		mem := ReplicationMember{
+			Role:       "secondary",
+			Host:       ip,
+			State:      state,
+			IORunning:  ioRunning,
+			SQLRunning: sqlRunning,
+		}
+		lagSec := f.FirstAlt(
+			"mysql_slave_status_seconds_behind_master",
+			"mysql_replica_status_seconds_behind_source",
+			-1,
+		)
+		if lagSec >= 0 {
+			lagRef := lagSec
+			mem.ReplayLagSeconds = &lagRef
+		}
+		m.Members = append(m.Members, mem)
+	}
+
+	m.StandbyCount = len(m.Members) - 1
+	return m, nil
+}
+
+func replicaIORunning(f core.MetricFamily) string {
+	for _, name := range []string{
+		"mysql_slave_status_slave_io_running",
+		"mysql_replica_status_replica_io_running",
+	} {
+		for _, s := range f[name] {
+			if s.Value == 1 {
+				return "Yes"
+			}
+			return "No"
+		}
+	}
+	return ""
+}
+
+func replicaSQLRunning(f core.MetricFamily) string {
+	for _, name := range []string{
+		"mysql_slave_status_slave_sql_running",
+		"mysql_replica_status_replica_sql_running",
+	} {
+		for _, s := range f[name] {
+			if s.Value == 1 {
+				return "Yes"
+			}
+			return "No"
+		}
+	}
+	return ""
+}
+
+// =============================================================================
+// performance — InnoDB buffer pool, QPS/TPS, row DML, temp tables, sort, network
+// =============================================================================
+
+func collectPerformance(f core.MetricFamily) (*PerformanceMetric, error) {
+	m := &PerformanceMetric{}
+
+	uptime := f.First("mysql_global_status_uptime", 0)
+
+	// QPS and TPS.
+	queries := f.SumAlt("mysql_global_status_queries", "mysql_global_status_questions")
+	if uptime > 0 {
+		m.QPS = math.Round(queries/uptime*1000) / 1000
+	}
+	commits := f.SumAlt("mysql_global_status_com_commit_total", "mysql_global_status_com_commit")
+	rollbacks := f.SumAlt("mysql_global_status_com_rollback_total", "mysql_global_status_com_rollback")
+	m.TotalCommits = int64(commits)
+	m.TotalRollbacks = int64(rollbacks)
+	m.TotalTransactions = m.TotalCommits + m.TotalRollbacks
+	if uptime > 0 {
+		m.TPS = math.Round((commits+rollbacks)/uptime*1000) / 1000
+	}
+
+	// InnoDB buffer pool — size from variables, hit ratio from read counters.
+	m.CacheSizeBytes = int64(f.First("mysql_global_variables_innodb_buffer_pool_size", 0))
+	readReqs := f.SumAlt(
+		"mysql_global_status_innodb_buffer_pool_read_requests_total",
+		"mysql_global_status_innodb_buffer_pool_read_requests",
+	)
+	reads := f.SumAlt(
+		"mysql_global_status_innodb_buffer_pool_reads_total",
+		"mysql_global_status_innodb_buffer_pool_reads",
+	)
+	if readReqs > 0 {
+		m.CacheHitRatioPct = math.Round((1-reads/readReqs)*10000) / 100
+	}
+	m.CacheFreePages = int64(f.First("mysql_global_status_innodb_buffer_pool_pages_free", 0))
+	m.CacheDirtyPages = int64(f.First("mysql_global_status_innodb_buffer_pool_pages_dirty", 0))
+
+	// Row DML statement counts (cumulative since server start).
+	m.RowsInserted = int64(f.SumAlt("mysql_global_status_com_insert_total", "mysql_global_status_com_insert"))
+	m.RowsUpdated = int64(f.SumAlt("mysql_global_status_com_update_total", "mysql_global_status_com_update"))
+	m.RowsDeleted = int64(f.SumAlt("mysql_global_status_com_delete_total", "mysql_global_status_com_delete"))
+
+	// Temp tables and sort pressure.
+	m.TmpDiskTables = int64(f.SumAlt(
+		"mysql_global_status_created_tmp_disk_tables_total",
+		"mysql_global_status_created_tmp_disk_tables",
+	))
+	m.TmpTables = int64(f.SumAlt(
+		"mysql_global_status_created_tmp_tables_total",
+		"mysql_global_status_created_tmp_tables",
+	))
+	if m.TmpTables > 0 {
+		m.TmpTablesDiskPct = math.Round(float64(m.TmpDiskTables)/float64(m.TmpTables)*10000) / 100
+	}
+	m.SortMergePasses = int64(f.SumAlt(
+		"mysql_global_status_sort_merge_passes_total",
+		"mysql_global_status_sort_merge_passes",
+	))
+
+	// InnoDB row lock contention.
+	m.RowLockWaits = int64(f.SumAlt(
+		"mysql_global_status_innodb_row_lock_waits_total",
+		"mysql_global_status_innodb_row_lock_waits",
+	))
+	m.RowLockAvgMs = f.First("mysql_global_status_innodb_row_lock_time_avg", 0)
+
+	// Scan efficiency from handler counters:
+	// handler_read_rnd_next ≈ full-table-scan row reads; handler_read_key ≈ index lookups.
+	rndNext := f.SumAlt("mysql_global_status_handler_read_rnd_next_total", "mysql_global_status_handler_read_rnd_next")
+	readKey := f.SumAlt("mysql_global_status_handler_read_key_total", "mysql_global_status_handler_read_key")
+	total := rndNext + readKey
+	if total > 0 {
+		m.IdxLookupRatioPct = math.Round(readKey/total*10000) / 100
+	}
+
+	// Network I/O.
+	m.BytesReceived = int64(f.SumAlt("mysql_global_status_bytes_received_total", "mysql_global_status_bytes_received"))
+	m.BytesSent = int64(f.SumAlt("mysql_global_status_bytes_sent_total", "mysql_global_status_bytes_sent"))
+
+	return m, nil
+}
+
+// =============================================================================
+// query — deadlocks, lock waits, slow queries, row throughput, scan efficiency
+// =============================================================================
+
+func collectQuery(f core.MetricFamily) (*QueryMetric, error) {
+	m := &QueryMetric{HighSeqScanTables: []ScanEfficiency{}}
+
+	// InnoDB deadlocks (cumulative).
+	m.DeadlockCount = int64(f.SumAlt(
+		"mysql_global_status_innodb_deadlocks_total",
+		"mysql_global_status_innodb_deadlocks",
+	))
+
+	// Current row lock waiters.
+	m.LockWaitCount = int(f.First("mysql_global_status_innodb_row_lock_current_waits", 0))
+
+	// Slow queries (requires slow_query_log = ON in MySQL config).
+	m.SlowQueryCount = int64(f.SumAlt(
+		"mysql_global_status_slow_queries_total",
+		"mysql_global_status_slow_queries",
+	))
+
+	// Row throughput — com_select is the closest proxy for rows returned.
+	m.RowsReturned = int64(f.SumAlt("mysql_global_status_com_select_total", "mysql_global_status_com_select"))
+
+	// Scan efficiency via handler counters (same values as performance).
+	rndNext := f.SumAlt("mysql_global_status_handler_read_rnd_next_total", "mysql_global_status_handler_read_rnd_next")
+	readKey := f.SumAlt("mysql_global_status_handler_read_key_total", "mysql_global_status_handler_read_key")
+	m.SeqScansTotal = int64(rndNext)
+	m.IdxScansTotal = int64(readKey)
+	total := rndNext + readKey
+	if total > 0 {
+		m.IdxScanRatioPct = math.Round(readKey/total*10000) / 100
+	}
+
+	return m, nil
+}
+
+// =============================================================================
+// maintenance — InnoDB purge lag, open tables, log waits, table lock contention
+// =============================================================================
+
+func collectMaintenance(f core.MetricFamily) (*MaintenanceMetric, error) {
+	m := &MaintenanceMetric{
+		StaleTables:    []StaleTable{},
+		LogicalSlotLag: []LogicalSlotStat{},
+	}
+
+	// InnoDB purge lag (history list length = number of uncommitted old row versions).
+	m.PurgeLagTransactions = int64(f.First("mysql_global_status_innodb_history_list_length", 0))
+	switch {
+	case m.PurgeLagTransactions > 1_000_000:
+		m.PurgeLagRiskLevel = "danger"
+	case m.PurgeLagTransactions > 100_000:
+		m.PurgeLagRiskLevel = "warning"
+	default:
+		m.PurgeLagRiskLevel = "ok"
+	}
+
+	// Open table cache utilization.
+	m.OpenTables = int64(f.First("mysql_global_status_open_tables", 0))
+	m.OpenedTables = int64(f.SumAlt(
+		"mysql_global_status_opened_tables_total",
+		"mysql_global_status_opened_tables",
+	))
+
+	// InnoDB redo log waits — non-zero indicates log flush is a bottleneck.
+	m.InnodbLogWaits = int64(f.SumAlt(
+		"mysql_global_status_innodb_log_waits_total",
+		"mysql_global_status_innodb_log_waits",
+	))
+
+	// Table-level lock contention (MyISAM + metadata lock waits).
+	m.TableLocksWaited = int64(f.SumAlt(
+		"mysql_global_status_table_locks_waited_total",
+		"mysql_global_status_table_locks_waited",
+	))
+
+	return m, nil
 }
 
 // =============================================================================
@@ -156,7 +828,7 @@ func resolveCategories(requested []string) []string {
 	if len(requested) == 0 {
 		return allMetricCategories
 	}
-	valid := make(map[string]bool, len(allMetricCategories))
+	valid := map[string]bool{}
 	for _, c := range allMetricCategories {
 		valid[c] = true
 	}
@@ -170,139 +842,6 @@ func resolveCategories(requested []string) []string {
 	return out
 }
 
-func openDB(ctx context.Context, req MetricRequest) (*sql.DB, error) {
-	port := resolvePort(req.Port, 3306)
-	dbName := req.Database
-	if dbName == "" {
-		dbName = "information_schema"
-	}
-	timeout := req.ConnectTimeout
-	if timeout <= 0 {
-		timeout = 10
-	}
-
-	cfg := gomysql.NewConfig()
-	cfg.User = req.User
-	cfg.Passwd = req.Password
-	cfg.Net = "tcp"
-	cfg.Addr = fmt.Sprintf("%s:%d", req.Host, port)
-	cfg.DBName = dbName
-	cfg.Timeout = time.Duration(timeout) * time.Second
-	cfg.ReadTimeout = 30 * time.Second
-	cfg.WriteTimeout = 30 * time.Second
-	cfg.ParseTime = true
-	cfg.AllowNativePasswords = true
-	if req.SSLMode == "require" {
-		cfg.TLSConfig = "skip-verify"
-	}
-
-	db, err := sql.Open("mysql", cfg.FormatDSN())
-	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(len(allMetricCategories))
-	db.SetMaxIdleConns(2)
-	db.SetConnMaxLifetime(30 * time.Second)
-	if err := db.PingContext(ctx); err != nil {
-		db.Close()
-		// "invalid connection" typically means caching_sha2_password full-auth RSA
-		// exchange failed through MySQL Router. Fix: ALTER USER ... IDENTIFIED WITH
-		// mysql_native_password BY '...'; FLUSH PRIVILEGES;
-		return nil, fmt.Errorf("%w (addr=%s user=%s — if 'invalid connection', alter user to mysql_native_password)", err, cfg.Addr, cfg.User)
-	}
-	return db, nil
-}
-
-// collectDatabaseCount returns the number of user databases (excludes system schemas).
-func collectDatabaseCount(ctx context.Context, db *sql.DB) (int, error) {
-	var count int
-	err := db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM information_schema.schemata
-		WHERE schema_name NOT IN ('information_schema','mysql','performance_schema','sys')`).Scan(&count)
-	return count, err
-}
-
-// collectUsers returns all non-system MySQL user accounts.
-func collectUsers(ctx context.Context, db *sql.DB) ([]UserInfo, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT User, Host, Super_priv
-		FROM mysql.user
-		WHERE User NOT IN ('root','mysql.sys','mysql.session','mysql.infoschema','')
-		ORDER BY User, Host`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []UserInfo
-	for rows.Next() {
-		var u UserInfo
-		var superPriv string
-		if err := rows.Scan(&u.User, &u.Host, &superPriv); err != nil {
-			return nil, err
-		}
-		u.HasSuper = superPriv == "Y"
-		out = append(out, u)
-	}
-	if out == nil {
-		out = []UserInfo{}
-	}
-	return out, rows.Err()
-}
-
-// collectDatabases returns all non-system MySQL databases with size and charset info.
-func collectDatabases(ctx context.Context, db *sql.DB) ([]DatabaseInfo, error) {
-	rows, err := db.QueryContext(ctx, `
-		SELECT
-			s.SCHEMA_NAME,
-			COALESCE(SUM(t.DATA_LENGTH + t.INDEX_LENGTH), 0),
-			s.DEFAULT_CHARACTER_SET_NAME,
-			s.DEFAULT_COLLATION_NAME
-		FROM information_schema.SCHEMATA s
-		LEFT JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = s.SCHEMA_NAME
-		WHERE s.SCHEMA_NAME NOT IN ('information_schema','mysql','performance_schema','sys')
-		GROUP BY s.SCHEMA_NAME, s.DEFAULT_CHARACTER_SET_NAME, s.DEFAULT_COLLATION_NAME
-		ORDER BY s.SCHEMA_NAME`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []DatabaseInfo
-	for rows.Next() {
-		var d DatabaseInfo
-		if err := rows.Scan(&d.Name, &d.SizeBytes, &d.Charset, &d.Collation); err != nil {
-			return nil, err
-		}
-		out = append(out, d)
-	}
-	if out == nil {
-		out = []DatabaseInfo{}
-	}
-	return out, rows.Err()
-}
-
-// dbSet builds a lookup set from a list of database names.
-// Returns nil when the list is empty, meaning "no filter — include all".
-func dbSet(databases []string) map[string]bool {
-	if len(databases) == 0 {
-		return nil
-	}
-	s := make(map[string]bool, len(databases))
-	for _, d := range databases {
-		s[d] = true
-	}
-	return s
-}
-
-// inDBSet reports whether name passes the filter.
-// A nil set means no filter (always passes).
-func inDBSet(set map[string]bool, name string) bool {
-	if set == nil {
-		return true
-	}
-	return set[name]
-}
-
-// formatDuration converts seconds to "3d 14h 22m 5s".
 func formatDuration(seconds int64) string {
 	days := seconds / 86400
 	hours := (seconds % 86400) / 3600
@@ -320,552 +859,4 @@ func formatDuration(seconds int64) string {
 	}
 	parts = append(parts, fmt.Sprintf("%ds", secs))
 	return strings.Join(parts, " ")
-}
-
-// =============================================================================
-// cluster — Group Replication membership
-// =============================================================================
-
-func collectCluster(ctx context.Context, db *sql.DB) (*ClusterMetric, error) {
-	m := &ClusterMetric{Members: []ClusterMember{}}
-
-	_ = db.QueryRowContext(ctx, `
-		SELECT VARIABLE_VALUE FROM performance_schema.global_variables
-		WHERE VARIABLE_NAME = 'group_replication_group_name'`).Scan(&m.GroupName)
-
-	rows, err := db.QueryContext(ctx, `
-		SELECT MEMBER_ID, MEMBER_HOST, MEMBER_PORT, MEMBER_STATE, MEMBER_ROLE,
-		       COALESCE(MEMBER_VERSION, '')
-		FROM performance_schema.replication_group_members
-		ORDER BY MEMBER_ROLE DESC, MEMBER_HOST`)
-	if err != nil {
-		return nil, fmt.Errorf("query group members: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var mem ClusterMember
-		if rows.Scan(&mem.MemberID, &mem.Host, &mem.Port, &mem.State, &mem.Role, &mem.Version) == nil {
-			if mem.Role == "PRIMARY" && m.PrimaryHost == "" {
-				m.PrimaryHost = mem.Host
-				m.PrimaryPort = mem.Port
-			}
-			m.Members = append(m.Members, mem)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	m.MemberCount = len(m.Members)
-	if m.MemberCount > 0 {
-		m.GRStatus = "ONLINE"
-	} else {
-		m.GRStatus = "OFFLINE"
-	}
-	return m, nil
-}
-
-// =============================================================================
-// uptime
-// =============================================================================
-
-func collectUptime(ctx context.Context, db *sql.DB) (*UptimeMetric, error) {
-	var uptime int64
-	err := db.QueryRowContext(ctx, `
-		SELECT VARIABLE_VALUE FROM performance_schema.global_status
-		WHERE VARIABLE_NAME = 'Uptime'`).Scan(&uptime)
-	if err != nil {
-		return nil, fmt.Errorf("scan uptime: %w", err)
-	}
-	return &UptimeMetric{
-		UptimeSeconds: uptime,
-		UptimeHuman:   formatDuration(uptime),
-	}, nil
-}
-
-// =============================================================================
-// connections — threads + processlist
-// =============================================================================
-
-func collectConnections(ctx context.Context, db *sql.DB, databases []string) (*ConnectionMetric, error) {
-	m := &ConnectionMetric{ByDatabase: []DBConnStat{}}
-
-	_ = db.QueryRowContext(ctx, `SELECT @@max_connections`).Scan(&m.MaxConnections)
-
-	const qStatus = `
-		SELECT
-		    MAX(CASE WHEN VARIABLE_NAME = 'Threads_connected'    THEN CAST(VARIABLE_VALUE AS UNSIGNED) END),
-		    MAX(CASE WHEN VARIABLE_NAME = 'Threads_running'      THEN CAST(VARIABLE_VALUE AS UNSIGNED) END),
-		    MAX(CASE WHEN VARIABLE_NAME = 'Max_used_connections' THEN CAST(VARIABLE_VALUE AS UNSIGNED) END),
-		    MAX(CASE WHEN VARIABLE_NAME = 'Aborted_connects'     THEN CAST(VARIABLE_VALUE AS UNSIGNED) END)
-		FROM performance_schema.global_status
-		WHERE VARIABLE_NAME IN ('Threads_connected','Threads_running','Max_used_connections','Aborted_connects')`
-
-	if err := db.QueryRowContext(ctx, qStatus).Scan(
-		&m.TotalConnections, &m.Running, &m.MaxUsedConnections, &m.AbortedConnects,
-	); err != nil {
-		return nil, fmt.Errorf("scan connection status: %w", err)
-	}
-
-	m.Sleeping = m.TotalConnections - m.Running
-	if m.Sleeping < 0 {
-		m.Sleeping = 0
-	}
-	if m.MaxConnections > 0 {
-		m.UtilizationPct = math.Round(float64(m.TotalConnections)/float64(m.MaxConnections)*10000) / 100
-	}
-
-	_ = db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM information_schema.PROCESSLIST
-		WHERE STATE LIKE '%Waiting for%lock%' OR STATE LIKE '%lock wait%'`).Scan(&m.WaitingForLock)
-
-	filter := dbSet(databases)
-	rows, err := db.QueryContext(ctx, `
-		SELECT
-		    s.schema_name,
-		    COUNT(p.id),
-		    SUM(CASE WHEN p.COMMAND = 'Query' THEN 1 ELSE 0 END),
-		    SUM(CASE WHEN p.COMMAND = 'Sleep'  THEN 1 ELSE 0 END)
-		FROM information_schema.schemata s
-		LEFT JOIN information_schema.PROCESSLIST p ON p.db = s.schema_name
-		WHERE s.schema_name NOT IN ('information_schema','mysql','performance_schema','sys')
-		GROUP BY s.schema_name
-		ORDER BY COUNT(p.id) DESC, s.schema_name`)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var s DBConnStat
-			if rows.Scan(&s.Database, &s.Total, &s.Running, &s.Sleeping) == nil {
-				if inDBSet(filter, s.Database) {
-					m.ByDatabase = append(m.ByDatabase, s)
-				}
-			}
-		}
-		_ = rows.Err()
-	}
-	return m, nil
-}
-
-// =============================================================================
-// replication — GR member stats + applier workers
-// =============================================================================
-
-func collectReplication(ctx context.Context, db *sql.DB) (*ReplicationMetric, error) {
-	m := &ReplicationMetric{Members: []GRMemberStat{}, Appliers: []ApplierStat{}}
-
-	rows, err := db.QueryContext(ctx, `
-		SELECT
-		    s.MEMBER_ID,
-		    m.MEMBER_HOST,
-		    m.MEMBER_PORT,
-		    m.MEMBER_ROLE,
-		    s.COUNT_TRANSACTIONS_IN_QUEUE,
-		    s.COUNT_TRANSACTIONS_CHECKED,
-		    s.COUNT_CONFLICTS_DETECTED,
-		    COALESCE(s.TRANSACTIONS_COMMITTED_ALL_MEMBERS, '')
-		FROM performance_schema.replication_group_member_stats s
-		JOIN performance_schema.replication_group_members m USING (MEMBER_ID)
-		ORDER BY m.MEMBER_ROLE DESC, m.MEMBER_HOST`)
-	if err != nil {
-		return nil, fmt.Errorf("query GR member stats: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var s GRMemberStat
-		if rows.Scan(
-			&s.MemberID, &s.Host, &s.Port, &s.Role,
-			&s.TransactionsInQueue, &s.TransactionsChecked, &s.ConflictsDetected,
-			&s.TransactionsCommittedAllMembers,
-		) == nil {
-			m.Members = append(m.Members, s)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	m.GREnabled = len(m.Members) > 0
-
-	rows2, err := db.QueryContext(ctx, `
-		SELECT
-		    CHANNEL_NAME,
-		    WORKER_ID,
-		    SERVICE_STATE,
-		    COALESCE(APPLYING_TRANSACTION, ''),
-		    LAST_APPLIED_TRANSACTION_ORIGINAL_COMMIT_TIMESTAMP,
-		    LAST_APPLIED_TRANSACTION_END_APPLY_TIMESTAMP
-		FROM performance_schema.replication_applier_status_by_worker
-		WHERE CHANNEL_NAME = 'group_replication_applier'
-		ORDER BY WORKER_ID`)
-	if err == nil {
-		defer rows2.Close()
-		for rows2.Next() {
-			var s ApplierStat
-			var commitTs, applyTs sql.NullTime
-			if rows2.Scan(
-				&s.Channel, &s.WorkerID, &s.State,
-				&s.ApplyingTransaction, &commitTs, &applyTs,
-			) == nil {
-				if applyTs.Valid {
-					t := applyTs.Time.UTC()
-					s.LastAppliedAt = &t
-				}
-				// lag = time between original commit and when this node applied it.
-				// Clamp to 0 — negative values indicate clock skew between nodes.
-				if commitTs.Valid && applyTs.Valid && !commitTs.Time.IsZero() && !applyTs.Time.IsZero() {
-					lag := applyTs.Time.Sub(commitTs.Time).Seconds()
-					if lag < 0 {
-						lag = 0
-					}
-					s.LagSeconds = math.Round(lag*1000) / 1000
-				}
-				m.Appliers = append(m.Appliers, s)
-			}
-		}
-		_ = rows2.Err()
-	}
-	return m, nil
-}
-
-// =============================================================================
-// performance — InnoDB buffer pool, QPS/TPS, temp tables, sort
-// =============================================================================
-
-func collectPerformance(ctx context.Context, db *sql.DB) (*PerformanceMetric, error) {
-	m := &PerformanceMetric{}
-
-	_ = db.QueryRowContext(ctx, `SELECT @@innodb_buffer_pool_size`).Scan(&m.BufferPoolSizeBytes)
-
-	const qStatus = `
-		SELECT VARIABLE_NAME, CAST(VARIABLE_VALUE AS UNSIGNED)
-		FROM performance_schema.global_status
-		WHERE VARIABLE_NAME IN (
-		    'Innodb_buffer_pool_read_requests',
-		    'Innodb_buffer_pool_reads',
-		    'Innodb_buffer_pool_pages_free',
-		    'Innodb_buffer_pool_pages_dirty',
-		    'Created_tmp_disk_tables',
-		    'Created_tmp_tables',
-		    'Sort_merge_passes',
-		    'Queries',
-		    'Com_commit',
-		    'Com_rollback',
-		    'Innodb_row_lock_time_avg',
-		    'Innodb_row_lock_waits',
-		    'Handler_read_rnd_next',
-		    'Handler_read_key',
-		    'Uptime'
-		)`
-
-	rows, err := db.QueryContext(ctx, qStatus)
-	if err != nil {
-		return nil, fmt.Errorf("query performance status: %w", err)
-	}
-	defer rows.Close()
-
-	var bufReadReq, bufReads, uptime int64
-	var queries, commits, rollbacks int64
-
-	for rows.Next() {
-		var name string
-		var val int64
-		if rows.Scan(&name, &val) != nil {
-			continue
-		}
-		switch name {
-		case "Innodb_buffer_pool_read_requests":
-			bufReadReq = val
-		case "Innodb_buffer_pool_reads":
-			bufReads = val
-		case "Innodb_buffer_pool_pages_free":
-			m.BufferPoolFreePages = val
-		case "Innodb_buffer_pool_pages_dirty":
-			m.BufferPoolDirtyPages = val
-		case "Created_tmp_disk_tables":
-			m.CreatedTmpDiskTables = val
-		case "Created_tmp_tables":
-			m.CreatedTmpTables = val
-		case "Sort_merge_passes":
-			m.SortMergePasses = val
-		case "Queries":
-			queries = val
-		case "Com_commit":
-			commits = val
-		case "Com_rollback":
-			rollbacks = val
-		case "Innodb_row_lock_time_avg":
-			m.InnodbRowLockAvgMs = float64(val)
-		case "Innodb_row_lock_waits":
-			m.InnodbRowLockWaits = val
-		case "Handler_read_rnd_next":
-			m.HandlerReadRndNext = val
-		case "Handler_read_key":
-			m.HandlerReadKey = val
-		case "Uptime":
-			uptime = val
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	if bufReadReq > 0 {
-		m.BufferPoolHitPct = math.Round(float64(bufReadReq-bufReads)/float64(bufReadReq)*10000) / 100
-	}
-	if uptime > 0 {
-		m.QPS = math.Round(float64(queries)/float64(uptime)*1000) / 1000
-		m.TPS = math.Round(float64(commits+rollbacks)/float64(uptime)*1000) / 1000
-	}
-	if m.CreatedTmpTables > 0 {
-		m.TmpTablesDiskRatioPct = math.Round(float64(m.CreatedTmpDiskTables)/float64(m.CreatedTmpTables)*10000) / 100
-	}
-	total := m.HandlerReadRndNext + m.HandlerReadKey
-	if total > 0 {
-		m.IdxLookupRatioPct = math.Round(float64(m.HandlerReadKey)/float64(total)*10000) / 100
-	}
-	return m, nil
-}
-
-// =============================================================================
-// query — digest stats, slow queries, lock waits, full-scan digests
-// =============================================================================
-
-// psToPicoMs converts performance_schema picosecond timer values to milliseconds.
-// performance_schema TIMER_WAIT is in picoseconds: 1 ms = 1,000,000,000 ps.
-const psPerMs = 1_000_000_000.0
-
-func collectQuery(ctx context.Context, db *sql.DB, limit int, from, to *time.Time, databases []string) (*QueryMetric, error) {
-	m := &QueryMetric{
-		SlowQueryThresholdMs: 1000,
-		SlowQueries:          []SlowQuery{},
-		HighFullScanTables:   []ScanDigest{},
-	}
-
-	// Check if events_statements_summary_by_digest has data.
-	var stmtCount int64
-	if err := db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM performance_schema.events_statements_summary_by_digest
-		WHERE COUNT_STAR > 0`).Scan(&stmtCount); err == nil && stmtCount > 0 {
-		m.StatementsAvailable = true
-
-		_ = db.QueryRowContext(ctx, `
-			SELECT COALESCE(AVG(AVG_TIMER_WAIT), 0) / ?
-			FROM performance_schema.events_statements_summary_by_digest
-			WHERE COUNT_STAR > 0`, psPerMs).Scan(&m.AvgExecMs)
-
-		// P95 via window function (MySQL 8.0+).
-		_ = db.QueryRowContext(ctx, `
-			SELECT COALESCE(MIN(t.v), 0) FROM (
-			    SELECT AVG_TIMER_WAIT / ? AS v,
-			           NTILE(100) OVER (ORDER BY AVG_TIMER_WAIT) AS bucket
-			    FROM performance_schema.events_statements_summary_by_digest
-			    WHERE COUNT_STAR > 0
-			) t WHERE t.bucket >= 95`, psPerMs).Scan(&m.P95ExecMs)
-
-		_ = db.QueryRowContext(ctx, `
-			SELECT COALESCE(MIN(t.v), 0) FROM (
-			    SELECT AVG_TIMER_WAIT / ? AS v,
-			           NTILE(100) OVER (ORDER BY AVG_TIMER_WAIT) AS bucket
-			    FROM performance_schema.events_statements_summary_by_digest
-			    WHERE COUNT_STAR > 0
-			) t WHERE t.bucket >= 99`, psPerMs).Scan(&m.P99ExecMs)
-
-		m.TopByMeanExecMs, _ = scanQueryStats(ctx, db, `
-			SELECT LEFT(COALESCE(DIGEST_TEXT,''), 300), COUNT_STAR,
-			    AVG_TIMER_WAIT / ?, MAX_TIMER_WAIT / ?,
-			    SUM_TIMER_WAIT / ?, SUM_ROWS_EXAMINED, SUM_ERRORS
-			FROM performance_schema.events_statements_summary_by_digest
-			WHERE COUNT_STAR > 0
-			ORDER BY AVG_TIMER_WAIT DESC LIMIT ?`, psPerMs, psPerMs, psPerMs, limit)
-
-		m.TopByTotalExecMs, _ = scanQueryStats(ctx, db, `
-			SELECT LEFT(COALESCE(DIGEST_TEXT,''), 300), COUNT_STAR,
-			    AVG_TIMER_WAIT / ?, MAX_TIMER_WAIT / ?,
-			    SUM_TIMER_WAIT / ?, SUM_ROWS_EXAMINED, SUM_ERRORS
-			FROM performance_schema.events_statements_summary_by_digest
-			WHERE COUNT_STAR > 0
-			ORDER BY SUM_TIMER_WAIT DESC LIMIT ?`, psPerMs, psPerMs, psPerMs, limit)
-	}
-
-	// Slow queries from information_schema.PROCESSLIST (TIME is in seconds).
-	// Filter to active Query commands exceeding the threshold.
-	// TIME * 1000 converts to ms so we compare directly against SlowQueryThresholdMs.
-
-	const qSlow = `
-		SELECT ID, COALESCE(DB,''), USER, HOST, COALESCE(STATE,''),
-		    LEFT(COALESCE(INFO,''), 300),
-		    TIME * 1000
-		FROM information_schema.PROCESSLIST
-		WHERE COMMAND = 'Query'
-		    AND TIME * 1000 > ?
-		    AND ID != CONNECTION_ID()
-		    AND USER != 'system user'
-		    AND INFO != ''
-		    AND (? IS NULL OR FROM_UNIXTIME(UNIX_TIMESTAMP() - TIME) >= ?)
-		    AND (? IS NULL OR FROM_UNIXTIME(UNIX_TIMESTAMP() - TIME) <= ?)
-		ORDER BY TIME DESC
-		LIMIT ?`
-
-	dbFilter := dbSet(databases)
-	rows, err := db.QueryContext(ctx, qSlow,
-		m.SlowQueryThresholdMs,
-		nullTimeStr(from), nullTimeStr(from),
-		nullTimeStr(to), nullTimeStr(to),
-		limit,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("query slow queries: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var s SlowQuery
-		if rows.Scan(&s.ID, &s.Database, &s.User, &s.Host, &s.State, &s.Query, &s.DurationMs) == nil {
-			if !inDBSet(dbFilter, s.Database) {
-				continue
-			}
-			if s.DurationMs > m.LongestRunningMs {
-				m.LongestRunningMs = s.DurationMs
-			}
-			m.SlowQueries = append(m.SlowQueries, s)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	m.SlowQueryCount = len(m.SlowQueries)
-
-	// Lock wait count.
-	_ = db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM information_schema.PROCESSLIST
-		WHERE STATE LIKE '%Waiting for%lock%' OR STATE LIKE '%lock wait%' OR STATE = 'Waiting for table metadata lock'`).Scan(&m.LockWaitCount)
-
-	// Deadlock count from InnoDB status variable (available MySQL 8.0+).
-	_ = db.QueryRowContext(ctx, `
-		SELECT CAST(VARIABLE_VALUE AS UNSIGNED) FROM performance_schema.global_status
-		WHERE VARIABLE_NAME = 'Innodb_deadlocks'`).Scan(&m.DeadlockCount)
-
-	// Digests that required full-table scans.
-	rows2, err := db.QueryContext(ctx, `
-		SELECT
-		    COALESCE(SCHEMA_NAME, ''),
-		    LEFT(COALESCE(DIGEST_TEXT, ''), 200),
-		    SUM_NO_INDEX_USED + SUM_NO_GOOD_INDEX_USED,
-		    COUNT_STAR,
-		    ROUND((SUM_NO_INDEX_USED + SUM_NO_GOOD_INDEX_USED) / COUNT_STAR * 100, 2)
-		FROM performance_schema.events_statements_summary_by_digest
-		WHERE COUNT_STAR > 0
-		    AND (SUM_NO_INDEX_USED + SUM_NO_GOOD_INDEX_USED) > 0
-		    AND SCHEMA_NAME NOT IN ('information_schema','performance_schema','mysql','sys')
-		    AND SCHEMA_NAME IS NOT NULL
-		    AND DIGEST_TEXT NOT LIKE 'SHOW%'
-		ORDER BY (SUM_NO_INDEX_USED + SUM_NO_GOOD_INDEX_USED) DESC
-		LIMIT ?`, limit)
-	if err == nil {
-		defer rows2.Close()
-		for rows2.Next() {
-			var s ScanDigest
-			if rows2.Scan(&s.Schema, &s.Query, &s.FullScans, &s.TotalCalls, &s.FullScanPct) == nil {
-				if inDBSet(dbFilter, s.Schema) {
-					m.HighFullScanTables = append(m.HighFullScanTables, s)
-				}
-			}
-		}
-		_ = rows2.Err()
-	}
-	return m, nil
-}
-
-func scanQueryStats(ctx context.Context, db *sql.DB, q string, args ...any) ([]QueryStat, error) {
-	rows, err := db.QueryContext(ctx, q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []QueryStat
-	for rows.Next() {
-		var s QueryStat
-		if rows.Scan(&s.Query, &s.Calls, &s.MeanExecMs, &s.MaxExecMs, &s.TotalExecMs, &s.RowsExamined, &s.Errors) == nil {
-			out = append(out, s)
-		}
-	}
-	return out, rows.Err()
-}
-
-// nullTimeStr returns nil when t is nil (for IS NULL checks in MySQL).
-func nullTimeStr(t *time.Time) any {
-	if t == nil {
-		return nil
-	}
-	return t.Format("2006-01-02 15:04:05")
-}
-
-// =============================================================================
-// maintenance — InnoDB purge lag, fragmentation, metadata locks
-// =============================================================================
-
-func collectMaintenance(ctx context.Context, db *sql.DB, limit int, databases []string) (*MaintenanceMetric, error) {
-	m := &MaintenanceMetric{
-		FragmentedTables: []FragmentedTable{},
-	}
-
-	// InnoDB history list length (purge lag).
-	_ = db.QueryRowContext(ctx, `
-		SELECT CAST(VARIABLE_VALUE AS UNSIGNED) FROM performance_schema.global_status
-		WHERE VARIABLE_NAME = 'Innodb_history_list_length'`).Scan(&m.PurgeLagTransactions)
-	switch {
-	case m.PurgeLagTransactions > 10_000_000:
-		m.PurgeLagRiskLevel = "danger"
-	case m.PurgeLagTransactions > 1_000_000:
-		m.PurgeLagRiskLevel = "warning"
-	default:
-		m.PurgeLagRiskLevel = "ok"
-	}
-
-	// Fragmented tables (DATA_FREE > 0, non-system schemas).
-	dbFilter := dbSet(databases)
-	rows, err := db.QueryContext(ctx, `
-		SELECT TABLE_SCHEMA, TABLE_NAME,
-		    COALESCE(ROW_FORMAT, ''),
-		    DATA_LENGTH, DATA_FREE,
-		    ROUND(DATA_FREE / (DATA_LENGTH + DATA_FREE) * 100, 2) AS fragment_pct
-		FROM information_schema.TABLES
-		WHERE TABLE_SCHEMA NOT IN ('information_schema','mysql','performance_schema','sys')
-		    AND TABLE_TYPE = 'BASE TABLE'
-		    AND DATA_FREE > 0
-		    AND (DATA_LENGTH + DATA_FREE) > 0
-		ORDER BY DATA_FREE DESC
-		LIMIT ?`, limit)
-	if err != nil {
-		return nil, fmt.Errorf("query fragmented tables: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var t FragmentedTable
-		if rows.Scan(&t.Schema, &t.Table, &t.RowFormat, &t.DataLength, &t.DataFree, &t.FragmentPct) == nil {
-			if inDBSet(dbFilter, t.Schema) {
-				m.FragmentedTables = append(m.FragmentedTables, t)
-			}
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate fragmented tables: %w", err)
-	}
-
-	// Open / opened tables.
-	const qOpen = `
-		SELECT
-		    MAX(CASE WHEN VARIABLE_NAME = 'Open_tables'   THEN CAST(VARIABLE_VALUE AS UNSIGNED) END),
-		    MAX(CASE WHEN VARIABLE_NAME = 'Opened_tables' THEN CAST(VARIABLE_VALUE AS UNSIGNED) END)
-		FROM performance_schema.global_status
-		WHERE VARIABLE_NAME IN ('Open_tables','Opened_tables')`
-	_ = db.QueryRowContext(ctx, qOpen).Scan(&m.OpenTables, &m.OpenedTables)
-
-	// Metadata locks (requires performance_schema.setup_instruments 'wait/lock/metadata/sql/mdl' enabled).
-	const qMDL = `
-		SELECT
-		    COUNT(*),
-		    SUM(CASE WHEN LOCK_STATUS = 'PENDING' THEN 1 ELSE 0 END)
-		FROM performance_schema.metadata_locks
-		WHERE OBJECT_TYPE NOT IN ('GLOBAL','COMMIT','BACKUP LOCK','ACL CACHE','LOCKING SERVICE')`
-	_ = db.QueryRowContext(ctx, qMDL).Scan(&m.TotalMetaLocks, &m.BlockedMetaLocks)
-
-	return m, nil
 }

@@ -36,6 +36,8 @@ UNIT_FILE="/etc/systemd/system/${APP_NAME}.service"
 HAPROXY_OVERRIDE_DIR="/etc/systemd/system/haproxy.service.d"
 HAPROXY_OVERRIDE_FILE="${HAPROXY_OVERRIDE_DIR}/override.conf"
 CLUSTER_INSTALL_DIR="${APP_ROOT}/cluster"
+LOG_DIR="${LOG_DIR:-/var/erawan-cluster}"
+LOG_FILE="${LOG_DIR}/erawan-cluster.log"
 TMP_CLUSTER_STAGE=""
 
 cleanup() {
@@ -221,6 +223,10 @@ create_user_and_directories() {
   install -d -o "${APP_USER}" -g "${APP_GROUP}" -m 0755 "${TENANTS_DIR}"
   install -d -o root -g root -m 0755 "${APP_ROOT}"
   install -d -o root -g "${APP_GROUP}" -m 0750 "${APP_ENV_DIR}"
+  install -d -o "${APP_USER}" -g "${APP_GROUP}" -m 0750 "${LOG_DIR}"
+  touch "${LOG_FILE}"
+  chown "${APP_USER}:${APP_GROUP}" "${LOG_FILE}"
+  chmod 0640 "${LOG_FILE}"
 }
 
 install_binary() {
@@ -277,6 +283,8 @@ MYSQL_ROLLBACK_PLAYBOOK=${CLUSTER_INSTALL_DIR}/mysql/playbooks/rollback.yml
 PGSQL_DEPLOY_PLAYBOOK=${CLUSTER_INSTALL_DIR}/pgsql/playbooks/deploy.yml
 CLUSTER_SSH_USER=
 CLUSTER_SSH_PRIVATE_KEY_PATH=
+CLUSTER_SSH_KNOWN_HOSTS=${KEYS_DIR}/known_hosts
+# CLUSTER_SSH_INSECURE_HOST_KEY=true  # uncomment only for first-time bootstrap before host keys are scanned
 
 CLUSTER_ANSIBLE_DEBUG=false
 CLUSTER_ANSIBLE_VERBOSITY=0
@@ -286,11 +294,12 @@ EOF
   chown root:"${APP_GROUP}" "${APP_ENV_FILE}"
   chmod 0640 "${APP_ENV_FILE}"
 
-  upsert_env "MYSQL_DEPLOY_PLAYBOOK"   "${CLUSTER_INSTALL_DIR}/mysql/playbooks/deploy.yml"   "${APP_ENV_FILE}"
-  upsert_env "MYSQL_ROLLBACK_PLAYBOOK" "${CLUSTER_INSTALL_DIR}/mysql/playbooks/rollback.yml" "${APP_ENV_FILE}"
-  upsert_env "PGSQL_DEPLOY_PLAYBOOK"   "${CLUSTER_INSTALL_DIR}/pgsql/playbooks/deploy.yml"   "${APP_ENV_FILE}"
-  upsert_env "CLUSTER_STATE_DIR"       "${JOBS_DIR}"                                          "${APP_ENV_FILE}"
-  upsert_env "TENANTS_DIR"             "${TENANTS_DIR}"                                       "${APP_ENV_FILE}"
+  upsert_env "MYSQL_DEPLOY_PLAYBOOK"     "${CLUSTER_INSTALL_DIR}/mysql/playbooks/deploy.yml"   "${APP_ENV_FILE}"
+  upsert_env "MYSQL_ROLLBACK_PLAYBOOK"  "${CLUSTER_INSTALL_DIR}/mysql/playbooks/rollback.yml" "${APP_ENV_FILE}"
+  upsert_env "PGSQL_DEPLOY_PLAYBOOK"    "${CLUSTER_INSTALL_DIR}/pgsql/playbooks/deploy.yml"   "${APP_ENV_FILE}"
+  upsert_env "CLUSTER_STATE_DIR"        "${JOBS_DIR}"                                          "${APP_ENV_FILE}"
+  upsert_env "TENANTS_DIR"              "${TENANTS_DIR}"                                       "${APP_ENV_FILE}"
+  upsert_env "CLUSTER_SSH_KNOWN_HOSTS"  "${KEYS_DIR}/known_hosts"                             "${APP_ENV_FILE}"
 }
 
 configure_haproxy() {
@@ -344,7 +353,9 @@ LimitNOFILE=65535
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=full
-ReadWritePaths=${APP_STATE_DIR}
+ReadWritePaths=${APP_STATE_DIR} ${LOG_DIR}
+StandardOutput=append:${LOG_FILE}
+StandardError=append:${LOG_FILE}
 
 [Install]
 WantedBy=multi-user.target
@@ -378,6 +389,13 @@ print_summary() {
   echo "  ENCRYPTION_KEY               — 64-char hex for AES-256-GCM payload encryption (openssl rand -hex 32)"
   echo "  CLUSTER_SSH_USER             — SSH user for cluster nodes"
   echo "  CLUSTER_SSH_PRIVATE_KEY_PATH — path to the SSH private key"
+  echo ""
+  echo "Before first deploy, scan cluster node SSH host keys:"
+  echo "  ssh-keyscan -H <node-ip> [<node-ip> ...] >> ${KEYS_DIR}/known_hosts"
+  echo "  (or set CLUSTER_SSH_INSECURE_HOST_KEY=true in ${APP_ENV_FILE} for bootstrap only)"
+  echo ""
+  echo "Logs: ${LOG_FILE}"
+  echo "  tail -f ${LOG_FILE}"
   echo ""
   echo "Check status:"
   echo "  systemctl status ${APP_NAME} --no-pager"

@@ -2,14 +2,24 @@ package pgsql
 
 import (
 	"encoding/json"
-	"time"
+
+	"erawan-cluster/internal/cluster/core"
 )
 
+// Job status values, re-exported from core so existing references keep working.
 const (
-	JobStatusPending   = "pending"
-	JobStatusRunning   = "running"
-	JobStatusFailed    = "failed"
-	JobStatusCompleted = "completed"
+	JobStatusPending   = core.JobStatusPending
+	JobStatusRunning   = core.JobStatusRunning
+	JobStatusFailed    = core.JobStatusFailed
+	JobStatusCompleted = core.JobStatusCompleted
+)
+
+// Shared job state types are provided by core; these aliases keep the engine's
+// public API (pgsql.Job, pgsql.StepResult, ...) unchanged.
+type (
+	Job             = core.Job[StoredSpec]
+	StepResult      = core.StepResult
+	MemberOperation = core.MemberOperation
 )
 
 type DeployRequest struct {
@@ -27,7 +37,7 @@ type DeployRequest struct {
 	NewDB              string   `json:"new_db"`
 	SSHPort            int      `json:"ssh_port"`
 	PostgresPort       int      `json:"postgres_port"`
-	PostgresVersion    int      `json:"postgres_version"`    // major version; default 16
+	PostgresVersion    int      `json:"postgres_version"` // major version; default 16
 	StepTimeoutSeconds int      `json:"step_timeout_seconds"`
 }
 
@@ -36,33 +46,6 @@ type ResumeRequest struct {
 	ReplicatorPassword string `json:"replicator_password"`
 	AdminPassword      string `json:"admin_password"`
 	NewUserPassword    string `json:"new_user_password"`
-}
-
-type StepResult struct {
-	Name      string    `json:"name"`
-	Status    string    `json:"status"`
-	StartedAt time.Time `json:"started_at"`
-	EndedAt   time.Time `json:"ended_at"`
-	ExitCode  int       `json:"exit_code"`
-	Stdout    string    `json:"stdout,omitempty"`
-	Stderr    string    `json:"stderr,omitempty"`
-	Message   string    `json:"message,omitempty"`
-}
-
-type Job struct {
-	ID                string           `json:"id"`
-	Status            string           `json:"status"`
-	CreatedAt         time.Time        `json:"created_at"`
-	UpdatedAt         time.Time        `json:"updated_at"`
-	CurrentStep       string           `json:"current_step,omitempty"`
-	LastCompletedStep int              `json:"last_completed_step"`
-	CompletedSteps    int              `json:"completed_steps"`
-	TotalSteps        int              `json:"total_steps"`
-	ProgressPercent   int              `json:"progress_percent"`
-	Error             string           `json:"error,omitempty"`
-	Request           StoredSpec       `json:"request"`
-	Steps             []StepResult     `json:"steps"`
-	MemberOp          *MemberOperation `json:"member_op,omitempty"`
 }
 
 type StoredSpec struct {
@@ -87,6 +70,7 @@ type SecretInput struct {
 	ReplicatorPassword string
 	AdminPassword      string
 	NewUserPassword    string
+	ExporterPassword   string
 }
 
 type StoredSecret struct {
@@ -95,6 +79,7 @@ type StoredSecret struct {
 	ReplicatorUser     string `json:"replicator_user"`
 	ReplicatorPassword string `json:"replicator_password"`
 	AdminPassword      string `json:"admin_password"`
+	ExporterPassword   string `json:"exporter_password,omitempty"`
 }
 
 type AddMemberRequest struct {
@@ -108,12 +93,15 @@ type RemoveMemberRequest struct {
 	Force    bool   `json:"force,omitempty"`
 }
 
-type MemberOperation struct {
-	Type        string   `json:"type"`         // "add" or "remove"
-	MemberIPs   []string `json:"member_ips"`
-	SourceJobID string   `json:"source_job_id"`
-}
-
+/**
+ * NewUserSSLRequiredEnabled.
+ *
+ * Receiver:
+ *   r DeployRequest - value receiver; the method operates on a copy of the DeployRequest
+ *
+ * Returns:
+ *   bool - boolean result
+ */
 func (r DeployRequest) NewUserSSLRequiredEnabled() bool {
 	if r.NewUserSSLRequired == nil {
 		return true
@@ -127,6 +115,19 @@ func (r DeployRequest) NewUserSuperuserEnabled() bool {
 	}
 	return *r.NewUserSuperuser
 }
+
+/**
+ * UnmarshalJSON.
+ *
+ * Receiver:
+ *   s *StoredSpec - pointer receiver; the method may mutate this StoredSpec instance
+ *
+ * Params:
+ *   data []byte - the data bytes
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
 
 func (s *StoredSpec) UnmarshalJSON(data []byte) error {
 	type alias StoredSpec

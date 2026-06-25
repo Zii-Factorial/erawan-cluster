@@ -1,17 +1,13 @@
 package mysql
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"erawan-cluster/internal/cluster/core"
 )
 
 type Runner struct {
@@ -23,8 +19,20 @@ type Runner struct {
 	ansibleVerbosity     int
 	streamLogs           bool
 	maxOutputChars       int
+	sshPolicy            core.SSHPolicy
 }
 
+/**
+ * NewRunner.
+ *
+ * Params:
+ *   ansibleBin string - the ansibleBin string
+ *   deployPlaybook string - the deployPlaybook string
+ *   rollbackPlaybook string - the rollbackPlaybook string
+ *
+ * Returns:
+ *   *Runner - the resulting *Runner
+ */
 func NewRunner(ansibleBin, deployPlaybook, rollbackPlaybook string) *Runner {
 	if strings.TrimSpace(ansibleBin) == "" {
 		ansibleBin = "ansible-playbook"
@@ -34,12 +42,55 @@ func NewRunner(ansibleBin, deployPlaybook, rollbackPlaybook string) *Runner {
 		deployPlaybook:   deployPlaybook,
 		rollbackPlaybook: rollbackPlaybook,
 		maxOutputChars:   8000,
+		// Secure by default: verify node SSH host keys.
+		sshPolicy: core.SSHPolicy{VerifyHostKeys: true},
 	}
 }
 
-func (r *Runner) SetAddMemberPlaybook(path string)    { r.addMemberPlaybook = path }
+/**
+ * SetAddMemberPlaybook.
+ *
+ * Receiver:
+ *   r *Runner - pointer receiver; the method may mutate this Runner instance
+ *
+ * Params:
+ *   path string - the path string
+ */
+func (r *Runner) SetAddMemberPlaybook(path string) { r.addMemberPlaybook = path }
+
+/**
+ * SetRemoveMemberPlaybook.
+ *
+ * Receiver:
+ *   r *Runner - pointer receiver; the method may mutate this Runner instance
+ *
+ * Params:
+ *   path string - the path string
+ */
 func (r *Runner) SetRemoveMemberPlaybook(path string) { r.removeMemberPlaybook = path }
 
+/**
+ * SetSSHPolicy configures how Ansible verifies node SSH host keys.
+ *
+ * Receiver:
+ *   r *Runner - pointer receiver; the method may mutate this Runner instance
+ *
+ * Params:
+ *   p core.SSHPolicy - the p (core.SSHPolicy)
+ */
+func (r *Runner) SetSSHPolicy(p core.SSHPolicy) { r.sshPolicy = p }
+
+/**
+ * SetDebug.
+ *
+ * Receiver:
+ *   r *Runner - pointer receiver; the method may mutate this Runner instance
+ *
+ * Params:
+ *   verbosity int - the verbosity value
+ *   streamLogs bool - the streamLogs flag
+ *   maxOutputChars int - the maxOutputChars value
+ */
 func (r *Runner) SetDebug(verbosity int, streamLogs bool, maxOutputChars int) {
 	if verbosity < 0 {
 		verbosity = 0
@@ -68,81 +119,169 @@ type memberRunConfig struct {
 	timeout  time.Duration
 }
 
+/**
+ * RunDeployStep.
+ *
+ * Receiver:
+ *   r *Runner - pointer receiver; the method may mutate this Runner instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   cfg runConfig - the cfg (runConfig)
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
 func (r *Runner) RunDeployStep(ctx context.Context, cfg runConfig) StepResult {
 	return r.run(ctx, cfg, r.deployPlaybook)
 }
 
+/**
+ * RunRollback.
+ *
+ * Receiver:
+ *   r *Runner - pointer receiver; the method may mutate this Runner instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   jobID string - the jobID string
+ *   spec StoredSpec - the spec (StoredSpec)
+ *   secret SecretInput - the secret (SecretInput)
+ *   timeout time.Duration - the timeout (time.Duration)
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
 func (r *Runner) RunRollback(ctx context.Context, jobID string, spec StoredSpec, secret SecretInput, timeout time.Duration) StepResult {
 	cfg := runConfig{
-		jobID:  jobID,
-		spec:   spec,
-		secret: secret,
-		step: step{
-			Name: "rollback",
-			Tag:  "rollback",
-		},
+		jobID:   jobID,
+		spec:    spec,
+		secret:  secret,
+		step:    step{Name: "rollback", Tag: "rollback"},
 		timeout: timeout,
 	}
 	return r.run(ctx, cfg, r.rollbackPlaybook)
 }
 
+/**
+ * RunAddMember.
+ *
+ * Receiver:
+ *   r *Runner - pointer receiver; the method may mutate this Runner instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   cfg memberRunConfig - the cfg (memberRunConfig)
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
 func (r *Runner) RunAddMember(ctx context.Context, cfg memberRunConfig) StepResult {
 	return r.runMember(ctx, cfg, r.addMemberPlaybook, "add_member")
 }
 
+/**
+ * RunRemoveMember.
+ *
+ * Receiver:
+ *   r *Runner - pointer receiver; the method may mutate this Runner instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   cfg memberRunConfig - the cfg (memberRunConfig)
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
 func (r *Runner) RunRemoveMember(ctx context.Context, cfg memberRunConfig) StepResult {
 	return r.runMember(ctx, cfg, r.removeMemberPlaybook, "remove_member")
 }
 
-func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, stepName string) (result StepResult) {
-	result = StepResult{
-		Name:      stepName,
-		Status:    JobStatusRunning,
-		StartedAt: time.Now().UTC(),
-		ExitCode:  -1,
-	}
-	defer func() { result.EndedAt = time.Now().UTC() }()
-
-	if strings.TrimSpace(playbook) == "" {
-		result.Status = JobStatusFailed
-		result.Message = "playbook path is not configured"
-		return
-	}
-
-	workspace, err := os.MkdirTemp("", "mysql-member-job-")
-	if err != nil {
-		result.Status = JobStatusFailed
-		result.Message = fmt.Sprintf("create temp dir: %v", err)
-		return
-	}
-	defer os.RemoveAll(workspace)
-
-	inventoryPath := filepath.Join(workspace, "inventory.yml")
-	varsPath := filepath.Join(workspace, "vars.json")
-
-	var inventory string
-	if stepName == "add_member" {
-		inventory = buildAddMemberInventoryYAML(cfg.spec, cfg.memberIP)
-	} else {
-		inventory = buildInventoryYAML(cfg.spec)
-	}
-	if err := os.WriteFile(inventoryPath, []byte(inventory), 0o600); err != nil {
-		result.Status = JobStatusFailed
-		result.Message = fmt.Sprintf("write inventory: %v", err)
-		return
-	}
-
+/**
+ * run executes one tagged step of a deploy/rollback playbook.
+ *
+ * Receiver:
+ *   r *Runner - pointer receiver; the method may mutate this Runner instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   cfg runConfig - the cfg (runConfig)
+ *   playbook string - the playbook string
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
+func (r *Runner) run(ctx context.Context, cfg runConfig, playbook string) StepResult {
 	stepTimeout := cfg.spec.StepTimeoutSeconds
 	if stepTimeout <= 0 {
 		stepTimeout = 900
 	}
+	extraVars := map[string]any{
+		"cluster_name":               cfg.spec.ClusterName,
+		"cluster_admin_username":     cfg.spec.AdminUsername,
+		"cluster_admin_password":     cfg.secret.AdminPassword,
+		"primary_ip":                 cfg.spec.PrimaryIP,
+		"standby_ips":                cfg.spec.StandbyIPs,
+		"new_user":                   cfg.spec.NewUser,
+		"new_user_password":          cfg.secret.NewUserPassword,
+		"new_user_ssl_required":      cfg.spec.NewUserSSLRequired,
+		"new_user_superuser":         cfg.spec.NewUserSuperuser,
+		"new_db":                     cfg.spec.NewDB,
+		"mysql_port":                 cfg.spec.MySQLPort,
+		"erawan_mysql_major_version": cfg.spec.MySQLVersion,
+		"assume_prepared":            cfg.spec.AssumePrepared,
+		"bootstrap_router":           cfg.spec.BootstrapRouter,
+		"router_service_name":        "mysqlrouter-" + cfg.spec.ClusterName,
+		"step_timeout_seconds":       stepTimeout,
+	}
+	return core.AnsibleRun(ctx, core.AnsibleSpec{
+		Bin:             r.ansibleBin,
+		Playbook:        playbook,
+		Inventory:       buildInventoryYAML(cfg.spec, r.sshPolicy.SSHCommonArgs()),
+		ExtraVars:       extraVars,
+		Tags:            []string{cfg.step.Tag},
+		Verbosity:       r.ansibleVerbosity,
+		StreamLogs:      r.streamLogs,
+		MaxOutputChars:  r.maxOutputChars,
+		Timeout:         cfg.timeout,
+		StepName:        cfg.step.Name,
+		WorkspacePrefix: "mysql-cluster-job-",
+		Env:             r.sshPolicy.AnsibleEnv(),
+	})
+}
+
+/**
+ * runMember executes the add/remove-member playbook for a single node.
+ *
+ * Receiver:
+ *   r *Runner - pointer receiver; the method may mutate this Runner instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   cfg memberRunConfig - the cfg (memberRunConfig)
+ *   playbook string - the playbook string
+ *   stepName string - the stepName string
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
+func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, stepName string) StepResult {
+	stepTimeout := cfg.spec.StepTimeoutSeconds
+	if stepTimeout <= 0 {
+		stepTimeout = 900
+	}
+
+	var inventory string
+	sshArgs := r.sshPolicy.SSHCommonArgs()
 	// effectiveStandbys reflects the expected post-operation standby list so that
 	// verify_cluster's EXPECTED_CLUSTER_NODES count is correct for both add and remove.
 	effectiveStandbys := make([]string, len(cfg.spec.StandbyIPs))
 	copy(effectiveStandbys, cfg.spec.StandbyIPs)
 	if stepName == "add_member" {
+		inventory = buildAddMemberInventoryYAML(cfg.spec, cfg.memberIP, sshArgs)
 		effectiveStandbys = append(effectiveStandbys, cfg.memberIP)
 	} else {
+		inventory = buildInventoryYAML(cfg.spec, sshArgs)
 		filtered := effectiveStandbys[:0]
 		for _, ip := range effectiveStandbys {
 			if ip != cfg.memberIP {
@@ -151,6 +290,7 @@ func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, s
 		}
 		effectiveStandbys = filtered
 	}
+
 	extraVars := map[string]any{
 		"cluster_name":               cfg.spec.ClusterName,
 		"cluster_admin_username":     cfg.spec.AdminUsername,
@@ -168,75 +308,33 @@ func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, s
 		"step_timeout_seconds":       stepTimeout,
 		"expected_cluster_nodes":     len(effectiveStandbys) + 1,
 	}
-
-	sanitized, err := json.Marshal(extraVars)
-	if err != nil {
-		result.Status = JobStatusFailed
-		result.Message = fmt.Sprintf("marshal vars: %v", err)
-		return
-	}
-	if err := os.WriteFile(varsPath, sanitized, 0o600); err != nil {
-		result.Status = JobStatusFailed
-		result.Message = fmt.Sprintf("write vars: %v", err)
-		return
-	}
-
-	runTimeout := cfg.timeout
-	if runTimeout <= 0 {
-		runTimeout = 15 * time.Minute
-	}
-	stepCtx, cancel := context.WithTimeout(ctx, runTimeout)
-	defer cancel()
-
-	args := []string{
-		"-i", inventoryPath,
-		playbook,
-		"--extra-vars", "@" + varsPath,
-	}
-	if r.ansibleVerbosity > 0 {
-		args = append(args, "-"+strings.Repeat("v", r.ansibleVerbosity))
-	}
-
-	cmd := exec.CommandContext(stepCtx, r.ansibleBin, args...)
-	cmd.Env = append(os.Environ(), "ANSIBLE_HOST_KEY_CHECKING=False")
-
-	var stdout cappedBuffer
-	var stderr cappedBuffer
-	stdout.limit = r.maxOutputChars
-	stderr.limit = r.maxOutputChars
-	if r.streamLogs {
-		cmd.Stdout = io.MultiWriter(&stdout, os.Stdout)
-		cmd.Stderr = io.MultiWriter(&stderr, os.Stderr)
-	} else {
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-	}
-
-	err = cmd.Run()
-	result.Stdout = stdout.String()
-	result.Stderr = stderr.String()
-
-	if err == nil {
-		result.Status = JobStatusCompleted
-		result.ExitCode = 0
-		return
-	}
-
-	result.Status = JobStatusFailed
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		result.ExitCode = exitErr.ExitCode()
-	} else {
-		result.ExitCode = 1
-	}
-	if stepCtx.Err() == context.DeadlineExceeded {
-		result.Message = "step execution timed out"
-		return
-	}
-	result.Message = fmt.Sprintf("ansible step failed: %v", err)
-	return
+	return core.AnsibleRun(ctx, core.AnsibleSpec{
+		Bin:             r.ansibleBin,
+		Playbook:        playbook,
+		Inventory:       inventory,
+		ExtraVars:       extraVars,
+		Verbosity:       r.ansibleVerbosity,
+		StreamLogs:      r.streamLogs,
+		MaxOutputChars:  r.maxOutputChars,
+		Timeout:         cfg.timeout,
+		StepName:        stepName,
+		WorkspacePrefix: "mysql-member-job-",
+		Env:             r.sshPolicy.AnsibleEnv(),
+	})
 }
 
-func buildAddMemberInventoryYAML(spec StoredSpec, newMemberIP string) string {
+/**
+ * buildAddMemberInventoryYAML.
+ *
+ * Params:
+ *   spec StoredSpec - the spec (StoredSpec)
+ *   newMemberIP string - the newMemberIP string
+ *   sshCommonArgs string - the sshCommonArgs string
+ *
+ * Returns:
+ *   string - the resulting string
+ */
+func buildAddMemberInventoryYAML(spec StoredSpec, newMemberIP, sshCommonArgs string) string {
 	var b strings.Builder
 	b.WriteString("all:\n")
 	b.WriteString("  hosts:\n")
@@ -250,7 +348,7 @@ func buildAddMemberInventoryYAML(spec StoredSpec, newMemberIP string) string {
 		b.WriteString("      ansible_become_user: root\n")
 		b.WriteString("      ansible_become_flags: " + strconv.Quote("-n") + "\n")
 		b.WriteString("      ansible_ssh_private_key_file: " + strconv.Quote(spec.SSHPrivateKeyPath) + "\n")
-		b.WriteString("      ansible_ssh_common_args: " + strconv.Quote("-o IdentitiesOnly=yes -o StrictHostKeyChecking=no") + "\n")
+		b.WriteString("      ansible_ssh_common_args: " + strconv.Quote(sshCommonArgs) + "\n")
 	}
 
 	writeHost("primary", spec.PrimaryIP)
@@ -274,131 +372,17 @@ func buildAddMemberInventoryYAML(spec StoredSpec, newMemberIP string) string {
 	return b.String()
 }
 
-func (r *Runner) run(ctx context.Context, cfg runConfig, playbook string) (result StepResult) {
-	result = StepResult{
-		Name:      cfg.step.Name,
-		Status:    JobStatusRunning,
-		StartedAt: time.Now().UTC(),
-		ExitCode:  -1,
-	}
-	defer func() { result.EndedAt = time.Now().UTC() }()
-
-	if strings.TrimSpace(playbook) == "" {
-		result.Status = JobStatusFailed
-		result.Message = "playbook path is not configured"
-		return
-	}
-
-	workspace, err := os.MkdirTemp("", "mysql-cluster-job-")
-	if err != nil {
-		result.Status = JobStatusFailed
-		result.Message = fmt.Sprintf("create temp dir: %v", err)
-		return
-	}
-	defer os.RemoveAll(workspace)
-
-	inventoryPath := filepath.Join(workspace, "inventory.yml")
-	varsPath := filepath.Join(workspace, "vars.json")
-
-	if err := os.WriteFile(inventoryPath, []byte(buildInventoryYAML(cfg.spec)), 0o600); err != nil {
-		result.Status = JobStatusFailed
-		result.Message = fmt.Sprintf("write inventory: %v", err)
-		return
-	}
-
-	stepTimeout := cfg.spec.StepTimeoutSeconds
-	if stepTimeout <= 0 {
-		stepTimeout = 900
-	}
-	extraVars := map[string]any{
-		"cluster_name":               cfg.spec.ClusterName,
-		"cluster_admin_username":     cfg.spec.AdminUsername,
-		"cluster_admin_password":     cfg.secret.AdminPassword,
-		"primary_ip":                 cfg.spec.PrimaryIP,
-		"standby_ips":                cfg.spec.StandbyIPs,
-		"new_user":                   cfg.spec.NewUser,
-		"new_user_password":          cfg.secret.NewUserPassword,
-		"new_user_ssl_required":      cfg.spec.NewUserSSLRequired,
-		"new_user_superuser":         cfg.spec.NewUserSuperuser,
-		"new_db":                     cfg.spec.NewDB,
-		"mysql_port":                 cfg.spec.MySQLPort,
-		"erawan_mysql_major_version": cfg.spec.MySQLVersion,
-		"assume_prepared":            cfg.spec.AssumePrepared,
-		"bootstrap_router":           cfg.spec.BootstrapRouter,
-		"router_service_name":        "mysqlrouter-" + cfg.spec.ClusterName,
-		"step_timeout_seconds":       stepTimeout,
-	}
-
-	sanitized, err := json.Marshal(extraVars)
-	if err != nil {
-		result.Status = JobStatusFailed
-		result.Message = fmt.Sprintf("marshal vars: %v", err)
-		return
-	}
-
-	if err := os.WriteFile(varsPath, sanitized, 0o600); err != nil {
-		result.Status = JobStatusFailed
-		result.Message = fmt.Sprintf("write vars: %v", err)
-		return
-	}
-
-	runTimeout := cfg.timeout
-	if runTimeout <= 0 {
-		runTimeout = 15 * time.Minute
-	}
-	stepCtx, cancel := context.WithTimeout(ctx, runTimeout)
-	defer cancel()
-
-	args := []string{
-		"-i", inventoryPath,
-		playbook,
-		"--tags", cfg.step.Tag,
-		"--extra-vars", "@" + varsPath,
-	}
-	if r.ansibleVerbosity > 0 {
-		args = append(args, "-"+strings.Repeat("v", r.ansibleVerbosity))
-	}
-
-	cmd := exec.CommandContext(stepCtx, r.ansibleBin, args...)
-	cmd.Env = append(os.Environ(), "ANSIBLE_HOST_KEY_CHECKING=False")
-
-	var stdout cappedBuffer
-	var stderr cappedBuffer
-	stdout.limit = r.maxOutputChars
-	stderr.limit = r.maxOutputChars
-	if r.streamLogs {
-		cmd.Stdout = io.MultiWriter(&stdout, os.Stdout)
-		cmd.Stderr = io.MultiWriter(&stderr, os.Stderr)
-	} else {
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-	}
-
-	err = cmd.Run()
-	result.Stdout = stdout.String()
-	result.Stderr = stderr.String()
-
-	if err == nil {
-		result.Status = JobStatusCompleted
-		result.ExitCode = 0
-		return
-	}
-
-	result.Status = JobStatusFailed
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		result.ExitCode = exitErr.ExitCode()
-	} else {
-		result.ExitCode = 1
-	}
-	if stepCtx.Err() == context.DeadlineExceeded {
-		result.Message = "step execution timed out"
-		return
-	}
-	result.Message = fmt.Sprintf("ansible step failed: %v", err)
-	return
-}
-
-func buildInventoryYAML(spec StoredSpec) string {
+/**
+ * buildInventoryYAML.
+ *
+ * Params:
+ *   spec StoredSpec - the spec (StoredSpec)
+ *   sshCommonArgs string - the sshCommonArgs string
+ *
+ * Returns:
+ *   string - the resulting string
+ */
+func buildInventoryYAML(spec StoredSpec, sshCommonArgs string) string {
 	var b strings.Builder
 	b.WriteString("all:\n")
 	b.WriteString("  hosts:\n")
@@ -412,7 +396,7 @@ func buildInventoryYAML(spec StoredSpec) string {
 		b.WriteString("      ansible_become_user: root\n")
 		b.WriteString("      ansible_become_flags: " + strconv.Quote("-n") + "\n")
 		b.WriteString("      ansible_ssh_private_key_file: " + strconv.Quote(spec.SSHPrivateKeyPath) + "\n")
-		b.WriteString("      ansible_ssh_common_args: " + strconv.Quote("-o IdentitiesOnly=yes -o StrictHostKeyChecking=no") + "\n")
+		b.WriteString("      ansible_ssh_common_args: " + strconv.Quote(sshCommonArgs) + "\n")
 	}
 
 	writeHost("primary", spec.PrimaryIP)
@@ -430,36 +414,4 @@ func buildInventoryYAML(spec StoredSpec) string {
 		b.WriteString(fmt.Sprintf("        standby_%d: {}\n", i+1))
 	}
 	return b.String()
-}
-
-// cappedBuffer is a write-capped bytes.Buffer. Writes beyond limit are dropped
-// and a truncation marker is appended to String(). limit=0 means unlimited.
-type cappedBuffer struct {
-	buf     bytes.Buffer
-	limit   int
-	dropped bool
-}
-
-func (b *cappedBuffer) Write(p []byte) (int, error) {
-	if b.limit > 0 {
-		avail := b.limit - b.buf.Len()
-		if avail <= 0 {
-			b.dropped = true
-			return len(p), nil
-		}
-		if len(p) > avail {
-			_, _ = b.buf.Write(p[:avail])
-			b.dropped = true
-			return len(p), nil
-		}
-	}
-	return b.buf.Write(p)
-}
-
-func (b *cappedBuffer) String() string {
-	s := strings.TrimSpace(b.buf.String())
-	if b.dropped {
-		s += "\n...truncated..."
-	}
-	return s
 }

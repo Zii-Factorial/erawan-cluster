@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"erawan-cluster/internal/cluster/core"
 	"erawan-cluster/internal/env"
 )
 
@@ -31,13 +32,15 @@ type config struct {
 // environment ad hoc throughout main) keeps configuration in one auditable
 // place and makes adding a new engine a matter of adding one more field.
 type runtimeConfig struct {
-	server        config
-	haproxy       haproxyConfig
-	ssh           sshConfig
-	mysql         clusterEngineConfig
-	pgsql         clusterEngineConfig
-	encryptionKey string
-	baseDir       string
+	server            config
+	haproxy           haproxyConfig
+	ssh               sshConfig
+	mysql             clusterEngineConfig
+	pgsql             clusterEngineConfig
+	encryptionKey     string
+	baseDir           string
+	maxConcurrentJobs int  // cap on concurrent background cluster jobs (ansible runs)
+	enablePprof       bool // expose /debug/pprof on the loopback interface
 }
 
 // haproxyConfig describes how the HAProxy service writes tenant fragments and
@@ -58,11 +61,33 @@ type haproxyConfig struct {
 type sshConfig struct {
 	user           string
 	privateKeyPath string
+	verifyHostKeys bool
+	knownHostsFile string
 }
 
-// hasCredentials reports whether any explicit SSH credential was provided and
-// therefore should be pushed into the cluster services. When false, the
-// services keep their default (ambient) SSH behaviour.
+/**
+ * policy maps the resolved SSH settings to the engine-agnostic host-key policy
+ * used by the Ansible runners.
+ *
+ * Receiver:
+ *   s sshConfig - the resolved SSH settings (by value).
+ * Returns:
+ *   core.SSHPolicy - host-key verification flag plus optional known_hosts path.
+ */
+func (s sshConfig) policy() core.SSHPolicy {
+	return core.SSHPolicy{VerifyHostKeys: s.verifyHostKeys, KnownHostsFile: s.knownHostsFile}
+}
+
+/**
+ * hasCredentials reports whether any explicit SSH credential was provided and
+ * therefore should be pushed into the cluster services. When false, the
+ * services keep their default (ambient) SSH behaviour.
+ *
+ * Receiver:
+ *   s sshConfig - the resolved SSH settings (by value).
+ * Returns:
+ *   bool - true if a user or private-key path was configured.
+ */
 func (s sshConfig) hasCredentials() bool {
 	return strings.TrimSpace(s.user) != "" || strings.TrimSpace(s.privateKeyPath) != ""
 }
@@ -93,10 +118,15 @@ type clusterEngineConfig struct {
 	ansible              ansibleConfig
 }
 
-// loadConfig reads the entire process configuration from the environment,
-// applying sane defaults so the service can run unconfigured in development.
-// It performs no I/O beyond resolving the working directory and never fails;
-// validation of the resolved values happens in the builders.
+/**
+ * loadConfig reads the entire process configuration from the environment,
+ * applying sane defaults so the service can run unconfigured in development.
+ * It performs no I/O beyond resolving the working directory and never fails;
+ * validation of the resolved values happens in the builders.
+ *
+ * Returns:
+ *   runtimeConfig - the fully-resolved configuration for the whole process.
+ */
 func loadConfig() runtimeConfig {
 	baseDir := projectBaseDir()
 	ansibleBin := env.GetString("ANSIBLE_PLAYBOOK_BIN", "ansible-playbook")
@@ -114,19 +144,26 @@ func loadConfig() runtimeConfig {
 	pgsqlCfg := loadClusterEngineConfig("pgsql", baseDir, sharedStateDir, ansibleBin)
 
 	return runtimeConfig{
-		server:        loadServerConfig(),
-		haproxy:       loadHAProxyConfig(),
-		ssh:           loadSSHConfig(),
-		mysql:         mysqlCfg,
-		pgsql:         pgsqlCfg,
-		encryptionKey: env.GetString("ENCRYPTION_KEY", ""),
-		baseDir:       baseDir,
+		server:            loadServerConfig(),
+		haproxy:           loadHAProxyConfig(),
+		ssh:               loadSSHConfig(),
+		mysql:             mysqlCfg,
+		pgsql:             pgsqlCfg,
+		encryptionKey:     env.GetString("ENCRYPTION_KEY", ""),
+		baseDir:           baseDir,
+		maxConcurrentJobs: env.GetInt("CLUSTER_MAX_CONCURRENT_JOBS", 4),
+		enablePprof:       env.GetBool("ENABLE_PPROF", false),
 	}
 }
 
-// loadServerConfig resolves the HTTP server and request-time settings. The
-// listen address may be given directly via API_ADDR, or assembled from
-// API_HOST and API_PORT when API_ADDR is unset/blank.
+/**
+ * loadServerConfig resolves the HTTP server and request-time settings. The
+ * listen address may be given directly via API_ADDR, or assembled from
+ * API_HOST and API_PORT when API_ADDR is unset/blank.
+ *
+ * Returns:
+ *   config - listen address, env name, API key, version and proxy host.
+ */
 func loadServerConfig() config {
 	addr := env.GetString("API_ADDR", "")
 	if strings.TrimSpace(addr) == "" {
@@ -144,9 +181,14 @@ func loadServerConfig() config {
 	}
 }
 
-// loadHAProxyConfig resolves where tenant fragments live and how the proxy is
-// reloaded. HAPROXY_MAIN_CONFIGS is an optional comma-separated list of base
-// config files that tenant operations must leave untouched.
+/**
+ * loadHAProxyConfig resolves where tenant fragments live and how the proxy is
+ * reloaded. HAPROXY_MAIN_CONFIGS is an optional comma-separated list of base
+ * config files that tenant operations must leave untouched.
+ *
+ * Returns:
+ *   haproxyConfig - tenants dir, reload command/timeout, and main config list.
+ */
 func loadHAProxyConfig() haproxyConfig {
 	var mainConfigs []string
 	if raw := env.GetString("HAPROXY_MAIN_CONFIGS", ""); raw != "" {
@@ -161,20 +203,42 @@ func loadHAProxyConfig() haproxyConfig {
 	}
 }
 
-// loadSSHConfig resolves the shared SSH credentials used by every cluster
-// engine's Ansible runner.
+/**
+ * loadSSHConfig resolves the shared SSH credentials and host-key policy used by
+ * every cluster engine's Ansible runner. Host-key verification is on by default
+ * and only disabled when CLUSTER_SSH_INSECURE_HOST_KEY is set.
+ *
+ * Returns:
+ *   sshConfig - SSH user, private-key path, verify-host-keys flag and
+ *     known_hosts path.
+ */
 func loadSSHConfig() sshConfig {
+	// Secure by default: verify node SSH host keys unless explicitly disabled
+	// (e.g. for greenfield bootstrap) via CLUSTER_SSH_INSECURE_HOST_KEY=true.
+	insecure := env.GetBool("CLUSTER_SSH_INSECURE_HOST_KEY", false)
 	return sshConfig{
 		user:           env.GetString("CLUSTER_SSH_USER", ""),
 		privateKeyPath: env.GetString("CLUSTER_SSH_PRIVATE_KEY_PATH", ""),
+		verifyHostKeys: !insecure,
+		knownHostsFile: env.GetString("CLUSTER_SSH_KNOWN_HOSTS", ""),
 	}
 }
 
-// loadClusterEngineConfig resolves the playbook paths and state directory for
-// one cluster engine, identified by its lowercase name (e.g. "mysql"). The name
-// drives both the default on-disk layout (cluster/<name>/playbooks/...) and the
-// uppercase environment-variable prefix (<NAME>_DEPLOY_PLAYBOOK, ...), so wiring
-// a new engine is purely declarative.
+/**
+ * loadClusterEngineConfig resolves the playbook paths and state directory for
+ * one cluster engine. The name drives both the default on-disk layout
+ * (cluster/<name>/playbooks/...) and the uppercase environment-variable prefix
+ * (<NAME>_DEPLOY_PLAYBOOK, ...), so wiring a new engine is purely declarative.
+ *
+ * Params:
+ *   name string - lowercase engine name, e.g. "mysql"; drives paths and the
+ *     env-var prefix.
+ *   baseDir string - project base directory the default playbook paths hang off.
+ *   sharedStateDir string - default parent for the engine's job state dir.
+ *   ansibleBin string - the ansible-playbook binary to invoke.
+ * Returns:
+ *   clusterEngineConfig - state dir, playbook paths and Ansible tunables.
+ */
 func loadClusterEngineConfig(name, baseDir, sharedStateDir, ansibleBin string) clusterEngineConfig {
 	prefix := strings.ToUpper(name)
 	playbookDir := filepath.Join(baseDir, "cluster", name, "playbooks")
@@ -188,13 +252,19 @@ func loadClusterEngineConfig(name, baseDir, sharedStateDir, ansibleBin string) c
 	}
 }
 
-// loadAnsibleConfig resolves the Ansible execution tunables for one engine.
-// Each value may be set globally (CLUSTER_*) or per engine (<PREFIX>_*); because
-// the global key is checked first, a global setting takes precedence over the
-// engine-specific one when both are present.
-//
-// As a convenience, turning debugging on without choosing explicit values bumps
-// verbosity and the captured-output cap to diagnostic-friendly defaults.
+/**
+ * loadAnsibleConfig resolves the Ansible execution tunables for one engine.
+ * Each value may be set globally (CLUSTER_*) or per engine (<PREFIX>_*); the
+ * global key is checked first, so it takes precedence when both are present.
+ * Turning debugging on without explicit values bumps verbosity and the
+ * captured-output cap to diagnostic-friendly defaults.
+ *
+ * Params:
+ *   prefix string - uppercase engine prefix, e.g. "MYSQL", for env-var lookups.
+ *   bin string - the ansible-playbook binary to record in the config.
+ * Returns:
+ *   ansibleConfig - binary, debug flag, verbosity and step-output cap.
+ */
 func loadAnsibleConfig(prefix, bin string) ansibleConfig {
 	debug := env.GetBoolAny([]string{"CLUSTER_ANSIBLE_DEBUG", prefix + "_ANSIBLE_DEBUG"}, false)
 	verbosity := env.GetIntAny([]string{"CLUSTER_ANSIBLE_VERBOSITY", prefix + "_ANSIBLE_VERBOSITY"}, 0)
@@ -215,9 +285,16 @@ func loadAnsibleConfig(prefix, bin string) ansibleConfig {
 	}
 }
 
-// parseCommand splits a shell-style command string into an argv slice. If the
-// input is empty it falls back to the default HAProxy reload command so the
-// service always has something runnable.
+/**
+ * parseCommand splits a shell-style command string into an argv slice. If the
+ * input is empty it falls back to the default HAProxy reload command so the
+ * service always has something runnable.
+ *
+ * Params:
+ *   raw string - the space-separated command string to split.
+ * Returns:
+ *   []string - the argv; the default reload command when raw is empty.
+ */
 func parseCommand(raw string) []string {
 	parts := strings.Fields(raw)
 	if len(parts) == 0 {
@@ -226,9 +303,14 @@ func parseCommand(raw string) []string {
 	return parts
 }
 
-// projectBaseDir returns the directory the process was started from, used as
-// the root for resolving default playbook and asset paths. It falls back to "."
-// when the working directory cannot be determined.
+/**
+ * projectBaseDir returns the directory the process was started from, used as the
+ * root for resolving default playbook and asset paths. It falls back to "." when
+ * the working directory cannot be determined.
+ *
+ * Returns:
+ *   string - the current working directory, or "." on error.
+ */
 func projectBaseDir() string {
 	wd, err := os.Getwd()
 	if err != nil {

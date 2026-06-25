@@ -1,0 +1,128 @@
+---
+- name: Rediscover PostgreSQL runtime facts
+  ansible.builtin.import_role:
+    name: runtime_facts
+  tags: ["setup_exporters"]
+
+# ── 1. Create the monitoring role on the primary (once) ─────────────────────
+- name: Create postgres_exporter monitoring role
+  no_log: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    psql -h "{{ primary_ip }}" -p "{{ postgres_port }}" \
+         -U "{{ postgres_superuser }}" -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'exporter') THEN
+        CREATE ROLE exporter WITH LOGIN NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE
+          PASSWORD '{{ postgres_exporter_password }}';
+      ELSE
+        ALTER ROLE exporter WITH PASSWORD '{{ postgres_exporter_password }}';
+      END IF;
+    END
+    $$;
+    GRANT pg_monitor TO exporter;
+    SQL
+  args:
+    executable: /bin/bash
+  environment:
+    PGPASSWORD: "{{ postgres_superuser_password }}"
+  run_once: true
+  delegate_to: "{{ groups['pgsql_primary'][0] }}"
+  tags: ["setup_exporters"]
+
+# ── 2. Config directory and env file on every node ──────────────────────────
+- name: Ensure postgres_exporter config directory exists
+  ansible.builtin.file:
+    path: "{{ postgres_exporter_conf_dir }}"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "0750"
+  tags: ["setup_exporters"]
+
+- name: Write postgres_exporter environment file
+  no_log: true
+  ansible.builtin.copy:
+    dest: "{{ postgres_exporter_conf_dir }}/.env"
+    owner: postgres
+    group: postgres
+    mode: "0600"
+    content: |
+      DATA_SOURCE_NAME=postgresql://{{ postgres_exporter_user }}:{{ postgres_exporter_password }}@localhost:{{ postgres_port }}/postgres?sslmode=require
+  tags: ["setup_exporters"]
+
+# ── 3. Systemd service on every node ────────────────────────────────────────
+- name: Write postgres_exporter systemd service unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/postgres_exporter.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Prometheus PostgreSQL Exporter
+      After=network.target {{ erawan_pg_service_name }}.service
+      Wants={{ erawan_pg_service_name }}.service
+
+      [Service]
+      User=postgres
+      Group=postgres
+      Type=simple
+      WorkingDirectory={{ postgres_exporter_conf_dir }}
+      EnvironmentFile={{ postgres_exporter_conf_dir }}/.env
+      ExecStart={{ postgres_exporter_bin }} --web.listen-address=0.0.0.0:{{ postgres_exporter_port }}
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: reload systemd
+  tags: ["setup_exporters"]
+
+- name: Flush handlers to apply systemd unit changes
+  ansible.builtin.meta: flush_handlers
+  tags: ["setup_exporters"]
+
+- name: Enable and start postgres_exporter
+  ansible.builtin.systemd:
+    name: postgres_exporter
+    enabled: true
+    state: started
+  tags: ["setup_exporters"]
+
+# ── 4. Allow exporter port through UFW (if active) ──────────────────────────
+- name: Check UFW status
+  ansible.builtin.command:
+    argv: [ufw, status]
+  register: _ufw_status
+  changed_when: false
+  failed_when: false
+  tags: ["setup_exporters"]
+
+- name: Allow postgres_exporter port through UFW
+  ansible.builtin.command:
+    argv: [ufw, allow, "{{ postgres_exporter_port }}/tcp"]
+  when: "_ufw_status.rc == 0 and 'Status: active' in (_ufw_status.stdout | default(''))"
+  changed_when: false
+  tags: ["setup_exporters"]
+
+# ── 5. Verify ────────────────────────────────────────────────────────────────
+- name: Wait for postgres_exporter to open port {{ postgres_exporter_port }}
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: "{{ postgres_exporter_port }}"
+    state: started
+    timeout: 30
+  tags: ["setup_exporters"]
+
+- name: Verify pg_up metric is 1
+  ansible.builtin.uri:
+    url: "http://{{ ansible_host }}:{{ postgres_exporter_port }}/metrics"
+    return_content: true
+  register: _exporter_metrics
+  until: "'pg_up 1' in _exporter_metrics.content"
+  retries: 10
+  delay: 3
+  changed_when: false
+  tags: ["setup_exporters"]
