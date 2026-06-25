@@ -74,12 +74,26 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 		resp.Databases = normalizeDatabases(pgMetrics)
 	}
 
-	// Collect DB users via direct connection (not available from exporters).
-	if req.DBHost != "" && req.DBUser != "" {
-		if users, err := collectPgsqlUsers(ctx, req.DBHost, req.DBPort, req.DBUser, req.DBPassword, req.SSLMode); err != nil {
-			resp.Errors["users"] = err.Error()
-		} else {
-			resp.Users = users
+	// Collect DB users via direct connection to node IPs (pg_roles is replicated,
+	// so any healthy node — primary or standby — can answer this query).
+	if req.DBUser != "" && req.DBPort > 0 {
+		nodes := req.NodeIPs
+		if len(nodes) == 0 && req.DBHost != "" {
+			nodes = []string{req.DBHost}
+		}
+		var firstErr error
+		for _, ip := range nodes {
+			users, err := collectPgsqlUsers(ctx, ip, req.DBPort, req.DBUser, req.DBPassword, req.SSLMode)
+			if err == nil {
+				resp.Users = users
+				break
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+		if resp.Users == nil && firstErr != nil {
+			resp.Errors["users"] = firstErr.Error()
 		}
 	}
 
