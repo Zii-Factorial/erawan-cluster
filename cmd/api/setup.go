@@ -132,7 +132,10 @@ func buildHAProxy(ctx context.Context, cfg haproxyConfig, db *sql.DB) (*haproxy.
 			return nil, fmt.Errorf("init haproxy config store: %w", err)
 		}
 		svc.SetConfigStore(cs)
-		// Restore any configs that were persisted before this node became active.
+		// Seed: push any .cfg files already on disk into the DB so configs
+		// created before DB_CONNECTION was configured survive future failovers.
+		svc.SeedConfigStore(ctx)
+		// Reconcile: write any DB configs missing from disk (post-failover).
 		if err := svc.Reconcile(ctx); err != nil {
 			log.Printf("warn: haproxy reconcile: %v", err)
 		}

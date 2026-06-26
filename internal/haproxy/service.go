@@ -110,6 +110,44 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	return nil
 }
 
+// SeedConfigStore reads every tenant .cfg file from tenantsDir and upserts it
+// into the config store. Call at startup so configs that existed before
+// DB_CONNECTION was set are persisted and survive future VIP failovers.
+func (s *Service) SeedConfigStore(ctx context.Context) {
+	if s.configStore == nil {
+		return
+	}
+	entries, err := os.ReadDir(s.tenantsDir)
+	if err != nil {
+		log.Printf("warn: haproxy seed config store: read dir: %v", err)
+		return
+	}
+	var seeded int
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".cfg") || strings.HasSuffix(name, ".bak") {
+			continue
+		}
+		port, err := strconv.Atoi(strings.TrimSuffix(name, ".cfg"))
+		if err != nil {
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join(s.tenantsDir, name))
+		if err != nil {
+			log.Printf("warn: haproxy seed config store: read %s: %v", name, err)
+			continue
+		}
+		if err := s.configStore.Save(ctx, port, string(content)); err != nil {
+			log.Printf("warn: haproxy seed config store: save port %d: %v", port, err)
+			continue
+		}
+		seeded++
+	}
+	if seeded > 0 {
+		log.Printf("haproxy config store: seeded %d local config(s) to database", seeded)
+	}
+}
+
 func (s *Service) SetMainConfigs(paths []string) {
 	filtered := make([]string, 0, len(paths))
 	for _, p := range paths {
