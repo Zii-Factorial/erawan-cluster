@@ -51,6 +51,20 @@ vulncheck:
 tidy:
 	@go mod tidy
 
+# Database migrations.
+#   make migration                  — apply all pending migrations
+#   make migration TABLE=<name>     — scaffold a new migration pair
+#   make migration ROLLBACK=<name>  — roll back the named migration
+.PHONY: migration
+migration:
+ifdef TABLE
+	@bash scripts/migrate.sh create $(TABLE)
+else ifdef ROLLBACK
+	@bash scripts/migrate.sh rollback $(ROLLBACK)
+else
+	@bash scripts/migrate.sh up
+endif
+
 # Aggregate quality gate: run before every commit / in CI.
 .PHONY: check
 check: fmtcheck vet staticcheck vulncheck test

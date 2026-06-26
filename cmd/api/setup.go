@@ -39,13 +39,16 @@ func buildApplication(ctx context.Context, cfg runtimeConfig) (*application, err
 		return nil, err
 	}
 
-	haproxySvc, err := buildHAProxy(cfg.haproxy)
+	jobDB, err := buildJobDB(ctx, cfg.dbConnection, cfg.dbPool)
 	if err != nil {
 		return nil, err
 	}
 
-	jobDB, err := buildJobDB(ctx, cfg.dbConnection)
+	haproxySvc, err := buildHAProxy(ctx, cfg.haproxy, jobDB)
 	if err != nil {
+		if jobDB != nil {
+			_ = jobDB.Close()
+		}
 		return nil, err
 	}
 
@@ -71,16 +74,17 @@ func buildApplication(ctx context.Context, cfg runtimeConfig) (*application, err
 	}
 
 	return &application{
-		config:       cfg.server,
-		haproxy:      haproxySvc,
-		mysqlCluster: mysqlSvc,
-		pgsqlCluster: pgsqlSvc,
-		pgsqlDB:      dbmanager.NewService(pgsqlStore),
-		mysqlDB:      mysqldbmanager.NewService(mysqlStore),
-		cipher:       cipher,
-		baseDir:      cfg.baseDir,
-		enablePprof:  cfg.enablePprof,
-		jobDB:        jobDB,
+		config:               cfg.server,
+		haproxy:              haproxySvc,
+		mysqlCluster:         mysqlSvc,
+		pgsqlCluster:         pgsqlSvc,
+		pgsqlDB:              dbmanager.NewService(pgsqlStore),
+		mysqlDB:              mysqldbmanager.NewService(mysqlStore),
+		cipher:               cipher,
+		baseDir:              cfg.baseDir,
+		enablePprof:          cfg.enablePprof,
+		shutdownDrainSeconds: cfg.shutdownDrainSeconds,
+		jobDB:                jobDB,
 	}, nil
 }
 
@@ -99,22 +103,39 @@ func validateSecurityConfig(cfg runtimeConfig) error {
 
 /**
  * buildHAProxy constructs the HAProxy service that renders per-tenant config
- * fragments and reloads the proxy. It applies the optional list of operator
- * "main" config files that tenant operations must never touch.
+ * fragments and reloads the proxy. When a database handle is provided it wires
+ * a DBConfigStore so configs survive a VIP failover: the new active node calls
+ * Reconcile() to restore any configs that are in the DB but missing on disk.
  *
  * Params:
- *   cfg haproxyConfig - tenants dir, reload command/timeout and main configs.
+ *   ctx context.Context - used for Reconcile and schema setup.
+ *   cfg haproxyConfig   - tenants dir, reload command/timeout and main configs.
+ *   db  *sql.DB         - optional; when non-nil, configs are persisted to DB.
  * Returns:
  *   *haproxy.Service - the configured service, on success.
- *   error - if the tenants directory cannot be initialised.
+ *   error - if the tenants directory or DB schema cannot be initialised.
  */
-func buildHAProxy(cfg haproxyConfig) (*haproxy.Service, error) {
+func buildHAProxy(ctx context.Context, cfg haproxyConfig, db *sql.DB) (*haproxy.Service, error) {
 	svc, err := haproxy.NewService(cfg.tenantsDir, cfg.reloadCmd, cfg.reloadTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("init haproxy service: %w", err)
 	}
 	if len(cfg.mainConfigs) > 0 {
 		svc.SetMainConfigs(cfg.mainConfigs)
+	}
+	if db != nil {
+		if err := haproxy.EnsureHAProxyConfigSchema(ctx, db); err != nil {
+			return nil, fmt.Errorf("init haproxy config schema: %w", err)
+		}
+		cs, err := haproxy.NewDBConfigStore(db)
+		if err != nil {
+			return nil, fmt.Errorf("init haproxy config store: %w", err)
+		}
+		svc.SetConfigStore(cs)
+		// Restore any configs that were persisted before this node became active.
+		if err := svc.Reconcile(ctx); err != nil {
+			log.Printf("warn: haproxy reconcile: %v", err)
+		}
 	}
 	return svc, nil
 }
@@ -200,7 +221,7 @@ func buildPGSQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConf
 	return store, svc, nil
 }
 
-func buildJobDB(ctx context.Context, conn string) (*sql.DB, error) {
+func buildJobDB(ctx context.Context, conn string, pool dbPoolConfig) (*sql.DB, error) {
 	if strings.TrimSpace(conn) == "" {
 		return nil, nil
 	}
@@ -208,6 +229,14 @@ func buildJobDB(ctx context.Context, conn string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open job database: %w", err)
 	}
+	// Pool sizing — tune via DB_MAX_OPEN_CONNS / DB_MAX_IDLE_CONNS for the
+	// host's CPU/RAM budget. Lifetime limits recycle connections so stale ones
+	// are not held forever against a load-balanced PostgreSQL endpoint.
+	db.SetMaxOpenConns(pool.maxOpenConns)
+	db.SetMaxIdleConns(pool.maxIdleConns)
+	db.SetConnMaxLifetime(pool.connMaxLifetime)
+	db.SetConnMaxIdleTime(pool.connMaxIdleTime)
+
 	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("connect job database: %w", err)
@@ -216,7 +245,8 @@ func buildJobDB(ctx context.Context, conn string) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	log.Printf("job store database enabled")
+	log.Printf("job store database enabled (max_open=%d max_idle=%d lifetime=%s idle_time=%s)",
+		pool.maxOpenConns, pool.maxIdleConns, pool.connMaxLifetime, pool.connMaxIdleTime)
 	return db, nil
 }
 

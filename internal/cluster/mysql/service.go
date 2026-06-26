@@ -233,34 +233,46 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 		return nil, err
 	}
 
-	job, err := s.store.Load(jobID)
-	if err != nil {
+	// Atomically validate status and transition to Running so concurrent
+	// Resume calls (e.g. during a brief VIP overlap) cannot both win.
+	var job *Job
+	var startIndex int
+	if err := s.store.Update(jobID, func(j *Job) error {
+		switch j.Status {
+		case JobStatusCompleted:
+			return fmt.Errorf("job %s already completed; use the recover endpoint to restart the cluster after an outage", jobID)
+		case JobStatusRolledBack:
+			return fmt.Errorf("job %s already rolled back; run a new deploy instead", jobID)
+		case JobStatusRunning:
+			return fmt.Errorf("job %s is already running", jobID)
+		}
+		if err := s.hydrateStoredSSHConfig(j); err != nil {
+			return err
+		}
+		startIndex = j.LastCompletedStep + 1
+		if startIndex >= len(s.steps) {
+			j.Status = JobStatusCompleted
+			j.Error = ""
+			s.updateJobProgress(j)
+			job = j
+			return nil
+		}
+		if j.Request.NewUser != "" && secret.NewUserPassword == "" {
+			return fmt.Errorf("new_user_password is required to resume job %s", jobID)
+		}
+		j.Status = JobStatusRunning
+		j.Error = ""
+		s.updateJobProgress(j)
+		job = j
+		return nil
+	}); err != nil {
 		return nil, err
-	}
-	if err := s.hydrateStoredSSHConfig(job); err != nil {
-		return nil, err
-	}
-	if job.Status == JobStatusCompleted {
-		return nil, fmt.Errorf("job %s already completed; use the recover endpoint to restart the cluster after an outage", jobID)
-	}
-	if job.Status == JobStatusRolledBack {
-		return nil, fmt.Errorf("job %s already rolled back; run a new deploy instead", jobID)
-	}
-	if job.Status == JobStatusRunning {
-		return nil, fmt.Errorf("job %s is already running", jobID)
 	}
 
-	startIndex := job.LastCompletedStep + 1
-	if startIndex >= len(s.steps) {
-		job.Status = JobStatusCompleted
-		job.Error = ""
-		s.updateJobProgress(job)
-		_ = s.store.Save(job)
+	if job.Status == JobStatusCompleted {
 		return job, nil
 	}
-	if job.Request.NewUser != "" && secret.NewUserPassword == "" {
-		return nil, fmt.Errorf("new_user_password is required to resume job %s", jobID)
-	}
+
 	if secret.AdminPassword == "" {
 		storedSecret, err := s.store.LoadSecret(job.ID)
 		if err == nil && storedSecret.AdminPassword != "" {
@@ -271,13 +283,6 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 				return nil, saveErr
 			}
 		}
-	}
-
-	job.Status = JobStatusRunning
-	job.Error = ""
-	s.updateJobProgress(job)
-	if err := s.store.Save(job); err != nil {
-		return nil, err
 	}
 
 	bgJob, err := s.store.Load(job.ID)
@@ -458,10 +463,23 @@ func (s *Service) Rollback(ctx context.Context, jobID string, req RollbackReques
 	if err != nil {
 		return nil, err
 	}
-	job, err := s.store.Load(jobID)
-	if err != nil {
+
+	// Atomically guard: reject if already running or already rolled back so
+	// concurrent Rollback calls cannot both proceed against the same cluster.
+	var job *Job
+	if err := s.store.Update(jobID, func(j *Job) error {
+		if j.Status == JobStatusRunning {
+			return fmt.Errorf("job %s is still running; wait for it to finish before rolling back", jobID)
+		}
+		if j.Status == JobStatusRolledBack {
+			return fmt.Errorf("job %s was already rolled back", jobID)
+		}
+		job = j
+		return nil
+	}); err != nil {
 		return nil, err
 	}
+
 	if err := s.hydrateStoredSSHConfig(job); err != nil {
 		return nil, err
 	}

@@ -33,16 +33,38 @@ ENV=prod
 API_HOST=127.0.0.1
 API_PORT=8080
 API_KEY=<long-random-key>
+PROXY_HOST=127.0.0.1
+
 TENANTS_DIR=/var/lib/erawan-cluster/haproxy/tenants
 HAPROXY_RELOAD_CMD=sudo /bin/systemctl reload haproxy
+HAPROXY_RELOAD_TIMEOUT_SECONDS=15
+# Comma-separated base config files that tenant operations must never touch.
+HAPROXY_MAIN_CONFIGS=/etc/haproxy/haproxy.cfg
+
+# PostgreSQL-backed job store (required for Active/Passive HA).
+# When set, jobs and HAProxy tenant configs survive VIP failover — the new
+# active node reconciles its local HAProxy state from the database on startup.
+DB_CONNECTION=postgres://erawan:secret@127.0.0.1:5432/erawan?sslmode=disable
+
+# DB connection-pool sizing — raise proportionally when scaling vertically.
+# Rule of thumb: DB_MAX_OPEN_CONNS = (num_cpu × 2) + headroom
+DB_MAX_OPEN_CONNS=25
+DB_MAX_IDLE_CONNS=10
+DB_CONN_MAX_LIFETIME_SECONDS=300
+DB_CONN_MAX_IDLE_TIME_SECONDS=60
+
 CLUSTER_STATE_DIR=/var/lib/erawan-cluster/cluster/jobs
-# Optional PostgreSQL-backed job store:
-# DB_CONNECTION=postgres://user:pass@127.0.0.1:5432/erawan?sslmode=disable
+CLUSTER_MAX_CONCURRENT_JOBS=4
+
+# Seconds to wait for in-flight Ansible jobs on SIGTERM (raise if steps > 5 min).
+SHUTDOWN_DRAIN_SECONDS=300
+
 MYSQL_DEPLOY_PLAYBOOK=/opt/erawan-cluster/cluster/mysql/playbooks/deploy.yml
 MYSQL_ROLLBACK_PLAYBOOK=/opt/erawan-cluster/cluster/mysql/playbooks/rollback.yml
 PGSQL_DEPLOY_PLAYBOOK=/opt/erawan-cluster/cluster/pgsql/playbooks/deploy.yml
 CLUSTER_SSH_USER=clusterops
 CLUSTER_SSH_PRIVATE_KEY_PATH=/var/lib/erawan-cluster/keys/clusterops_ed25519
+CLUSTER_SSH_INSECURE_HOST_KEY=false
 CLUSTER_ANSIBLE_DEBUG=false
 CLUSTER_ANSIBLE_VERBOSITY=0
 CLUSTER_STEP_OUTPUT_MAX_CHARS=8000
@@ -56,14 +78,33 @@ sudo install -o erawan -g erawan -m 0600 ./clusterops_ed25519 /var/lib/erawan-cl
 
 Ensure the matching public key is already present for `clusterops` on every DB node and that `clusterops` can run `sudo` without a password.
 
-## 5) Reload services
+## 5) Run database migrations
+
+If `DB_CONNECTION` is set, apply all pending schema migrations before starting the service:
+```bash
+cd erawan-cluster
+export $(grep -v '^#' /etc/erawan-cluster/.env | xargs)
+make migration
+```
+
+Create a new migration:
+```bash
+make migration TABLE=my_table_name
+```
+
+Roll back the latest migration:
+```bash
+make migration ROLLBACK=my_table_name
+```
+
+## 6) Reload services
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl reload haproxy || sudo systemctl start haproxy
 sudo systemctl restart erawan-cluster
 ```
 
-## 6) Verify
+## 7) Verify
 ```bash
 sudo systemctl status erawan-cluster --no-pager
 sudo systemctl status haproxy --no-pager
@@ -71,7 +112,7 @@ curl -s http://127.0.0.1:8080/health
 sudo ss -lntp | grep -E ':8080|:25000|:6446' || true
 ```
 
-## 7) Live logs
+## 8) Live logs
 ```bash
 sudo journalctl -u erawan-cluster -f
 sudo journalctl -u haproxy -f

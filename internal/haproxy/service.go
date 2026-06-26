@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -24,7 +25,8 @@ type Service struct {
 	tenantsDir      string
 	reloadCmd       []string
 	reloadTimeout   time.Duration
-	mainConfigFiles []string // optional; enables pre-validation before every reload
+	mainConfigFiles []string    // optional; enables pre-validation before every reload
+	configStore     ConfigStore // optional; persists configs to DB for standby reconcile
 }
 
 /**
@@ -67,6 +69,47 @@ func NewService(tenantsDir string, reloadCmd []string, reloadTimeout time.Durati
  * Params:
  *   paths []string - the paths ([]string)
  */
+// SetConfigStore wires a ConfigStore for persisting tenant configs to the
+// database. When set, every successful applyConfig and DeleteConfig call
+// updates the store so a standby can reconcile on VIP failover.
+func (s *Service) SetConfigStore(cs ConfigStore) {
+	s.configStore = cs
+}
+
+// Reconcile writes any configs held in the store that are missing from
+// tenantsDir, then reloads HAProxy once. Call at startup after a failover so
+// the newly-active node picks up all tenant configs without operator action.
+func (s *Service) Reconcile(ctx context.Context) error {
+	if s.configStore == nil {
+		return nil
+	}
+	configs, err := s.configStore.List(ctx)
+	if err != nil {
+		return fmt.Errorf("reconcile: list configs: %w", err)
+	}
+
+	var applied int
+	for _, cfg := range configs {
+		filename := s.filename(cfg.Port)
+		if fileExists(filename) {
+			continue
+		}
+		if err := os.WriteFile(filename, []byte(cfg.Content), 0o664); err != nil {
+			return fmt.Errorf("reconcile: write config port %d: %w", cfg.Port, err)
+		}
+		applied++
+		log.Printf("haproxy reconcile: restored config for port %d", cfg.Port)
+	}
+	if applied == 0 {
+		return nil
+	}
+	if err := s.Reload(ctx); err != nil {
+		return fmt.Errorf("reconcile: reload haproxy: %w", err)
+	}
+	log.Printf("haproxy reconcile: applied %d config(s) and reloaded", applied)
+	return nil
+}
+
 func (s *Service) SetMainConfigs(paths []string) {
 	filtered := make([]string, 0, len(paths))
 	for _, p := range paths {
@@ -451,6 +494,12 @@ func (s *Service) applyConfig(ctx context.Context, port int, content string) err
 	if backup != "" {
 		_ = os.Remove(backup)
 	}
+	// Persist to DB after successful reload so standby can reconcile on failover.
+	if s.configStore != nil {
+		if err := s.configStore.Save(ctx, port, content); err != nil {
+			log.Printf("warn: haproxy config store save port %d: %v", port, err)
+		}
+	}
 	return nil
 }
 
@@ -499,7 +548,12 @@ func (s *Service) DeleteConfig(ctx context.Context, in DeleteConfigInput) (bool,
 		return false, fmt.Errorf("haproxy reload verification failed, rolled back deletion: %w", err)
 	}
 	_ = os.Remove(backup)
-
+	// Remove from DB so standby does not re-apply a deleted config on reconcile.
+	if s.configStore != nil {
+		if err := s.configStore.Delete(ctx, in.Port); err != nil {
+			log.Printf("warn: haproxy config store delete port %d: %v", in.Port, err)
+		}
+	}
 	return true, nil
 }
 
