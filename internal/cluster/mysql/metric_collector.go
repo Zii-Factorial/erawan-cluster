@@ -403,6 +403,8 @@ func collectMysqlUsersFromExporter(f core.MetricFamily) []UserInfo {
 		"exporter":         true,
 		"debian-sys-maint": true,
 		"clusteradmin":     true,
+		"root":             true,
+		"replicator":       true,
 	}
 	seen := map[string]bool{}
 	var users []UserInfo

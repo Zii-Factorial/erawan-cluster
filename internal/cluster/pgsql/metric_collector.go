@@ -341,9 +341,13 @@ func normalizeDatabases(f core.MetricFamily) []DatabaseInfo {
 
 // collectPgsqlUsersFromExporter extracts non-system roles from
 // pg_roles_connection_limit exposed by postgres_exporter.
-// Excluded: all pg_* built-in roles and the internal exporter account.
+// Excluded: all pg_* built-in roles, superuser accounts, and the exporter account.
 func collectPgsqlUsersFromExporter(f core.MetricFamily) []UserInfo {
-	skip := map[string]bool{"exporter": true}
+	skip := map[string]bool{
+		"exporter":    true,
+		"postgres":    true,
+		"replicator":  true,
+	}
 	var users []UserInfo
 	for _, s := range f["pg_roles_connection_limit"] {
 		role := s.Labels["rolname"]
