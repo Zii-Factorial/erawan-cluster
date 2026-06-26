@@ -1,3 +1,4 @@
+-include /etc/erawan-cluster/.env
 -include .envrc
 export
 
