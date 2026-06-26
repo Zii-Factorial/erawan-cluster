@@ -36,6 +36,8 @@ API_KEY=<long-random-key>
 TENANTS_DIR=/var/lib/erawan-cluster/haproxy/tenants
 HAPROXY_RELOAD_CMD=sudo /bin/systemctl reload haproxy
 CLUSTER_STATE_DIR=/var/lib/erawan-cluster/cluster/jobs
+# Optional PostgreSQL-backed job store:
+# DB_CONNECTION=postgres://user:pass@127.0.0.1:5432/erawan?sslmode=disable
 MYSQL_DEPLOY_PLAYBOOK=/opt/erawan-cluster/cluster/mysql/playbooks/deploy.yml
 MYSQL_ROLLBACK_PLAYBOOK=/opt/erawan-cluster/cluster/mysql/playbooks/rollback.yml
 PGSQL_DEPLOY_PLAYBOOK=/opt/erawan-cluster/cluster/pgsql/playbooks/deploy.yml

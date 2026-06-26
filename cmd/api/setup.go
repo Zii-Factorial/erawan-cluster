@@ -2,15 +2,20 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 
+	"erawan-cluster/internal/cluster/core"
 	mysqlcluster "erawan-cluster/internal/cluster/mysql"
 	mysqldbmanager "erawan-cluster/internal/cluster/mysql/dbmanager"
 	pgsqlcluster "erawan-cluster/internal/cluster/pgsql"
 	"erawan-cluster/internal/cluster/pgsql/dbmanager"
 	"erawan-cluster/internal/haproxy"
 	"erawan-cluster/internal/security"
+
+	_ "github.com/lib/pq"
 )
 
 /**
@@ -39,13 +44,24 @@ func buildApplication(ctx context.Context, cfg runtimeConfig) (*application, err
 		return nil, err
 	}
 
-	mysqlStore, mysqlSvc, err := buildMySQLCluster(ctx, cfg.mysql, cfg.ssh, cfg.maxConcurrentJobs)
+	jobDB, err := buildJobDB(ctx, cfg.dbConnection)
 	if err != nil {
 		return nil, err
 	}
 
-	pgsqlStore, pgsqlSvc, err := buildPGSQLCluster(ctx, cfg.pgsql, cfg.ssh, cfg.maxConcurrentJobs)
+	mysqlStore, mysqlSvc, err := buildMySQLCluster(ctx, cfg.mysql, cfg.ssh, cfg.maxConcurrentJobs, jobDB)
 	if err != nil {
+		if jobDB != nil {
+			_ = jobDB.Close()
+		}
+		return nil, err
+	}
+
+	pgsqlStore, pgsqlSvc, err := buildPGSQLCluster(ctx, cfg.pgsql, cfg.ssh, cfg.maxConcurrentJobs, jobDB)
+	if err != nil {
+		if jobDB != nil {
+			_ = jobDB.Close()
+		}
 		return nil, err
 	}
 
@@ -64,6 +80,7 @@ func buildApplication(ctx context.Context, cfg runtimeConfig) (*application, err
 		cipher:       cipher,
 		baseDir:      cfg.baseDir,
 		enablePprof:  cfg.enablePprof,
+		jobDB:        jobDB,
 	}, nil
 }
 
@@ -115,12 +132,12 @@ func buildHAProxy(cfg haproxyConfig) (*haproxy.Service, error) {
  *   ssh sshConfig - shared SSH credentials and host-key policy.
  *   maxConcurrentJobs int - cap on concurrent background jobs for this engine.
  * Returns:
- *   *mysqlcluster.Store - the job store (reused by the DB manager).
+ *   mysqlcluster.Store - the job store (reused by the DB manager).
  *   *mysqlcluster.Service - the assembled cluster service.
  *   error - if the store cannot be created or SSH config is invalid.
  */
-func buildMySQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConfig, maxConcurrentJobs int) (*mysqlcluster.Store, *mysqlcluster.Service, error) {
-	store, err := mysqlcluster.NewStore(cfg.stateDir)
+func buildMySQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConfig, maxConcurrentJobs int, jobDB *sql.DB) (mysqlcluster.Store, *mysqlcluster.Service, error) {
+	store, err := buildMySQLStore(cfg.stateDir, jobDB)
 	if err != nil {
 		return nil, nil, fmt.Errorf("init mysql cluster store: %w", err)
 	}
@@ -155,12 +172,12 @@ func buildMySQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConf
  *   ssh sshConfig - shared SSH credentials and host-key policy.
  *   maxConcurrentJobs int - cap on concurrent background jobs for this engine.
  * Returns:
- *   *pgsqlcluster.Store - the job store (reused by the DB manager).
+ *   pgsqlcluster.Store - the job store (reused by the DB manager).
  *   *pgsqlcluster.Service - the assembled cluster service.
  *   error - if the store cannot be created or SSH config is invalid.
  */
-func buildPGSQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConfig, maxConcurrentJobs int) (*pgsqlcluster.Store, *pgsqlcluster.Service, error) {
-	store, err := pgsqlcluster.NewStore(cfg.stateDir)
+func buildPGSQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConfig, maxConcurrentJobs int, jobDB *sql.DB) (pgsqlcluster.Store, *pgsqlcluster.Service, error) {
+	store, err := buildPGSQLStore(cfg.stateDir, jobDB)
 	if err != nil {
 		return nil, nil, fmt.Errorf("init pgsql cluster store: %w", err)
 	}
@@ -181,6 +198,62 @@ func buildPGSQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConf
 
 	logAnsibleDebug("pgsql", cfg.ansible)
 	return store, svc, nil
+}
+
+func buildJobDB(ctx context.Context, conn string) (*sql.DB, error) {
+	if strings.TrimSpace(conn) == "" {
+		return nil, nil
+	}
+	db, err := sql.Open("postgres", conn)
+	if err != nil {
+		return nil, fmt.Errorf("open job database: %w", err)
+	}
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("connect job database: %w", err)
+	}
+	if err := core.EnsureJobStoreSchema(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	log.Printf("job store database enabled")
+	return db, nil
+}
+
+func buildMySQLStore(stateDir string, db *sql.DB) (mysqlcluster.Store, error) {
+	fileStore, err := core.NewStore[mysqlcluster.StoredSpec, mysqlcluster.StoredSecret](stateDir)
+	if err != nil {
+		return nil, err
+	}
+	if db == nil {
+		return fileStore, nil
+	}
+	dbStore, err := mysqlcluster.NewDBStore(db)
+	if err != nil {
+		return nil, err
+	}
+	if err := fileStore.MoveJobsTo(dbStore); err != nil {
+		return nil, err
+	}
+	return dbStore, nil
+}
+
+func buildPGSQLStore(stateDir string, db *sql.DB) (pgsqlcluster.Store, error) {
+	fileStore, err := core.NewStore[pgsqlcluster.StoredSpec, pgsqlcluster.StoredSecret](stateDir)
+	if err != nil {
+		return nil, err
+	}
+	if db == nil {
+		return fileStore, nil
+	}
+	dbStore, err := pgsqlcluster.NewDBStore(db)
+	if err != nil {
+		return nil, err
+	}
+	if err := fileStore.MoveJobsTo(dbStore); err != nil {
+		return nil, err
+	}
+	return dbStore, nil
 }
 
 /**

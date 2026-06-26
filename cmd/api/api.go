@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log"
 	"net/http"
@@ -39,6 +40,7 @@ type application struct {
 	cipher       *security.Cipher
 	baseDir      string
 	enablePprof  bool
+	jobDB        *sql.DB
 }
 
 /**
@@ -140,6 +142,12 @@ func (app *application) mount() *chi.Mux {
  *     which is reported as success (nil).
  */
 func (app *application) run(ctx context.Context, mux *chi.Mux) error {
+	defer func() {
+		if app.jobDB != nil {
+			_ = app.jobDB.Close()
+		}
+	}()
+
 	srv := &http.Server{
 		Addr:         app.config.addr,
 		Handler:      mux,

@@ -122,6 +122,9 @@ API_KEY=CHANGE_THIS_TO_A_LONG_RANDOM_SECRET
 TENANTS_DIR=/var/lib/erawan-cluster/haproxy/tenants
 HAPROXY_RELOAD_CMD=sudo /bin/systemctl reload haproxy
 CLUSTER_STATE_DIR=/var/lib/erawan-cluster/cluster/jobs
+# Optional: when set, job state is stored in PostgreSQL instead of files.
+# Existing jobs under CLUSTER_STATE_DIR are migrated into the DB at startup.
+# DB_CONNECTION=postgres://user:pass@127.0.0.1:5432/erawan?sslmode=disable
 MYSQL_DEPLOY_PLAYBOOK=/opt/erawan-cluster/cluster/mysql/playbooks/deploy.yml
 MYSQL_ROLLBACK_PLAYBOOK=/opt/erawan-cluster/cluster/mysql/playbooks/rollback.yml
 PGSQL_DEPLOY_PLAYBOOK=/opt/erawan-cluster/cluster/pgsql/playbooks/deploy.yml
@@ -157,6 +160,7 @@ Both should succeed (`clusterops`, then `root`).
 | `API_PORT` | `8080` | Bind port |
 | `API_KEY` | — | Required API key sent in `X-API-Key` header |
 | `ENCRYPTION_KEY` | — | Optional AES-256-GCM key for body encryption |
+| `DB_CONNECTION` | — | Optional PostgreSQL connection string for job storage; when unset, jobs stay in `CLUSTER_STATE_DIR` |
 | `PROXY_HOST` | `127.0.0.1` | HAProxy address used for metric SQL connections |
 | `TENANTS_DIR` | `/var/lib/erawan-cluster/haproxy/tenants` | HAProxy tenant config directory |
 | `HAPROXY_RELOAD_CMD` | `sudo /bin/systemctl reload haproxy` | HAProxy reload command |

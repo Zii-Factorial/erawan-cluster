@@ -38,6 +38,7 @@ type runtimeConfig struct {
 	mysql             clusterEngineConfig
 	pgsql             clusterEngineConfig
 	encryptionKey     string
+	dbConnection      string
 	baseDir           string
 	maxConcurrentJobs int  // cap on concurrent background cluster jobs (ansible runs)
 	enablePprof       bool // expose /debug/pprof on the loopback interface
@@ -150,6 +151,7 @@ func loadConfig() runtimeConfig {
 		mysql:             mysqlCfg,
 		pgsql:             pgsqlCfg,
 		encryptionKey:     env.GetString("ENCRYPTION_KEY", ""),
+		dbConnection:      env.GetString("DB_CONNECTION", ""),
 		baseDir:           baseDir,
 		maxConcurrentJobs: env.GetInt("CLUSTER_MAX_CONCURRENT_JOBS", 4),
 		enablePprof:       env.GetBool("ENABLE_PPROF", false),

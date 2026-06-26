@@ -16,7 +16,7 @@ type Service struct {
 	// SetContext to the process signal context, so a shutdown cancels in-flight
 	// Ansible runs. It is never derived from a per-request context.
 	ctx              context.Context
-	store            *Store
+	store            Store
 	runner           *Runner
 	collector        *Collector
 	steps            []step
@@ -44,7 +44,7 @@ const defaultMaxConcurrentJobs = 4
  * Returns:
  *   *Service - the resulting *Service
  */
-func NewService(store *Store, runner *Runner) *Service {
+func NewService(store Store, runner *Runner) *Service {
 	svc := &Service{
 		ctx:       context.Background(),
 		store:     store,

@@ -22,7 +22,7 @@ func tempKey(t *testing.T) string {
 	return p
 }
 
-func newService(t *testing.T) (*pgsql.Service, *pgsql.Store) {
+func newService(t *testing.T) (*pgsql.Service, pgsql.Store) {
 	t.Helper()
 	store, err := pgsql.NewStore(t.TempDir())
 	if err != nil {

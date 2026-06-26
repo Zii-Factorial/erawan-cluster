@@ -32,6 +32,18 @@ type Store[Spec any, Sec any] struct {
 	mu  sync.Mutex
 }
 
+// JobStore is the persistence contract used by engine services. File-backed
+// and database-backed stores both implement it.
+type JobStore[Spec any, Sec any] interface {
+	Save(job *Job[Spec]) error
+	Update(jobID string, mutate func(*Job[Spec]) error) error
+	SaveSecret(jobID string, secret Sec) error
+	Load(jobID string) (*Job[Spec], error)
+	LoadSecret(jobID string) (Sec, error)
+	List(limit int) ([]Job[Spec], error)
+	MarkStaleRunningJobsFailed()
+}
+
 /**
  * NewStore creates the state directory (0700) if needed and returns a Store.
  *
@@ -343,6 +355,47 @@ func (s *Store[Spec, Sec]) MarkStaleRunningJobsFailed() {
 	}
 }
 
+// MoveJobsTo copies every file-backed job and secret in this store to dest,
+// then removes the source files after each job is safely persisted. Corrupt or
+// unreadable files are skipped, matching List's existing tolerance.
+func (s *Store[Spec, Sec]) MoveJobsTo(dest JobStore[Spec, Sec]) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return fmt.Errorf("read state directory: %w", err)
+	}
+	for _, entry := range entries {
+		if !isJobFile(entry.Name()) || entry.IsDir() {
+			continue
+		}
+		jobID := strings.TrimSuffix(entry.Name(), ".json")
+		if err := validateJobID(jobID); err != nil {
+			continue
+		}
+		job, err := s.loadLocked(jobID)
+		if err != nil {
+			continue
+		}
+		if err := dest.Save(job); err != nil {
+			return fmt.Errorf("migrate job %s: %w", jobID, err)
+		}
+		if secret, err := s.loadSecretLocked(jobID); err == nil {
+			if err := dest.SaveSecret(jobID, secret); err != nil {
+				return fmt.Errorf("migrate job %s secret: %w", jobID, err)
+			}
+			if err := os.Remove(s.secretPath(jobID)); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("remove migrated job %s secret: %w", jobID, err)
+			}
+		}
+		if err := os.Remove(s.path(jobID)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove migrated job %s: %w", jobID, err)
+		}
+	}
+	return nil
+}
+
 /**
  * isJobFile reports whether name is a job state file (and not a secret sidecar).
  *
@@ -354,6 +407,21 @@ func (s *Store[Spec, Sec]) MarkStaleRunningJobsFailed() {
  */
 func isJobFile(name string) bool {
 	return strings.HasSuffix(name, ".json") && !strings.HasSuffix(name, ".secret.json")
+}
+
+func (s *Store[Spec, Sec]) loadSecretLocked(jobID string) (Sec, error) {
+	var secret Sec
+	data, err := os.ReadFile(s.secretPath(jobID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return secret, fmt.Errorf("job %s secret not found", jobID)
+		}
+		return secret, fmt.Errorf("read job secret: %w", err)
+	}
+	if err := json.Unmarshal(data, &secret); err != nil {
+		return secret, fmt.Errorf("decode job secret: %w", err)
+	}
+	return secret, nil
 }
 
 /**
