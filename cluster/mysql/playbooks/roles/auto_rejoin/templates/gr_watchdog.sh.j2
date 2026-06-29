@@ -12,11 +12,98 @@ fi
 
 logger -t erawan-gr-watchdog "GR state is '${STATE:-unknown}' — attempting recovery"
 
-# Run each statement independently so a missing channel or already-stopped GR
-# does not abort the sequence before START GROUP_REPLICATION is reached.
-mysql -uroot 2>/dev/null -e "STOP GROUP_REPLICATION"                                       || true
-mysql -uroot 2>/dev/null -e "RESET REPLICA ALL FOR CHANNEL 'group_replication_applier'"   || true
-mysql -uroot 2>/dev/null -e "START GROUP_REPLICATION"
+CONF=/etc/erawan-cluster/mysql-recovery.json
+if [ ! -f "$CONF" ]; then
+  logger -t erawan-gr-watchdog "no recovery config — using raw SQL fallback"
+  mysql -uroot 2>/dev/null -e "STOP GROUP_REPLICATION"                                     || true
+  mysql -uroot 2>/dev/null -e "RESET REPLICA ALL FOR CHANNEL 'group_replication_applier'" || true
+  mysql -uroot 2>/dev/null -e "START GROUP_REPLICATION"                                   || true
+  exit 0
+fi
+
+_tmp=""
+trap 'rm -f "$_tmp"' EXIT
+_tmp=$(mktemp /tmp/erawan-watchdog-XXXXXX.py)
+cat > "$_tmp" <<'PY'
+import json
+
+shell.options["useWizards"] = False
+
+with open("/etc/erawan-cluster/mysql-recovery.json") as f:
+    cfg = json.load(f)
+
+# Connect via root socket to get this node's GR identity and clean up any
+# stuck GR channel state before attempting rejoin.
+_connected = False
+for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
+    try:
+        shell.connect({"user": "root", "scheme": "mysql", "socket": sock})
+        _connected = True
+        break
+    except Exception:
+        continue
+if not _connected:
+    raise RuntimeError("cannot connect to local MySQL via socket")
+
+local_session = shell.get_session()
+this_ip = local_session.run_sql("SELECT @@report_host").fetch_one()[0]
+
+# Errors are expected: GR may already be stopped or the applier channel may not exist.
+for stmt in ("STOP GROUP_REPLICATION",
+             "RESET REPLICA ALL FOR CHANNEL 'group_replication_applier'"):
+    try:
+        local_session.run_sql(stmt)
+    except Exception:
+        pass
+
+# Use cluster.rejoinInstance() instead of raw START GROUP_REPLICATION — it
+# re-validates GTIDs and cluster metadata before joining, which makes it
+# reliable even when the local GR channel state is dirty after a crash.
+rejoined = False
+for seed_ip in cfg.get("node_ips", []):
+    if seed_ip == this_ip:
+        continue
+    try:
+        shell.connect({
+            "user":     cfg["admin_user"],
+            "password": cfg["admin_pass"],
+            "host":     seed_ip,
+            "port":     cfg["mysql_port"],
+            "scheme":   "mysql",
+        })
+        cluster = dba.get_cluster(cfg["cluster_name"])
+        cluster.rejoin_instance(
+            f"{cfg['admin_user']}@{this_ip}:{cfg['mysql_port']}",
+            {"password": cfg["admin_pass"]},
+        )
+        print(f"rejoined cluster via {seed_ip}")
+        rejoined = True
+        break
+    except Exception as e:
+        msg = str(e).lower()
+        if "already a member" in msg:
+            print(f"already a cluster member")
+            rejoined = True
+            break
+        print(f"seed {seed_ip}: {e}")
+
+if not rejoined:
+    # Last resort: raw START GROUP_REPLICATION. Works when group_replication_group_seeds
+    # is persisted in mysqld-auto.cnf and peers are reachable on their GR local_address port.
+    _fb = False
+    for sock in ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock"):
+        try:
+            shell.connect({"user": "root", "scheme": "mysql", "socket": sock})
+            shell.get_session().run_sql("START GROUP_REPLICATION")
+            print("started GR via raw SQL (fallback)")
+            _fb = True
+            break
+        except Exception as e:
+            print(f"raw START GROUP_REPLICATION failed: {e}")
+            break
+PY
+
+mysqlsh --no-wizard --py --file "$_tmp" 2>&1 | logger -t erawan-gr-watchdog
 
 sleep 10
 NEW_STATE=$(mysql -uroot -Nse \
@@ -24,9 +111,6 @@ NEW_STATE=$(mysql -uroot -Nse \
    WHERE member_host = @@report_host LIMIT 1" 2>/dev/null)
 logger -t erawan-gr-watchdog "GR state after recovery attempt: '${NEW_STATE:-unknown}'"
 
-# After a successful rejoin, restart MySQL Router so it re-discovers the
-# current cluster topology and re-binds port 6446 (R/W) cleanly.
-# Without this, Router may retain stale state and refuse R/W connections.
 if [[ "$NEW_STATE" == "ONLINE" ]]; then
   logger -t erawan-gr-watchdog "Restarting MySQL Router to re-discover cluster topology"
   systemctl restart {{ router_service_name }} 2>/dev/null || true
