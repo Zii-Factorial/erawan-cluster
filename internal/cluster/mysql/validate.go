@@ -98,9 +98,9 @@ func ValidateDeployRequest(req *DeployRequest) error {
 		req.MySQLVersion = 8
 	}
 	switch req.MySQLVersion {
-	case 7, 8, 9: // supported: 7=5.7, 8=8.x, 9=9.x
+	case 8, 9: // supported: 8=8.x, 9=9.x
 	default:
-		return fmt.Errorf("mysql_version %d is not supported; valid: 7, 8, 9", req.MySQLVersion)
+		return fmt.Errorf("mysql_version %d is not supported; valid: 8, 9", req.MySQLVersion)
 	}
 
 	if req.StepTimeoutSeconds == 0 {

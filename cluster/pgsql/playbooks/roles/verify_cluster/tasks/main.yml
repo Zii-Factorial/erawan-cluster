@@ -40,23 +40,18 @@
   failed_when: patroni_status.status != 200
   tags: ["verify_cluster"]
 
-- name: Query Patroni cluster view from primary
+- name: Wait for all cluster nodes to be registered in Patroni
   ansible.builtin.uri:
     url: "http://{{ primary_ip }}:{{ patroni_rest_port }}/cluster"
     return_content: true
   register: patroni_cluster_view
-  run_once: true
-  delegate_to: "{{ groups['pgsql_primary'][0] }}"
+  until:
+    - patroni_cluster_view.status == 200
+    - patroni_cluster_view.json.members | length >= (standby_ips | length + 1)
+    - patroni_cluster_view.json.members | selectattr('role', 'equalto', 'leader') | list | length == 1
+  retries: "{{ ((step_timeout_seconds | default(900) | int) / 5) | int }}"
+  delay: 5
   changed_when: false
-  failed_when: patroni_cluster_view.status != 200
-  tags: ["verify_cluster"]
-
-- name: Ensure all cluster nodes are registered in Patroni
-  ansible.builtin.assert:
-    that:
-      - patroni_cluster_view.json.members | length >= (standby_ips | length + 1)
-      - patroni_cluster_view.json.members | selectattr('role', 'equalto', 'leader') | list | length == 1
-    fail_msg: "Expected {{ standby_ips | length + 1 }} Patroni members and exactly one leader"
   run_once: true
   delegate_to: "{{ groups['pgsql_primary'][0] }}"
   tags: ["verify_cluster"]
@@ -67,7 +62,7 @@
     return_content: true
   register: _sync_check
   until: _sync_check.json.members | selectattr('role', 'equalto', 'sync_standby') | list | length > 0
-  retries: 30
+  retries: "{{ ((step_timeout_seconds | default(900) | int) / 5) | int }}"
   delay: 5
   changed_when: false
   run_once: true
