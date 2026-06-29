@@ -3,12 +3,15 @@
   ansible.builtin.shell: |
     set -euo pipefail
     etcdctl \
-      --endpoints="http://{{ ansible_host }}:{{ etcd_client_port }}" \
+      --endpoints="http://127.0.0.1:{{ etcd_client_port }}" \
       member list --write-out=json
   args:
     executable: /bin/bash
   register: etcd_members_json
   changed_when: false
+  retries: 5
+  delay: 5
+  until: etcd_members_json.rc == 0
 
 - name: Parse existing etcd cluster peers
   ansible.builtin.set_fact:
@@ -35,7 +38,7 @@
   ansible.builtin.shell: |
     set -euo pipefail
     etcdctl \
-      --endpoints="http://{{ ansible_host }}:{{ etcd_client_port }}" \
+      --endpoints="http://127.0.0.1:{{ etcd_client_port }}" \
       member list --write-out=json \
     | python3 -c "
     import json, sys, subprocess
@@ -51,7 +54,7 @@
         print('removing orphaned member id=' + mid, flush=True)
         subprocess.run([
             'etcdctl',
-            '--endpoints=http://{{ ansible_host }}:{{ etcd_client_port }}',
+            '--endpoints=http://127.0.0.1:{{ etcd_client_port }}',
             'member', 'remove', mid,
         ], check=True)
         removed += 1
@@ -71,7 +74,7 @@
   ansible.builtin.shell: |
     set -euo pipefail
     etcdctl \
-      --endpoints="http://{{ ansible_host }}:{{ etcd_client_port }}" \
+      --endpoints="http://127.0.0.1:{{ etcd_client_port }}" \
       member add new_member \
       --learner \
       --peer-urls="http://{{ new_member_ip }}:{{ etcd_peer_port }}"
