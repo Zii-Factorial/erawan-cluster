@@ -330,32 +330,23 @@ Remove a secondary node from the MySQL InnoDB Cluster.
 
 ### `POST /cluster/mysql/metrics`
 
-Collect live metrics from a MySQL cluster via HAProxy.
+Collect live metrics from a MySQL cluster. Data is sourced from **Prometheus exporters** (`mysqld_exporter` on `:9104` and `node_exporter` on `:9100`) running on each DB node — no database credentials are required.
 
 **Request:**
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `job_id` | string | no | Resolves `user` and `password` from the stored job |
-| `proxy_port` | int | yes | HAProxy frontend port for this cluster (e.g. `25041`). **Not** the MySQL server port (3306) |
-| `user` | string | if no job_id | MySQL user with PROCESS + SELECT on performance_schema |
-| `password` | string | if no job_id | User password |
-| `database` | string | no | Target database for table/query stats (default `information_schema`) |
-| `ssl_mode` | string | no | `"disable"` or `"require"` (default `"disable"`) |
-| `connect_timeout` | int | no | Connection timeout in seconds (default `10`) |
-| `categories` | string[] | no | Categories to collect; empty = all 7 |
-| `databases` | string[] | no | Restrict per-database results to these names; empty = all |
-| `limit` | int | no | Top-N cap for slow queries and digest lists (default `20`) |
-| `from` | string | no | ISO 8601 lower bound for slow query filter |
-| `to` | string | no | ISO 8601 upper bound for slow query filter |
+| `job_id` | string | no | Resolves `node_ips` from the stored deploy job |
+| `proxy_port` | int | yes | HAProxy frontend port for this cluster (e.g. `25041`). Used only to populate `port` in the response |
+| `db_metric_exporter_port` | int | no | `mysqld_exporter` port on DB nodes (default `9104`) |
+| `node_exporter_port` | int | no | `node_exporter` port on DB nodes (default `9100`) |
+| `node_ips` | string[] | if no job_id | Cluster member IPs to scrape exporters from |
+| `categories` | string[] | no | Categories to collect; empty = all 8 |
 
 ```json
 {
   "job_id": "abc123",
   "proxy_port": 25041,
-  "ssl_mode": "disable",
-  "connect_timeout": 10,
-  "categories": ["cluster", "connections", "replication"],
-  "limit": 20
+  "categories": ["cluster", "connections", "replication"]
 }
 ```
 
@@ -364,36 +355,47 @@ Collect live metrics from a MySQL cluster via HAProxy.
 |----------|-------------|
 | `cluster` | InnoDB Cluster / Group Replication membership state, primary, member roles |
 | `uptime` | MySQL server process uptime |
-| `connections` | Active/sleeping threads, utilization %, per-database breakdown |
-| `replication` | Group Replication certification stats and applier worker lag |
-| `performance` | InnoDB buffer pool, QPS/TPS, temp-table and sort pressure, index hit ratio |
-| `query` | Digest stats, slow queries, lock waits, deadlocks, full-scan tables |
-| `maintenance` | InnoDB purge lag, table fragmentation, metadata locks, open tables |
+| `connections` | Active/sleeping threads, utilization %, aborted connects |
+| `replication` | Replica applier thread state and lag per standby |
+| `performance` | InnoDB buffer pool, QPS/TPS, temp-table and sort pressure, index hit ratio, network I/O |
+| `query` | Slow query count, deadlocks, lock waits, table scan ratio |
+| `maintenance` | InnoDB purge lag, open tables, log waits, table lock contention |
+| `system` | Per-node OS metrics (CPU, memory, disk, network) from `node_exporter` |
 
 **Response `data`:**
 ```json
 {
   "collected_at": "2026-06-19T10:00:00Z",
+  "engine": "mysql",
   "host": "127.0.0.1",
   "port": 25041,
-  "database_count": 3,
-  "users": [
-    { "user": "clusteradmin", "host": "%", "has_super": true }
-  ],
-  "databases": [
-    { "name": "appdb", "size_bytes": 1048576, "charset": "utf8mb4", "collation": "utf8mb4_unicode_ci" }
+  "users": [],
+  "nodes": [
+    {
+      "host": "10.0.0.1",
+      "uptime_seconds": 86400,
+      "cpu_usage_pct": 12.5,
+      "memory_total_bytes": 8589934592,
+      "memory_available_bytes": 6000000000,
+      "memory_used_pct": 30.1,
+      "load1": 0.4,
+      "load5": 0.3,
+      "load15": 0.2,
+      "disks": [ ... ],
+      "network_interfaces": [ ... ]
+    }
   ],
   "categories": {
     "cluster": { ... },
     "connections": { ... }
   },
   "errors": {
-    "query": "performance_schema not enabled"
+    "query": "exporter unreachable"
   }
 }
 ```
 
-The `categories` object contains one key per collected category. Failures are reported per-category in `errors` — the other categories still return.
+The `categories` object contains one key per collected category. Per-category failures are reported in `errors` — the other categories still return. `users` is always an empty array; user data is managed via the dedicated user endpoints.
 
 ---
 
@@ -608,35 +610,27 @@ Remove a standby node from the Patroni cluster.
 
 ### `POST /cluster/pgsql/metrics`
 
-Collect live metrics from a PostgreSQL cluster via HAProxy.
+Collect live metrics from a PostgreSQL cluster. Data is sourced from **Prometheus exporters** (`postgres_exporter` on `:9187` and `node_exporter` on `:9100`) running on each DB node, plus the **Patroni REST API** for cluster and failover categories — no database credentials are required.
 
 **Request:**
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `job_id` | string | no | Resolves `user`, `password`, and `node_ips` from the stored job |
-| `proxy_port` | int | yes | HAProxy frontend port for this cluster (e.g. `25042`). **Not** the PostgreSQL port (5432) |
-| `user` | string | if no job_id | PostgreSQL user |
-| `password` | string | if no job_id | User password |
-| `database` | string | no | Database to connect to (default `postgres`) |
-| `ssl_mode` | string | no | `"disable"`, `"require"`, `"verify-ca"`, `"verify-full"` (default `"disable"`) |
-| `connect_timeout` | int | no | Connection timeout in seconds (default `10`) |
+| `job_id` | string | no | Resolves `node_ips` and Patroni config from the stored deploy job |
+| `proxy_port` | int | yes | HAProxy frontend port for this cluster (e.g. `25042`). Used only to populate `port` in the response |
+| `db_metric_exporter_port` | int | no | `postgres_exporter` port on DB nodes (default `9187`) |
+| `node_exporter_port` | int | no | `node_exporter` port on DB nodes (default `9100`) |
 | `patroni_port` | int | no | Patroni REST port for cluster health checks (default `8008`) |
-| `node_ips` | string[] | no | Node IPs for direct Patroni REST calls (resolved from job if `job_id` is set) |
-| `categories` | string[] | no | Categories to collect; empty = all 8 |
-| `databases` | string[] | no | Restrict per-database results to these names; empty = all |
-| `limit` | int | no | Top-N cap for slow queries and digest lists (default `20`) |
-| `from` | string | no | ISO 8601 lower bound for `failover` and `query` time filters |
-| `to` | string | no | ISO 8601 upper bound for `failover` and `query` time filters |
+| `node_ips` | string[] | if no job_id | Cluster member IPs to scrape exporters and Patroni REST from |
+| `categories` | string[] | no | Categories to collect; empty = all 9 |
+| `from` | string | no | ISO 8601 lower bound for `failover` event time filter |
+| `to` | string | no | ISO 8601 upper bound for `failover` event time filter |
 
 ```json
 {
   "job_id": "xyz456",
   "proxy_port": 25042,
-  "database": "postgres",
-  "ssl_mode": "disable",
   "patroni_port": 8008,
-  "categories": ["cluster", "replication", "connections"],
-  "limit": 20
+  "categories": ["cluster", "replication", "connections"]
 }
 ```
 
@@ -649,8 +643,9 @@ Collect live metrics from a PostgreSQL cluster via HAProxy.
 | `connections` | Active, idle, idle-in-transaction, lock-waiters, per-state breakdown, wait events |
 | `replication` | Streaming replication LSN lag per standby, WAL config, replication slot lag |
 | `performance` | TPS, cache hit ratio, temp files/bytes, checkpoint pressure, bgwriter stats |
-| `query` | avg/p95/p99 latency from `pg_stat_statements`, slow queries, lock waits, deadlocks, seq-scan ratio |
-| `maintenance` | Autovacuum workers, tables needing vacuum, XID age, logical slot lag, lock table grants vs waits |
+| `query` | Slow query count, deadlocks, lock waits, seq-scan ratio, high-seq-scan tables |
+| `maintenance` | Autovacuum health, tables needing vacuum, logical slot lag, WAL archiver stats, lock summary |
+| `system` | Per-node OS metrics (CPU, memory, disk, network) from `node_exporter` |
 
 ---
 

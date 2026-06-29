@@ -171,9 +171,10 @@ protocol     = classic
           ┌──────────────────┐
           │     HAProxy       │
           │  :25041 (TCP)    │
-          │  balance: roundrobin│
+          │  balance: first  │
+          │  (active/passive)│
           └────────┬─────────┘
-                   │  routes to any node on Router port
+                   │  routes to db1 (primary); db2/db3 are backup
        ┌───────────┼───────────┐
        │           │           │
        ▼           ▼           ▼
@@ -226,17 +227,27 @@ protocol     = classic
 
 ## Metrics Collection
 
-Metrics connect through HAProxy — **not directly to DB node IPs**:
+Metrics are collected from **Prometheus exporters** running on each node — no database credentials or direct SQL connections are needed:
 
 ```
 POST /cluster/mysql/metrics
   { "job_id": "abc", "proxy_port": 25041 }
            │
            ▼
-  API → 127.0.0.1:25041 → HAProxy → Router :6446 → MySQL primary :3306
+  Resolve node_ips from stored job
+           │
+           ▼
+  Scrape mysqld_exporter :9104 on each node (parallel)
+  Scrape node_exporter :9100 on each node (parallel)
+           │
+           ▼
+  Discover primary from Group Replication member info in exporter data
+           │
+           ▼
+  Aggregate per-category metrics, return JSON
 ```
 
-Use the **cluster admin credentials** (`admin_user` / `admin_password` from the deploy response). The admin user has `PROCESS` and `performance_schema` access required for metrics.
+`mysqld_exporter` and `node_exporter` must be running on every DB node. The API contacts exporters directly on node IPs — HAProxy is not in the metric path.
 
 ---
 
