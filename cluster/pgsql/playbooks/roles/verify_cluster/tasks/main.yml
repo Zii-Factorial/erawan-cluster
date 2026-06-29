@@ -47,8 +47,8 @@
   register: patroni_cluster_view
   until:
     - patroni_cluster_view.status == 200
-    - patroni_cluster_view.json.members | length >= (standby_ips | length + 1)
-    - patroni_cluster_view.json.members | selectattr('role', 'equalto', 'leader') | list | length == 1
+    - (patroni_cluster_view.json | default({})).members | default([]) | length >= (standby_ips | length + 1)
+    - (patroni_cluster_view.json | default({})).members | default([]) | selectattr('role', 'equalto', 'leader') | list | length == 1
   retries: "{{ ((step_timeout_seconds | default(900) | int) / 5) | int }}"
   delay: 5
   changed_when: false
@@ -61,7 +61,7 @@
     url: "http://{{ primary_ip }}:{{ patroni_rest_port }}/cluster"
     return_content: true
   register: _sync_check
-  until: _sync_check.json.members | selectattr('role', 'equalto', 'sync_standby') | list | length > 0
+  until: (_sync_check.json | default({})).members | default([]) | selectattr('role', 'equalto', 'sync_standby') | list | length > 0
   retries: "{{ ((step_timeout_seconds | default(900) | int) / 5) | int }}"
   delay: 5
   changed_when: false
