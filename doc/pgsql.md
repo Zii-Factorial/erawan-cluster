@@ -310,19 +310,28 @@ POST /cluster/pgsql/members
 
 ## Metrics Collection
 
-Metrics connect through HAProxy — **not directly to DB node IPs**:
+Metrics are collected from **Prometheus exporters** and the **Patroni REST API** running on each node — no database credentials or direct SQL connections are needed:
 
 ```
 POST /cluster/pgsql/metrics
   { "job_id": "abc", "proxy_port": 25042 }
            │
            ▼
-  API → 127.0.0.1:25042 → HAProxy → Patroni leader check → PostgreSQL primary :5432
+  Resolve node_ips from stored job
+           │
+           ▼
+  Scrape postgres_exporter :9187 on each node (parallel)
+  Scrape node_exporter :9100 on each node (parallel)
+  Call Patroni REST :8008 on each node (cluster/failover categories)
+           │
+           ▼
+  Discover primary from Patroni leader API
+           │
+           ▼
+  Aggregate per-category metrics, return JSON
 ```
 
-Use the **postgres superuser credentials** (`postgres_user` / `postgres_password` from the deploy response). The `postgres` user has full access to `pg_stat_*` views and `pg_stat_statements`. Application users do not have these privileges.
-
-For the `cluster` and `failover` categories, the collector also calls Patroni REST directly on each `node_ips` entry to get HA state and timeline history.
+`postgres_exporter` and `node_exporter` must be running on every DB node. The API contacts exporters and Patroni directly on node IPs — HAProxy is not in the metric path.
 
 ---
 

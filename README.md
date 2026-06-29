@@ -26,7 +26,7 @@
 
 - **MySQL cluster lifecycle** — deploy, resume, rollback, add/remove members, user and database management
 - **PostgreSQL cluster lifecycle** — deploy, resume, add/remove members, user and database management
-- **Live metrics** — 7 MySQL categories and 8 PostgreSQL categories collected via HAProxy
+- **Live metrics** — 8 MySQL categories and 9 PostgreSQL categories collected via Prometheus exporters (mysqld_exporter, postgres_exporter, node_exporter)
 - **HAProxy management** — tenant config generation, member addition, hot reload (no restart)
 - **Job-based async execution** — all cluster operations run as tracked background jobs with step-level progress
 - **Encryption** — optional AES-256-GCM request/response body encryption
@@ -42,7 +42,7 @@ See [doc/adding-an-engine.md](doc/adding-an-engine.md) to add a new database eng
 ## Requirements
 
 ### API (proxy) host
-- Go 1.22+
+- Go 1.25+
 - `ansible-playbook` installed
 - SSH client available
 - SSH access to all target DB nodes
@@ -70,7 +70,8 @@ Recommended setup for a fresh Ubuntu 24.04 proxy node.
 ### 1. Install system packages
 ```bash
 sudo apt update
-sudo apt install -y git curl make golang-go
+sudo apt install -y git curl make
+# Install Go 1.25+ from https://go.dev/dl/ (apt golang-go may be too old)
 ```
 
 ### 2. Clone and build
@@ -181,17 +182,28 @@ Both should succeed (`clusterops`, then `root`).
 | `PGSQL_ANSIBLE_VERBOSITY` | `0` | PostgreSQL Ansible verbosity level (1–4) |
 | `CLUSTER_ANSIBLE_DEBUG` | `false` | Debug flag for both engines |
 | `CLUSTER_ANSIBLE_VERBOSITY` | `0` | Verbosity for both engines |
+| `CLUSTER_STEP_OUTPUT_MAX_CHARS` | `8000` | Max chars captured per Ansible step (per-engine: `MYSQL_STEP_OUTPUT_MAX_CHARS`, `PGSQL_STEP_OUTPUT_MAX_CHARS`); auto-raised to 200000 when debug is on |
+| `CLUSTER_SSH_INSECURE_HOST_KEY` | `false` | Disable SSH host-key verification (greenfield bootstrap only; leave `false` in production) |
+| `CLUSTER_SSH_KNOWN_HOSTS` | — | Path to a `known_hosts` file to pin node host keys |
+| `CLUSTER_DB_TLS_MODE` | `verify` | MySQL admin TLS mode: `verify` (default) \| `skip-verify` \| `false` (disabled) |
+| `CLUSTER_DB_SSL_MODE` | `verify-full` | PostgreSQL admin SSL mode: `verify-full` (default) \| `verify-ca` \| `require` \| `disable` |
+| `CLUSTER_MAX_CONCURRENT_JOBS` | `4` | Cap on simultaneous background cluster jobs |
+| `ENABLE_PPROF` | `false` | Expose `net/http/pprof` on `127.0.0.1:6060` (debugging only, no auth) |
 
 ---
 
 ## Make Commands
 
 ```bash
-make tidy    # go mod tidy
-make fmt     # format source
-make test    # run tests
-make build   # build binary to ./bin
-make run     # run API directly
+make tidy       # go mod tidy
+make fmt        # format source
+make build      # build binary to ./bin
+make run        # run API directly
+make test       # run all tests
+make test-unit  # run only tests/unit/
+make cover      # tests with coverage attributed to production packages
+make check      # full quality gate: fmtcheck + vet + staticcheck + vulncheck + test
+make vulncheck  # scan for known Go CVEs (govulncheck)
 ```
 
 ---
@@ -202,8 +214,9 @@ make run     # run API directly
 cmd/api/
   main.go          entry point, service wiring
   api.go           application struct, route registration
+  config.go        environment config loading (all tunables)
+  setup.go         service builders (MySQL, PostgreSQL, HAProxy)
   health.go        health check handler
-  json.go          response helpers (package main)
   version.go       version constant
   mysql/
     handler.go     MySQL cluster + DB manager HTTP handlers
@@ -213,9 +226,10 @@ cmd/api/
     handler.go     HAProxy management HTTP handlers
 
 internal/
-  cluster/mysql/   MySQL cluster service + metrics
-  cluster/pgsql/   PostgreSQL cluster service + metrics
-  haproxy/         HAProxy config service
+  cluster/core/    Shared job state, Ansible runner, concurrency, metric types
+  cluster/mysql/   MySQL cluster service + Prometheus exporter metrics
+  cluster/pgsql/   PostgreSQL cluster service + Prometheus exporter metrics
+  haproxy/         HAProxy config service (listen blocks, backup/rollback)
   render/          Shared JSON response helpers
   security/        API key middleware, AES-GCM cipher
   env/             Environment variable helpers

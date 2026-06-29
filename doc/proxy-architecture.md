@@ -40,42 +40,80 @@ Client applications **never connect directly to DB node IPs**. All SQL connectio
 
 ## How HAProxy Config Works
 
-For each database cluster, the API writes a HAProxy tenant config file and reloads HAProxy.
+For each database cluster, the API writes a HAProxy tenant config file and reloads HAProxy. Every write is validated with `haproxy -c` before touching disk — a bad config for one cluster never blocks other clusters.
 
 ### MySQL config layout
 
-```haproxy
-frontend mysql_25041
-    bind *:25041
-    default_backend mysql_25041_be
+MySQL uses **active/passive** routing: the first server receives all traffic; the others are `backup` servers used only when the primary is down. MySQL Router on each node handles primary detection internally.
 
-backend mysql_25041_be
-    balance roundrobin
+```haproxy
+listen node_25041
+    bind *:25041
+    mode tcp
+
+    balance first
+
+    option clitcpka
+    option srvtcpka
     option tcp-check
-    server node1 10.0.0.1:3306 check
-    server node2 10.0.0.2:3306 check
-    server node3 10.0.0.3:3306 check
+
+    timeout connect  1s
+    timeout check    500ms
+    timeout queue    10s
+    timeout client   10m
+    timeout server   10m
+    timeout client-fin  5s
+    timeout server-fin  5s
+
+    option redispatch 1
+    retries 3
+
+    default-server inter 2s fastinter 500ms downinter 500ms fall 3 rise 3 on-marked-down shutdown-sessions slowstart 10s
+
+    # Backend port 6446 (MySQL Router R/W)
+    # Use first server as primary, others as backup
+    server db1 10.0.0.1:6446 check
+    server db2 10.0.0.2:6446 check backup
+    server db3 10.0.0.3:6446 check backup
 ```
+
+`db_port` in the create request should be the **MySQL Router R/W port** (`6446`) so HAProxy routes through Router, which then picks the cluster primary. Using the raw MySQL port (`3306`) bypasses Router.
 
 ### PostgreSQL config layout
 
-PostgreSQL uses a Patroni health check to route only to the **current leader**:
+PostgreSQL also uses **active/passive** routing. HAProxy uses the Patroni REST API to health-check each node — only the Patroni leader (`GET /leader` → 200) receives connections. After a failover, Patroni elects a new leader and HAProxy reroutes within seconds.
 
 ```haproxy
-frontend pgsql_25042
+listen node_25042
     bind *:25042
-    default_backend pgsql_25042_be
+    mode tcp
 
-backend pgsql_25042_be
-    balance roundrobin
+    balance first
+
+    option clitcpka
+    option srvtcpka
     option httpchk GET /leader
     http-check expect status 200
-    server node1 10.0.0.1:5432 check port 8008
-    server node2 10.0.0.2:5432 check port 8008
-    server node3 10.0.0.3:5432 check port 8008
-```
 
-HAProxy polls each node's Patroni REST API (`GET /leader`) on port `8008`. Only the node that returns `200` receives connections. After a failover, Patroni elects a new leader and HAProxy automatically reroutes within seconds — no config change required.
+    timeout connect  500ms
+    timeout check    200ms
+    timeout queue    5s
+    timeout client   10m
+    timeout server   10m
+    timeout client-fin  2s
+    timeout server-fin  2s
+
+    option redispatch 1
+    retries 2
+
+    default-server inter 500ms fastinter 100ms downinter 200ms fall 2 rise 2 on-marked-down shutdown-sessions on-marked-up shutdown-backup-sessions check port 8008
+
+    # Backend port 5432 (PostgreSQL)
+    # Use first server as primary, others as backup
+    server db1 10.0.0.1:5432 check
+    server db2 10.0.0.2:5432 check backup
+    server db3 10.0.0.3:5432 check backup
+```
 
 ### Config storage
 
@@ -83,16 +121,18 @@ Tenant configs are stored as individual files in `TENANTS_DIR` (default `/var/li
 
 ```
 /var/lib/erawan-cluster/haproxy/tenants/
-  25041.cfg    ← MySQL cluster A
-  25042.cfg    ← PostgreSQL cluster B
-  25043.cfg    ← MySQL cluster C
+  25041.cfg      ← MySQL cluster A
+  25042.cfg      ← PostgreSQL cluster B
+  25043.cfg      ← MySQL cluster C
 ```
 
 The HAProxy main config includes this directory with `include /var/lib/erawan-cluster/haproxy/tenants/*.cfg`.
 
+`.bak` files are created automatically before every write or delete. If HAProxy reload fails after writing, the backup is restored immediately — no manual rollback needed.
+
 ### Hot reload
 
-Every config change calls the `HAPROXY_RELOAD_CMD` (default: `sudo /bin/systemctl reload haproxy`). HAProxy reloads gracefully — active connections are not dropped.
+Every config change calls the `HAPROXY_RELOAD_CMD` (default: `sudo /bin/systemctl reload haproxy`). HAProxy reloads gracefully — active connections are not dropped. After reload, the API verifies the port is listening (or gone) before returning success.
 
 ---
 
@@ -162,37 +202,44 @@ Ansible SSHes into each DB node and applies the roles. The API parses Ansible's 
 
 ---
 
-## How Metric Connections Flow
+## How Metric Collection Works
 
-The metric endpoint connects to the database **through HAProxy**, never directly to a DB VM IP:
+The metric endpoint scrapes **Prometheus exporters** running on each DB node — it does not make direct SQL connections. No database credentials are required.
 
 ```
 POST /cluster/mysql/metrics  { "job_id": "abc", "proxy_port": 25041 }
            │
            ▼
-  Look up admin user/password from job secret
+  Resolve node_ips from stored job (or accept directly)
            │
            ▼
-  req.Host = PROXY_HOST env (default 127.0.0.1)
-  req.Port = proxy_port (25041)
+  Scrape mysqld_exporter on each node :9104 (parallel)
+  Scrape node_exporter on each node :9100 (parallel)
            │
            ▼
-  sql.Open("mysql", "clusteradmin:pass@tcp(127.0.0.1:25041)/")
+  Discover current primary from GR member info in exporter data
            │
            ▼
-       HAProxy :25041
+  Aggregate per-category metrics, return JSON
+
+POST /cluster/pgsql/metrics  { "job_id": "abc", "proxy_port": 25042 }
            │
            ▼
-    DB node :3306 (primary or active node)
+  Resolve node_ips from stored job (or accept directly)
            │
            ▼
-  Collect metrics, return JSON
+  Scrape postgres_exporter on each node :9187 (parallel)
+  Scrape node_exporter on each node :9100 (parallel)
+  Call Patroni REST API on each node :8008 (for cluster/failover categories)
+           │
+           ▼
+  Discover current primary from Patroni leader API
+           │
+           ▼
+  Aggregate per-category metrics, return JSON
 ```
 
-**Key rule**: the `proxy_port` in the request payload is the **HAProxy frontend port**, not the MySQL server port (3306). This ensures:
-- All SQL metric connections route through HAProxy
-- No direct IP connections are made to DB VMs from the API
-- HAProxy's health check ensures the connection reaches the current primary
+`proxy_port` is recorded in the response `port` field for reference. The exporters are contacted directly on their node IPs — HAProxy is not in the metric collection path.
 
 ---
 
@@ -248,10 +295,8 @@ This value is injected server-side — clients never specify the SQL host. Clien
    │                             │                              │
    │── POST /cluster/mysql/metrics ──────▶                      │
    │   { job_id, proxy_port:25041 }                             │
-   │                             │── sql connect to 127.0.0.1:25041
-   │                             │                 │            │
-   │                             │              HAProxy        │
-   │                             │                 │──────────▶│ :3306
-   │                             │                 │◀──────────│ metrics
-   │◀── 200 { categories:{...} } ◀───────────────│            │
+   │                             │── scrape :9104 mysqld_exporter ──▶│
+   │                             │── scrape :9100 node_exporter  ──▶│
+   │                             │◀── exporter data ◀──────────────│
+   │◀── 200 { categories:{...} } ◀──────────────│              │
 ```
