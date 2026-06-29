@@ -1,4 +1,18 @@
 ---
+- name: Verify etcd is healthy on primary before registering new member
+  ansible.builtin.shell: |
+    set -euo pipefail
+    etcdctl --endpoints="http://127.0.0.1:{{ etcd_client_port }}" endpoint health
+  args:
+    executable: /bin/bash
+  register: _etcd_health_check
+  changed_when: false
+  until: _etcd_health_check.rc == 0
+  retries: 6
+  delay: 5
+  failed_when: _etcd_health_check.rc != 0
+  tags: ["add_member_register"]
+
 - name: Retrieve current etcd member list
   ansible.builtin.shell: |
     set -euo pipefail
