@@ -26,21 +26,33 @@ type config struct {
 	proxyHost string // HAProxy host for metric connections; from PROXY_HOST env (default 127.0.0.1)
 }
 
+// dbPoolConfig holds PostgreSQL connection-pool tunables. Sized for vertical
+// scaling: raise DB_MAX_OPEN_CONNS when adding CPU/RAM to the host.
+type dbPoolConfig struct {
+	maxOpenConns    int
+	maxIdleConns    int
+	connMaxLifetime time.Duration
+	connMaxIdleTime time.Duration
+}
+
 // runtimeConfig is the fully-resolved configuration for the whole API process.
 // It is loaded exactly once, at start-up, by loadConfig and then handed to the
 // builders in setup.go. Grouping every tunable here (rather than reading the
 // environment ad hoc throughout main) keeps configuration in one auditable
 // place and makes adding a new engine a matter of adding one more field.
 type runtimeConfig struct {
-	server            config
-	haproxy           haproxyConfig
-	ssh               sshConfig
-	mysql             clusterEngineConfig
-	pgsql             clusterEngineConfig
-	encryptionKey     string
-	baseDir           string
-	maxConcurrentJobs int  // cap on concurrent background cluster jobs (ansible runs)
-	enablePprof       bool // expose /debug/pprof on the loopback interface
+	server               config
+	haproxy              haproxyConfig
+	ssh                  sshConfig
+	mysql                clusterEngineConfig
+	pgsql                clusterEngineConfig
+	encryptionKey        string
+	dbConnection         string
+	dbPool               dbPoolConfig
+	baseDir              string
+	maxConcurrentJobs    int  // cap on concurrent background cluster jobs (ansible runs)
+	shutdownDrainSeconds int  // how long to wait for in-flight jobs to finish on SIGTERM
+	enablePprof          bool // expose /debug/pprof on the loopback interface
 }
 
 // haproxyConfig describes how the HAProxy service writes tenant fragments and
@@ -150,9 +162,14 @@ func loadConfig() runtimeConfig {
 		mysql:             mysqlCfg,
 		pgsql:             pgsqlCfg,
 		encryptionKey:     env.GetString("ENCRYPTION_KEY", ""),
+		dbConnection:      env.GetString("DB_CONNECTION", ""),
+		dbPool:            loadDBPoolConfig(),
 		baseDir:           baseDir,
 		maxConcurrentJobs: env.GetInt("CLUSTER_MAX_CONCURRENT_JOBS", 4),
-		enablePprof:       env.GetBool("ENABLE_PPROF", false),
+		// Allow up to 5 minutes for in-flight Ansible jobs to write their final
+		// status before the process exits. Raise this if deploy steps exceed 5 min.
+		shutdownDrainSeconds: env.GetInt("SHUTDOWN_DRAIN_SECONDS", 300),
+		enablePprof:          env.GetBool("ENABLE_PPROF", false),
 	}
 }
 
@@ -317,4 +334,20 @@ func projectBaseDir() string {
 		return "."
 	}
 	return wd
+}
+
+// loadDBPoolConfig resolves PostgreSQL connection-pool tunables from the
+// environment. Defaults are conservative; raise them proportionally when
+// scaling the host vertically (more CPU/RAM = more concurrent DB operations).
+//
+// Recommended starting points:
+//   DB_MAX_OPEN_CONNS  = (num_cpu * 2) + headroom, e.g. 25 for 8-core
+//   DB_MAX_IDLE_CONNS  = DB_MAX_OPEN_CONNS / 2
+func loadDBPoolConfig() dbPoolConfig {
+	return dbPoolConfig{
+		maxOpenConns:    env.GetInt("DB_MAX_OPEN_CONNS", 25),
+		maxIdleConns:    env.GetInt("DB_MAX_IDLE_CONNS", 10),
+		connMaxLifetime: time.Duration(env.GetInt("DB_CONN_MAX_LIFETIME_SECONDS", 300)) * time.Second,
+		connMaxIdleTime: time.Duration(env.GetInt("DB_CONN_MAX_IDLE_TIME_SECONDS", 60)) * time.Second,
+	}
 }

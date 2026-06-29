@@ -13,19 +13,19 @@ import (
 )
 
 type Service struct {
-	store *mysql.Store
+	store mysql.Store
 }
 
 /**
  * NewService.
  *
  * Params:
- *   store *mysql.Store - the store (*mysql.Store)
+ *   store mysql.Store - the job store.
  *
  * Returns:
  *   *Service - the resulting *Service
  */
-func NewService(store *mysql.Store) *Service { return &Service{store: store} }
+func NewService(store mysql.Store) *Service { return &Service{store: store} }
 
 /**
  * resolve loads primary IP, port, and admin credentials from the stored job.

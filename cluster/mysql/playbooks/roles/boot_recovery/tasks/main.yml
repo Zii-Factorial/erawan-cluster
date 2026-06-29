@@ -18,7 +18,8 @@
         'cluster_name': cluster_name,
         'admin_user':   cluster_admin_username,
         'admin_pass':   cluster_admin_password,
-        'mysql_port':   mysql_port | int
+        'mysql_port':   mysql_port | int,
+        'node_ips':     ([primary_ip] + standby_ips) | list
       } | to_nice_json }}
   delegate_to: "{{ item }}"
   loop: "{{ groups['all'] }}"

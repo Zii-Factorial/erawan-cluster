@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log"
 	"net/http"
@@ -30,15 +31,17 @@ import (
 // managers, and the optional payload cipher. It is built once, in
 // buildApplication (setup.go), and never mutated after start-up.
 type application struct {
-	config       config
-	haproxy      *haproxy.Service
-	mysqlCluster *mysqlcluster.Service
-	pgsqlCluster *pgsqlcluster.Service
-	pgsqlDB      *dbmanager.Service
-	mysqlDB      *mysqldbmanager.Service
-	cipher       *security.Cipher
-	baseDir      string
-	enablePprof  bool
+	config               config
+	haproxy              *haproxy.Service
+	mysqlCluster         *mysqlcluster.Service
+	pgsqlCluster         *pgsqlcluster.Service
+	pgsqlDB              *dbmanager.Service
+	mysqlDB              *mysqldbmanager.Service
+	cipher               *security.Cipher
+	baseDir              string
+	enablePprof          bool
+	shutdownDrainSeconds int
+	jobDB                *sql.DB
 }
 
 /**
@@ -140,6 +143,12 @@ func (app *application) mount() *chi.Mux {
  *     which is reported as success (nil).
  */
 func (app *application) run(ctx context.Context, mux *chi.Mux) error {
+	defer func() {
+		if app.jobDB != nil {
+			_ = app.jobDB.Close()
+		}
+	}()
+
 	srv := &http.Server{
 		Addr:         app.config.addr,
 		Handler:      mux,
@@ -154,14 +163,22 @@ func (app *application) run(ctx context.Context, mux *chi.Mux) error {
 
 	go func() {
 		<-ctx.Done()
-		shutCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutCtx)
-		// Drain in-flight background cluster jobs (their Ansible runs are already
-		// being cancelled via the root context) so their final state is persisted
-		// before the process exits.
-		app.mysqlCluster.Wait(shutCtx)
-		app.pgsqlCluster.Wait(shutCtx)
+
+		// Phase 1: stop accepting new HTTP requests and drain in-flight ones.
+		// Handlers return 202 immediately for long-running jobs so this is quick.
+		httpCtx, httpCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer httpCancel()
+		_ = srv.Shutdown(httpCtx)
+
+		// Phase 2: wait for background Ansible jobs to write their final status
+		// to the store before the process exits. Root ctx cancellation already
+		// sent SIGKILL to in-flight Ansible processes; we are just waiting for
+		// the goroutines to finish their status-update DB writes.
+		drainTimeout := time.Duration(app.shutdownDrainSeconds) * time.Second
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), drainTimeout)
+		defer drainCancel()
+		app.mysqlCluster.Wait(drainCtx)
+		app.pgsqlCluster.Wait(drainCtx)
 	}()
 
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

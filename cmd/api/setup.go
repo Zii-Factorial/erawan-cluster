@@ -2,15 +2,20 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 
+	"erawan-cluster/internal/cluster/core"
 	mysqlcluster "erawan-cluster/internal/cluster/mysql"
 	mysqldbmanager "erawan-cluster/internal/cluster/mysql/dbmanager"
 	pgsqlcluster "erawan-cluster/internal/cluster/pgsql"
 	"erawan-cluster/internal/cluster/pgsql/dbmanager"
 	"erawan-cluster/internal/haproxy"
 	"erawan-cluster/internal/security"
+
+	_ "github.com/lib/pq"
 )
 
 /**
@@ -34,18 +39,32 @@ func buildApplication(ctx context.Context, cfg runtimeConfig) (*application, err
 		return nil, err
 	}
 
-	haproxySvc, err := buildHAProxy(cfg.haproxy)
+	jobDB, err := buildJobDB(ctx, cfg.dbConnection, cfg.dbPool)
 	if err != nil {
 		return nil, err
 	}
 
-	mysqlStore, mysqlSvc, err := buildMySQLCluster(ctx, cfg.mysql, cfg.ssh, cfg.maxConcurrentJobs)
+	haproxySvc, err := buildHAProxy(ctx, cfg.haproxy, jobDB)
 	if err != nil {
+		if jobDB != nil {
+			_ = jobDB.Close()
+		}
 		return nil, err
 	}
 
-	pgsqlStore, pgsqlSvc, err := buildPGSQLCluster(ctx, cfg.pgsql, cfg.ssh, cfg.maxConcurrentJobs)
+	mysqlStore, mysqlSvc, err := buildMySQLCluster(ctx, cfg.mysql, cfg.ssh, cfg.maxConcurrentJobs, jobDB)
 	if err != nil {
+		if jobDB != nil {
+			_ = jobDB.Close()
+		}
+		return nil, err
+	}
+
+	pgsqlStore, pgsqlSvc, err := buildPGSQLCluster(ctx, cfg.pgsql, cfg.ssh, cfg.maxConcurrentJobs, jobDB)
+	if err != nil {
+		if jobDB != nil {
+			_ = jobDB.Close()
+		}
 		return nil, err
 	}
 
@@ -55,15 +74,17 @@ func buildApplication(ctx context.Context, cfg runtimeConfig) (*application, err
 	}
 
 	return &application{
-		config:       cfg.server,
-		haproxy:      haproxySvc,
-		mysqlCluster: mysqlSvc,
-		pgsqlCluster: pgsqlSvc,
-		pgsqlDB:      dbmanager.NewService(pgsqlStore),
-		mysqlDB:      mysqldbmanager.NewService(mysqlStore),
-		cipher:       cipher,
-		baseDir:      cfg.baseDir,
-		enablePprof:  cfg.enablePprof,
+		config:               cfg.server,
+		haproxy:              haproxySvc,
+		mysqlCluster:         mysqlSvc,
+		pgsqlCluster:         pgsqlSvc,
+		pgsqlDB:              dbmanager.NewService(pgsqlStore),
+		mysqlDB:              mysqldbmanager.NewService(mysqlStore),
+		cipher:               cipher,
+		baseDir:              cfg.baseDir,
+		enablePprof:          cfg.enablePprof,
+		shutdownDrainSeconds: cfg.shutdownDrainSeconds,
+		jobDB:                jobDB,
 	}, nil
 }
 
@@ -82,22 +103,42 @@ func validateSecurityConfig(cfg runtimeConfig) error {
 
 /**
  * buildHAProxy constructs the HAProxy service that renders per-tenant config
- * fragments and reloads the proxy. It applies the optional list of operator
- * "main" config files that tenant operations must never touch.
+ * fragments and reloads the proxy. When a database handle is provided it wires
+ * a DBConfigStore so configs survive a VIP failover: the new active node calls
+ * Reconcile() to restore any configs that are in the DB but missing on disk.
  *
  * Params:
- *   cfg haproxyConfig - tenants dir, reload command/timeout and main configs.
+ *   ctx context.Context - used for Reconcile and schema setup.
+ *   cfg haproxyConfig   - tenants dir, reload command/timeout and main configs.
+ *   db  *sql.DB         - optional; when non-nil, configs are persisted to DB.
  * Returns:
  *   *haproxy.Service - the configured service, on success.
- *   error - if the tenants directory cannot be initialised.
+ *   error - if the tenants directory or DB schema cannot be initialised.
  */
-func buildHAProxy(cfg haproxyConfig) (*haproxy.Service, error) {
+func buildHAProxy(ctx context.Context, cfg haproxyConfig, db *sql.DB) (*haproxy.Service, error) {
 	svc, err := haproxy.NewService(cfg.tenantsDir, cfg.reloadCmd, cfg.reloadTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("init haproxy service: %w", err)
 	}
 	if len(cfg.mainConfigs) > 0 {
 		svc.SetMainConfigs(cfg.mainConfigs)
+	}
+	if db != nil {
+		if err := haproxy.EnsureHAProxyConfigSchema(ctx, db); err != nil {
+			return nil, fmt.Errorf("init haproxy config schema: %w", err)
+		}
+		cs, err := haproxy.NewDBConfigStore(db)
+		if err != nil {
+			return nil, fmt.Errorf("init haproxy config store: %w", err)
+		}
+		svc.SetConfigStore(cs)
+		// Seed: push any .cfg files already on disk into the DB so configs
+		// created before DB_CONNECTION was configured survive future failovers.
+		svc.SeedConfigStore(ctx)
+		// Reconcile: write any DB configs missing from disk (post-failover).
+		if err := svc.Reconcile(ctx); err != nil {
+			log.Printf("warn: haproxy reconcile: %v", err)
+		}
 	}
 	return svc, nil
 }
@@ -115,12 +156,12 @@ func buildHAProxy(cfg haproxyConfig) (*haproxy.Service, error) {
  *   ssh sshConfig - shared SSH credentials and host-key policy.
  *   maxConcurrentJobs int - cap on concurrent background jobs for this engine.
  * Returns:
- *   *mysqlcluster.Store - the job store (reused by the DB manager).
+ *   mysqlcluster.Store - the job store (reused by the DB manager).
  *   *mysqlcluster.Service - the assembled cluster service.
  *   error - if the store cannot be created or SSH config is invalid.
  */
-func buildMySQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConfig, maxConcurrentJobs int) (*mysqlcluster.Store, *mysqlcluster.Service, error) {
-	store, err := mysqlcluster.NewStore(cfg.stateDir)
+func buildMySQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConfig, maxConcurrentJobs int, jobDB *sql.DB) (mysqlcluster.Store, *mysqlcluster.Service, error) {
+	store, err := buildMySQLStore(cfg.stateDir, jobDB)
 	if err != nil {
 		return nil, nil, fmt.Errorf("init mysql cluster store: %w", err)
 	}
@@ -155,12 +196,12 @@ func buildMySQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConf
  *   ssh sshConfig - shared SSH credentials and host-key policy.
  *   maxConcurrentJobs int - cap on concurrent background jobs for this engine.
  * Returns:
- *   *pgsqlcluster.Store - the job store (reused by the DB manager).
+ *   pgsqlcluster.Store - the job store (reused by the DB manager).
  *   *pgsqlcluster.Service - the assembled cluster service.
  *   error - if the store cannot be created or SSH config is invalid.
  */
-func buildPGSQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConfig, maxConcurrentJobs int) (*pgsqlcluster.Store, *pgsqlcluster.Service, error) {
-	store, err := pgsqlcluster.NewStore(cfg.stateDir)
+func buildPGSQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConfig, maxConcurrentJobs int, jobDB *sql.DB) (pgsqlcluster.Store, *pgsqlcluster.Service, error) {
+	store, err := buildPGSQLStore(cfg.stateDir, jobDB)
 	if err != nil {
 		return nil, nil, fmt.Errorf("init pgsql cluster store: %w", err)
 	}
@@ -181,6 +222,71 @@ func buildPGSQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConf
 
 	logAnsibleDebug("pgsql", cfg.ansible)
 	return store, svc, nil
+}
+
+func buildJobDB(ctx context.Context, conn string, pool dbPoolConfig) (*sql.DB, error) {
+	if strings.TrimSpace(conn) == "" {
+		return nil, nil
+	}
+	db, err := sql.Open("postgres", conn)
+	if err != nil {
+		return nil, fmt.Errorf("open job database: %w", err)
+	}
+	// Pool sizing — tune via DB_MAX_OPEN_CONNS / DB_MAX_IDLE_CONNS for the
+	// host's CPU/RAM budget. Lifetime limits recycle connections so stale ones
+	// are not held forever against a load-balanced PostgreSQL endpoint.
+	db.SetMaxOpenConns(pool.maxOpenConns)
+	db.SetMaxIdleConns(pool.maxIdleConns)
+	db.SetConnMaxLifetime(pool.connMaxLifetime)
+	db.SetConnMaxIdleTime(pool.connMaxIdleTime)
+
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("connect job database: %w", err)
+	}
+	if err := core.EnsureJobStoreSchema(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	log.Printf("job store database enabled (max_open=%d max_idle=%d lifetime=%s idle_time=%s)",
+		pool.maxOpenConns, pool.maxIdleConns, pool.connMaxLifetime, pool.connMaxIdleTime)
+	return db, nil
+}
+
+func buildMySQLStore(stateDir string, db *sql.DB) (mysqlcluster.Store, error) {
+	fileStore, err := core.NewStore[mysqlcluster.StoredSpec, mysqlcluster.StoredSecret](stateDir)
+	if err != nil {
+		return nil, err
+	}
+	if db == nil {
+		return fileStore, nil
+	}
+	dbStore, err := mysqlcluster.NewDBStore(db)
+	if err != nil {
+		return nil, err
+	}
+	if err := fileStore.MoveJobsTo(dbStore); err != nil {
+		return nil, err
+	}
+	return dbStore, nil
+}
+
+func buildPGSQLStore(stateDir string, db *sql.DB) (pgsqlcluster.Store, error) {
+	fileStore, err := core.NewStore[pgsqlcluster.StoredSpec, pgsqlcluster.StoredSecret](stateDir)
+	if err != nil {
+		return nil, err
+	}
+	if db == nil {
+		return fileStore, nil
+	}
+	dbStore, err := pgsqlcluster.NewDBStore(db)
+	if err != nil {
+		return nil, err
+	}
+	if err := fileStore.MoveJobsTo(dbStore); err != nil {
+		return nil, err
+	}
+	return dbStore, nil
 }
 
 /**

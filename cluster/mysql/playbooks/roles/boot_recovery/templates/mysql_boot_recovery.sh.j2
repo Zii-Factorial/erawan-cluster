@@ -38,30 +38,82 @@ trap 'rm -f "$_tmp"' EXIT
 _tmp=$(mktemp /tmp/erawan-boot-XXXXXX.py)
 cat >"$_tmp" <<'PY'
 import json
+
 shell.options["useWizards"] = False
+
 with open("/etc/erawan-cluster/mysql-recovery.json") as f:
     cfg = json.load(f)
-shell.connect({
-    "user":     cfg["admin_user"],
-    "password": cfg["admin_pass"],
-    "host":     "127.0.0.1",
-    "port":     cfg["mysql_port"],
-    "scheme":   "mysql",
-})
+
+def connect_local():
+    shell.connect({
+        "user":     cfg["admin_user"],
+        "password": cfg["admin_pass"],
+        "host":     "127.0.0.1",
+        "port":     cfg["mysql_port"],
+        "scheme":   "mysql",
+    })
+
+# Get this node's GR identity (the IP stored in replication_group_members.member_host).
+connect_local()
+this_ip = shell.get_session().run_sql("SELECT @@report_host").fetch_one()[0]
+print(f"this_node_ip: {this_ip}")
+
+def rejoin_this_node():
+    """Connect to each peer node and call cluster.rejoinInstance for this node."""
+    for seed_ip in cfg.get("node_ips", []):
+        if seed_ip == this_ip:
+            continue
+        try:
+            shell.connect({
+                "user":     cfg["admin_user"],
+                "password": cfg["admin_pass"],
+                "host":     seed_ip,
+                "port":     cfg["mysql_port"],
+                "scheme":   "mysql",
+            })
+            cluster = dba.get_cluster(cfg["cluster_name"])
+            cluster.rejoin_instance(
+                f"{cfg['admin_user']}@{this_ip}:{cfg['mysql_port']}",
+                {"password": cfg["admin_pass"]},
+            )
+            print(f"rejoined cluster via {seed_ip}")
+            return True
+        except Exception as e:
+            msg = str(e).lower()
+            if "already a member" in msg:
+                print(f"already a cluster member")
+                return True
+            print(f"rejoin via {seed_ip}: {e}")
+    return False
+
+is_already_active = False
 try:
-    # Try without force first — mysqlsh picks the node with the highest GTID
-    # as primary, preserving the most recent transactions.
+    connect_local()
+    # mysqlsh picks the node with the highest GTID as primary, preserving the
+    # most recent transactions.
     dba.reboot_cluster_from_complete_outage(cfg["cluster_name"])
     print("cluster rebooted (quorum-safe)")
 except Exception as first_err:
-    msg = str(first_err).lower()
-    if "already active" in msg or "online" in msg:
-        print(f"cluster already active: {first_err}")
+    first_msg = str(first_err).lower()
+    if any(t in first_msg for t in ("already active", "online", "is running", "cluster is active")):
+        is_already_active = True
     else:
-        # Fallback: force reboot from this node (e.g. not all members reachable yet).
-        # The GR watchdog will bring remaining secondaries back online.
-        dba.reboot_cluster_from_complete_outage(cfg["cluster_name"], {"force": True})
-        print("cluster rebooted (forced)")
+        # Force reboot from this node (e.g. not all members reachable yet).
+        try:
+            connect_local()
+            dba.reboot_cluster_from_complete_outage(cfg["cluster_name"], {"force": True})
+            print("cluster rebooted (forced)")
+        except Exception as force_err:
+            force_msg = str(force_err).lower()
+            if any(t in force_msg for t in ("already active", "online", "is running", "cluster is active")):
+                is_already_active = True
+            else:
+                raise
+
+if is_already_active:
+    print("cluster is already active — attempting rejoin of this node")
+    if not rejoin_this_node():
+        print("all rejoin attempts failed — GR watchdog will retry within 60s")
 PY
 
 if mysqlsh --no-wizard --py --file "$_tmp"; then

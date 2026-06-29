@@ -4,6 +4,8 @@ package core_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -115,6 +117,48 @@ func TestStoreListExcludesSecretSidecars(t *testing.T) {
 	}
 	if len(jobs) != 1 {
 		t.Fatalf("expected secret sidecar excluded, got %d jobs", len(jobs))
+	}
+}
+
+func TestStoreMoveJobsToCopiesAndRemovesSourceFiles(t *testing.T) {
+	sourceDir := t.TempDir()
+	source, err := core.NewStore[spec, secret](sourceDir)
+	if err != nil {
+		t.Fatalf("new source store: %v", err)
+	}
+	dest, err := core.NewStore[spec, secret](t.TempDir())
+	if err != nil {
+		t.Fatalf("new dest store: %v", err)
+	}
+	if err := source.Save(&core.Job[spec]{ID: id2, Status: core.JobStatusCompleted, Request: spec{Name: "moved"}}); err != nil {
+		t.Fatalf("save source job: %v", err)
+	}
+	if err := source.SaveSecret(id2, secret{Pass: "pw"}); err != nil {
+		t.Fatalf("save source secret: %v", err)
+	}
+
+	if err := source.MoveJobsTo(dest); err != nil {
+		t.Fatalf("move jobs: %v", err)
+	}
+	loaded, err := dest.Load(id2)
+	if err != nil {
+		t.Fatalf("load moved job: %v", err)
+	}
+	if loaded.Request.Name != "moved" {
+		t.Fatalf("unexpected moved job: %+v", loaded.Request)
+	}
+	sec, err := dest.LoadSecret(id2)
+	if err != nil {
+		t.Fatalf("load moved secret: %v", err)
+	}
+	if sec.Pass != "pw" {
+		t.Fatalf("unexpected moved secret: %+v", sec)
+	}
+	if _, err := os.Stat(filepath.Join(sourceDir, id2+".json")); !os.IsNotExist(err) {
+		t.Fatalf("expected source job file removed, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sourceDir, id2+".secret.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected source secret file removed, got %v", err)
 	}
 }
 

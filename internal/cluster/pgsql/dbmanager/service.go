@@ -17,7 +17,7 @@ import (
 )
 
 type Service struct {
-	store      *pgsql.Store
+	store      pgsql.Store
 	httpClient *http.Client
 }
 
@@ -25,12 +25,12 @@ type Service struct {
  * NewService.
  *
  * Params:
- *   store *pgsql.Store - the store (*pgsql.Store)
+ *   store pgsql.Store - the job store.
  *
  * Returns:
  *   *Service - the resulting *Service
  */
-func NewService(store *pgsql.Store) *Service {
+func NewService(store pgsql.Store) *Service {
 	return &Service{
 		store:      store,
 		httpClient: &http.Client{Timeout: 4 * time.Second},

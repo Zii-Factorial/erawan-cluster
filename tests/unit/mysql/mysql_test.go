@@ -22,7 +22,7 @@ func tempKey(t *testing.T) string {
 	return p
 }
 
-func newService(t *testing.T) (*mysql.Service, *mysql.Store) {
+func newService(t *testing.T) (*mysql.Service, mysql.Store) {
 	t.Helper()
 	store, err := mysql.NewStore(t.TempDir())
 	if err != nil {
@@ -175,8 +175,8 @@ func TestRecoverCreatesJobFromCompletedDeploy(t *testing.T) {
 func TestRecoverWorksOnFailedJob(t *testing.T) {
 	svc, store := newService(t)
 	_ = store.Save(&mysql.Job{
-		ID:     testJobID,
-		Status: mysql.JobStatusFailed,
+		ID:      testJobID,
+		Status:  mysql.JobStatusFailed,
 		Request: mysql.StoredSpec{ClusterName: "prod", PrimaryIP: "10.0.0.1"},
 	})
 	_ = store.SaveSecret(testJobID, mysql.StoredSecret{AdminUser: "admin", AdminPassword: "pw"})

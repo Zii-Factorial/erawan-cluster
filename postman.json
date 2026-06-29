@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "0f487bb5-3f07-49a9-9b29-e468f795d8d5",
     "name": "Erawan Cluster API (Go)",
-    "description": "Postman collection for HAProxy, MySQL cluster, and PostgreSQL cluster endpoints.\n\n**Required variables — fill these in Collection > Variables before sending any request:**\n- `API_KEY` — sent as `X-API-Key` header on every request (collection auth)\n- `ENCRYPTION_KEY` — 64-char hex string (AES-256-GCM). When set the pre-request script encrypts every request body and the test script decrypts every JSON response automatically. Generate with: `openssl rand -hex 32`\n\nLeave `ENCRYPTION_KEY` empty to send/receive plain JSON (development only).\n\n**Decrypted responses** are logged to the Postman console and stored in the `LAST_RESPONSE` collection variable for inspection.",
+    "description": "Postman collection for HAProxy, MySQL cluster, and PostgreSQL cluster endpoints.\n\n**Required variables — fill these in Collection > Variables before sending any request:**\n- `API_KEY` — sent as `X-API-Key` header on every request (collection auth)\n- `ENCRYPTION_KEY` — 64-char hex string (AES-256-GCM). When set the pre-request script encrypts every request body and the test script decrypts every JSON response automatically. Generate with: `openssl rand -hex 32`\n\nLeave `ENCRYPTION_KEY` empty to send/receive plain JSON (development only).\n\n**Decrypted responses** are logged to the Postman console and stored in the `LAST_RESPONSE` collection variable for inspection.\n\n**Active/Passive HA:** When the server is configured with `DB_CONNECTION`, all cluster jobs and HAProxy tenant configs are persisted in PostgreSQL. On VIP failover the new active node reconciles its local HAProxy state from the database automatically — no manual intervention required. All endpoints behave identically regardless of whether file-backed or DB-backed storage is in use.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -512,6 +512,7 @@
           "request": {
             "method": "GET",
             "header": [],
+            "description": "Returns the names of all active HAProxy tenant config files on disk.\n\nResponse is a JSON array of filename strings, e.g. `[\"25041.cfg\", \"25042.cfg\"]`.\n\nWhen the server is configured with `DB_CONNECTION`, configs are also persisted in the database (`erawan_haproxy_configs`) so a standby node can reconcile its local state on VIP failover.",
             "url": {
               "raw": "http://{{API_HOST}}:{{API_PORT}}/haproxy/configs",
               "protocol": "http",
