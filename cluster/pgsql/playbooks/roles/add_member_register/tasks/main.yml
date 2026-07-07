@@ -8,8 +8,10 @@
   register: _etcd_health_check
   changed_when: false
   until: _etcd_health_check.rc == 0
-  retries: 6
-  delay: 5
+  # Same 30s ceiling, polled at 1s instead of 5s — the primary's etcd is
+  # already up and running in the normal case.
+  retries: 30
+  delay: 1
   failed_when: _etcd_health_check.rc != 0
   tags: ["add_member_register"]
 
@@ -23,8 +25,9 @@
     executable: /bin/bash
   register: etcd_members_json
   changed_when: false
-  retries: 5
-  delay: 5
+  # Same 25s ceiling, polled at 1s instead of 5s.
+  retries: 25
+  delay: 1
   until: etcd_members_json.rc == 0
 
 - name: Parse existing etcd cluster peers

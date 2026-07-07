@@ -10,7 +10,7 @@
     host: "{{ new_member_ip }}"
     port: "{{ mysql_port }}"
     state: started
-    delay: 5
+    delay: 2
     timeout: 120
   tags: ["add_member"]
 
@@ -56,7 +56,7 @@
       print("  " + new_member_ip + ": " + str(status))
       if status == "ONLINE":
         break
-      time.sleep(10)
+      time.sleep(2)
     else:
       raise RuntimeError("timed out waiting for " + new_member_ip + " to be ONLINE")
 

@@ -11,8 +11,11 @@
     return_content: true
   register: etcd_health
   until: etcd_health.status == 200 and ('true' in (etcd_health.content | lower))
-  retries: 30
-  delay: 5
+  # Same 150s ceiling as cluster_bootstrap's etcd health check, just polled at
+  # 1s instead of 5s so the (normal, fast) happy path isn't held up by a
+  # coarse interval.
+  retries: 150
+  delay: 1
   changed_when: false
 
 # Query the primary's etcd (which is always a voter) to find our own member ID.
@@ -62,6 +65,8 @@
 
 # etcd refuses promotion until the learner has caught up to the leader's raft log.
 # Retry up to 3 min — etcd itself enforces the sync check so there is no data-loss risk.
+# Polled at 2s instead of 10s (same 180s ceiling) since the etcd metadata
+# store is tiny and usually catches up in well under one interval.
 - name: Promote learner to voting member
   ansible.builtin.shell: |
     set -euo pipefail
@@ -72,8 +77,8 @@
     executable: /bin/bash
   register: _etcd_promote
   until: _etcd_promote.rc == 0
-  retries: 18
-  delay: 10
+  retries: 90
+  delay: 2
   changed_when: _etcd_promote.rc == 0
   when:
     - _etcd_own_id.stdout | trim != ''
@@ -98,6 +103,8 @@
     return_content: true
   register: _patroni_replica
   until: _patroni_replica.status == 200
-  retries: 60
-  delay: 10
+  # Same 300s ceiling as cluster_bootstrap's patroni_replica_retries/delay,
+  # polled at the same 2s granularity for consistency.
+  retries: 150
+  delay: 2
   changed_when: false
