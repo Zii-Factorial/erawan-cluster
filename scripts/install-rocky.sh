@@ -98,8 +98,11 @@ PGSQL_DEPLOY_PLAYBOOK=${APP_ROOT}/cluster/pgsql/playbooks/deploy.yml
 
 CLUSTER_SSH_USER=
 CLUSTER_SSH_PRIVATE_KEY_PATH=
-# Set CLUSTER_SSH_INSECURE_HOST_KEY=true only for greenfield bootstrap where
-# host keys are not yet known. Always use known_hosts in production.
+# New node host keys are auto-pinned to CLUSTER_SSH_KNOWN_HOSTS via ssh-keyscan
+# before each connection (trust-on-first-use), so this should stay false even
+# for greenfield bootstrap. Only set true as a manual escape hatch if
+# ssh-keyscan can't reach nodes from this host (e.g. firewalled) or
+# CLUSTER_SSH_KNOWN_HOSTS is unset.
 CLUSTER_SSH_INSECURE_HOST_KEY=false
 CLUSTER_SSH_KNOWN_HOSTS=${KEYS_DIR}/known_hosts
 

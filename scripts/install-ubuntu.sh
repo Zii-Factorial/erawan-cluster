@@ -305,8 +305,11 @@ PGSQL_DEPLOY_PLAYBOOK=${CLUSTER_INSTALL_DIR}/pgsql/playbooks/deploy.yml
 
 CLUSTER_SSH_USER=
 CLUSTER_SSH_PRIVATE_KEY_PATH=
-# Set CLUSTER_SSH_INSECURE_HOST_KEY=true only for greenfield bootstrap where
-# host keys are not yet known. Always use known_hosts in production.
+# New node host keys are auto-pinned to CLUSTER_SSH_KNOWN_HOSTS via ssh-keyscan
+# before each connection (trust-on-first-use), so this should stay false even
+# for greenfield bootstrap. Only set true as a manual escape hatch if
+# ssh-keyscan can't reach nodes from this host (e.g. firewalled) or
+# CLUSTER_SSH_KNOWN_HOSTS is unset.
 CLUSTER_SSH_INSECURE_HOST_KEY=false
 CLUSTER_SSH_KNOWN_HOSTS=${KEYS_DIR}/known_hosts
 
@@ -416,9 +419,8 @@ print_summary() {
   echo "  CLUSTER_SSH_USER             — SSH user for cluster nodes"
   echo "  CLUSTER_SSH_PRIVATE_KEY_PATH — path to the SSH private key"
   echo ""
-  echo "Before first deploy, scan cluster node SSH host keys:"
-  echo "  ssh-keyscan -H <node-ip> [<node-ip> ...] >> ${KEYS_DIR}/known_hosts"
-  echo "  (or set CLUSTER_SSH_INSECURE_HOST_KEY=true in ${APP_ENV_FILE} for bootstrap only)"
+  echo "New node SSH host keys are pinned automatically to ${KEYS_DIR}/known_hosts"
+  echo "on first connection (trust-on-first-use) — no manual ssh-keyscan step needed."
   echo ""
   echo "Logs: ${LOG_FILE}"
   echo "  tail -f ${LOG_FILE}"
