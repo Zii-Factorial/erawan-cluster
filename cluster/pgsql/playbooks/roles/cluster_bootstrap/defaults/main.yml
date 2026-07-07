@@ -4,10 +4,13 @@ patroni_rest_port: 8008
 postgres_port: 5432
 
 # Timeouts for bootstrapping Patroni on a fresh cluster.
-# initdb + etcd leader election can easily take 90 s on slow disks.
+# initdb + etcd leader election can easily take 90 s on slow disks. retries is
+# raised alongside each delay cut so the worst-case ceiling (retries * delay)
+# is unchanged — only the polling granularity gets finer, so the normal case
+# (already ready) is detected sooner instead of waiting out a coarse interval.
 patroni_port_open_timeout: 180
-patroni_leader_retries: 60
-patroni_leader_delay: 5
+patroni_leader_retries: 150
+patroni_leader_delay: 2
 patroni_replica_port_open_timeout: 120
-patroni_replica_retries: 60
-patroni_replica_delay: 5
+patroni_replica_retries: 150
+patroni_replica_delay: 2

@@ -25,3 +25,13 @@
 # new_db: ""
 # new_user_password: ""
 # new_user_ssl_required: true
+
+# postgres_exporter — unlike postgres/patroni/etcd this has no distro package,
+# so it must be pre-installed on the node image at this exact path. runtime_facts
+# asserts it during preflight (Play 1) so a missing exporter fails fast instead
+# of timing out deep into the deploy in the exporter-setup play.
+postgres_exporter_bin: /usr/local/bin/postgres_exporter
+# Defined here (not setup_exporters/defaults) so base_config's single UFW pass
+# in Play 2 can open it too, instead of a second ufw-status round trip per node
+# in the exporter-setup play.
+postgres_exporter_port: 9187

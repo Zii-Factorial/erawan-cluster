@@ -107,6 +107,7 @@
     - "{{ etcd_peer_port | string }}"
     - "{{ patroni_rest_port | string }}"
     - "{{ postgres_port | string }}"
+    - "{{ postgres_exporter_port | string }}"
   when: "_ufw_status.rc == 0 and 'Status: active' in (_ufw_status.stdout | default(''))"
   changed_when: false
   tags: ["base_config"]

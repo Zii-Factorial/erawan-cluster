@@ -50,7 +50,7 @@ For quorum, etcd needs an odd number of nodes. Use **3 or more** for production.
 ## What Happens on Each VM After Deploy
 
 ### Phase 1 — Preflight
-Each node is verified to have PostgreSQL, Patroni, and etcd binaries installed and reachable from the proxy.
+Each node is verified to have PostgreSQL, Patroni, etcd, and `postgres_exporter` binaries installed and reachable from the proxy. Unlike postgres/patroni/etcd, `postgres_exporter` has no distro package — it must be pre-installed on the node image at `/usr/local/bin/postgres_exporter` (override via `postgres_exporter_bin`). Preflight fails fast here if it's missing, rather than timing out later in the exporter-setup phase.
 
 ### Phase 2 — Base configuration
 On each node:

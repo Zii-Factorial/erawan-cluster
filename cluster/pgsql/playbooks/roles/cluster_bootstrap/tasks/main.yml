@@ -42,8 +42,8 @@
     return_content: true
   register: etcd_health
   until: etcd_health.status == 200 and ('true' in (etcd_health.content | lower))
-  retries: 20
-  delay: 3
+  retries: 60
+  delay: 1
   changed_when: false
   tags: ["cluster_bootstrap"]
 
