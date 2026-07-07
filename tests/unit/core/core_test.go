@@ -358,7 +358,7 @@ func TestAnsibleRunSuccessAndFailureExitCodes(t *testing.T) {
 
 func TestEnsureKnownHostsNoopWhenVerificationOff(t *testing.T) {
 	p := core.SSHPolicy{VerifyHostKeys: false, KnownHostsFile: filepath.Join(t.TempDir(), "known_hosts")}
-	if err := p.EnsureKnownHosts(context.Background(), []string{"203.0.113.1"}, 22); err != nil {
+	if err := p.EnsureKnownHosts(context.Background(), []string{"203.0.113.1"}, 22, false); err != nil {
 		t.Fatalf("expected no-op with VerifyHostKeys=false, got %v", err)
 	}
 	if _, err := os.Stat(p.KnownHostsFile); !os.IsNotExist(err) {
@@ -368,7 +368,7 @@ func TestEnsureKnownHostsNoopWhenVerificationOff(t *testing.T) {
 
 func TestEnsureKnownHostsNoopWhenNoKnownHostsFile(t *testing.T) {
 	p := core.SSHPolicy{VerifyHostKeys: true}
-	if err := p.EnsureKnownHosts(context.Background(), []string{"203.0.113.1"}, 22); err != nil {
+	if err := p.EnsureKnownHosts(context.Background(), []string{"203.0.113.1"}, 22, false); err != nil {
 		t.Fatalf("expected no-op without a known_hosts file, got %v", err)
 	}
 }
@@ -382,7 +382,7 @@ func TestEnsureKnownHostsSkipsAlreadyPinnedHost(t *testing.T) {
 	p := core.SSHPolicy{VerifyHostKeys: true, KnownHostsFile: path}
 	// The host is already pinned, so this must not shell out to ssh-keyscan
 	// (which would otherwise block/fail against a fake IP).
-	if err := p.EnsureKnownHosts(context.Background(), []string{"10.10.0.99"}, 22); err != nil {
+	if err := p.EnsureKnownHosts(context.Background(), []string{"10.10.0.99"}, 22, false); err != nil {
 		t.Fatalf("expected no scan needed for already-pinned host, got %v", err)
 	}
 	got, err := os.ReadFile(path)
@@ -399,12 +399,40 @@ func TestEnsureKnownHostsSkipsAlreadyPinnedHostOnNonStandardPort(t *testing.T) {
 		t.Fatalf("seed known_hosts: %v", err)
 	}
 	p := core.SSHPolicy{VerifyHostKeys: true, KnownHostsFile: path}
-	if err := p.EnsureKnownHosts(context.Background(), []string{"10.10.0.99"}, 2222); err != nil {
+	if err := p.EnsureKnownHosts(context.Background(), []string{"10.10.0.99"}, 2222, false); err != nil {
 		t.Fatalf("expected no scan needed for already-pinned bracketed host, got %v", err)
 	}
 	got, err := os.ReadFile(path)
 	if err != nil || string(got) != line {
 		t.Fatalf("expected known_hosts to be unchanged, got %q (err %v)", got, err)
+	}
+}
+
+func TestEnsureKnownHostsResetForgetsPinnedHostAndForcesRescan(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "known_hosts")
+	const line = "127.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI-stale-fake-key\n"
+	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+		t.Fatalf("seed known_hosts: %v", err)
+	}
+	p := core.SSHPolicy{VerifyHostKeys: true, KnownHostsFile: path}
+
+	// Without reset, the pinned host is skipped and no scan is attempted.
+	if err := p.EnsureKnownHosts(context.Background(), []string{"127.0.0.1"}, 1, false); err != nil {
+		t.Fatalf("expected no scan needed for already-pinned host, got %v", err)
+	}
+
+	// With reset, the stale entry is forgotten and a rescan is attempted —
+	// which fails fast against the refusing port, proving the scan ran.
+	if err := p.EnsureKnownHosts(context.Background(), []string{"127.0.0.1"}, 1, true); err == nil {
+		t.Fatal("expected reset to force a rescan that fails against the refusing port")
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read known_hosts: %v", err)
+	}
+	if strings.Contains(string(got), "stale-fake-key") {
+		t.Fatalf("expected stale entry to be removed by reset, got %q", got)
 	}
 }
 
@@ -414,7 +442,7 @@ func TestEnsureKnownHostsFailsFastForUnreachableHost(t *testing.T) {
 	start := time.Now()
 	// Port 1 on loopback refuses connections immediately, so ssh-keyscan
 	// should fail fast rather than block for the full keyscan timeout.
-	err := p.EnsureKnownHosts(context.Background(), []string{"127.0.0.1"}, 1)
+	err := p.EnsureKnownHosts(context.Background(), []string{"127.0.0.1"}, 1, false)
 	if err == nil {
 		t.Fatal("expected an error for an unreachable host")
 	}

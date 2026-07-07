@@ -103,20 +103,22 @@ func (r *Runner) SetDebug(verbosity int, streamLogs bool, maxOutputChars int) {
 }
 
 type runConfig struct {
-	jobID   string
-	spec    StoredSpec
-	secret  SecretInput
-	step    step
-	timeout time.Duration
+	jobID         string
+	spec          StoredSpec
+	secret        SecretInput
+	step          step
+	timeout       time.Duration
+	resetHostKeys bool
 }
 
 type memberRunConfig struct {
-	jobID    string
-	spec     StoredSpec
-	secret   SecretInput
-	memberIP string
-	force    bool
-	timeout  time.Duration
+	jobID         string
+	spec          StoredSpec
+	secret        SecretInput
+	memberIP      string
+	force         bool
+	timeout       time.Duration
+	resetHostKeys bool
 }
 
 /**
@@ -213,7 +215,7 @@ func (r *Runner) RunRemoveMember(ctx context.Context, cfg memberRunConfig) StepR
  */
 func (r *Runner) run(ctx context.Context, cfg runConfig, playbook string) StepResult {
 	hosts := append([]string{cfg.spec.PrimaryIP}, cfg.spec.StandbyIPs...)
-	if err := r.sshPolicy.EnsureKnownHosts(ctx, hosts, cfg.spec.SSHPort); err != nil {
+	if err := r.sshPolicy.EnsureKnownHosts(ctx, hosts, cfg.spec.SSHPort, cfg.resetHostKeys); err != nil {
 		return core.FailedStep(cfg.step.Name, err)
 	}
 
@@ -270,7 +272,7 @@ func (r *Runner) run(ctx context.Context, cfg runConfig, playbook string) StepRe
  */
 func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, stepName string) StepResult {
 	if stepName == "add_member" {
-		if err := r.sshPolicy.EnsureKnownHosts(ctx, []string{cfg.memberIP}, cfg.spec.SSHPort); err != nil {
+		if err := r.sshPolicy.EnsureKnownHosts(ctx, []string{cfg.memberIP}, cfg.spec.SSHPort, cfg.resetHostKeys); err != nil {
 			return core.FailedStep(stepName, err)
 		}
 	}

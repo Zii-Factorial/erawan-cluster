@@ -37,6 +37,7 @@ type DeployRequest struct {
 	NewUserSuperuser   bool     `json:"new_user_superuser"`
 	NewDB              string   `json:"new_db"`
 	AssumePrepared     bool     `json:"assume_prepared"`
+	ResetHostKeys      bool     `json:"reset_host_keys"`
 	SSHPort            int      `json:"ssh_port"`
 	MySQLPort          int      `json:"mysql_port"`
 	MySQLVersion       int      `json:"mysql_version"` // major version: 7=5.7, 8=8.x, 9=9.x; default 8
@@ -54,6 +55,7 @@ type ResumeRequest struct {
 	RootPassword    string `json:"root_password"`
 	AdminPassword   string `json:"admin_password"`
 	NewUserPassword string `json:"new_user_password"`
+	ResetHostKeys   bool   `json:"reset_host_keys"`
 }
 
 type RollbackRequest struct {
@@ -156,6 +158,7 @@ type AddMemberRequest struct {
 	JobID          string   `json:"job_id"`
 	MemberIPs      []string `json:"member_ips"`
 	AssumePrepared bool     `json:"assume_prepared,omitempty"`
+	ResetHostKeys  bool     `json:"reset_host_keys,omitempty"`
 }
 
 type RemoveMemberRequest struct {

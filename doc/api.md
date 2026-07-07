@@ -170,6 +170,7 @@ Deploy a MySQL InnoDB Cluster. Returns immediately with a job ID; the deployment
 | `new_user_superuser` | bool | no | `true` = grant `ALL PRIVILEGES ON *.*` + all dynamic privileges (full server-level superuser). `false` = `ALL PRIVILEGES ON new_db.*` only. Default `true` |
 | `new_db` | string | no | Application database to create |
 | `assume_prepared` | bool | no | Skip node preparation steps if already prepared (default `false`) |
+| `reset_host_keys` | bool | no | Forget any previously pinned SSH host key for `primary_ip`/`standby_ips` and trust their current key. Use when a node was rebuilt/reimaged and its host key changed; otherwise the deploy fails with a host-key verification error (default `false`) |
 | `ssh_port` | int | no | SSH port for Ansible (default `22`) |
 | `mysql_port` | int | no | MySQL port on DB nodes (default `3306`) |
 | `mysql_version` | int | no | Major version: `8` = 8.x, `9` = 9.x (default `8`) |
@@ -268,6 +269,7 @@ Resume a failed MySQL deploy job from the last completed step.
 |-------|------|-------------|
 | `admin_password` | string | Cluster admin password |
 | `new_user_password` | string | Application user password (if applicable) |
+| `reset_host_keys` | bool | Forget any previously pinned SSH host key for this cluster's nodes and trust their current key (default `false`) |
 
 ```json
 {
@@ -300,6 +302,7 @@ Add one or more secondary nodes to an existing MySQL InnoDB Cluster.
 | `job_id` | string | yes | Source deploy job ID (provides cluster config) |
 | `member_ips` | string[] | yes | IPs of the new nodes to join |
 | `assume_prepared` | bool | no | Skip node preparation if already done |
+| `reset_host_keys` | bool | no | Forget any previously pinned SSH host key for the new node(s) and trust their current key (default `false`) |
 
 ```json
 {
@@ -521,6 +524,7 @@ Deploy a PostgreSQL Patroni cluster. Returns immediately with a job ID.
 | `new_user_ssl_required` | bool | no | Require SSL for the application user via `pg_hba.conf` (`hostssl`/`hostnossl` rules). Default `true` |
 | `new_user_superuser` | bool | no | `true` = `LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS` (full superuser). `false` = `LOGIN NOSUPERUSER NOINHERIT NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`. Default `true` |
 | `new_db` | string | no | Application database to create |
+| `reset_host_keys` | bool | no | Forget any previously pinned SSH host key for `primary_ip`/`standby_ips` and trust their current key. Use when a node was rebuilt/reimaged and its host key changed; otherwise the deploy fails with a host-key verification error (default `false`) |
 | `ssh_port` | int | no | SSH port for Ansible (default `22`) |
 | `postgres_port` | int | no | PostgreSQL port on DB nodes (default `5432`) |
 | `postgres_version` | int | no | Major version: `14`, `15`, `16`, `17`, `18` (default `16`) |
@@ -582,6 +586,7 @@ Resume a failed PostgreSQL deploy job.
 | `replicator_password` | string | Replication user password |
 | `admin_password` | string | Admin user password |
 | `new_user_password` | string | Application user password (if applicable) |
+| `reset_host_keys` | bool | Forget any previously pinned SSH host key for this cluster's nodes and trust their current key (default `false`) |
 
 ---
 
@@ -594,6 +599,7 @@ Add one or more standby nodes to an existing Patroni cluster.
 |-------|------|----------|-------------|
 | `job_id` | string | yes | Source deploy job ID |
 | `member_ips` | string[] | yes | IPs of new nodes to join |
+| `reset_host_keys` | bool | no | Forget any previously pinned SSH host key for the new node(s) and trust their current key (default `false`) |
 
 ---
 

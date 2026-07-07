@@ -259,6 +259,7 @@ POST /cluster/pgsql/metrics  { "job_id": "abc", "proxy_port": 25042 }
 | API authentication | `X-API-Key` header required on every request |
 | Request body encryption | Optional AES-256-GCM via `ENCRYPTION_KEY` env |
 | SSH to DB nodes | Dedicated `clusterops` user with key-only auth and passwordless sudo |
+| SSH host key verification | Trust-on-first-use: a node's key is pinned to `known_hosts` the first time it's contacted, then `StrictHostKeyChecking=yes` on every later connection. A real key change (MITM, or a rebuilt/reimaged node) fails loudly instead of being silently trusted. Pass `reset_host_keys: true` on deploy/resume/add-member to explicitly re-trust a node's current key (e.g. after rebuilding it) |
 | Cluster passwords | Stored in `.secret` files with `0600` permissions; never logged |
 | SQL connections | Always via HAProxy, never direct DB VM IPs |
 | Input validation | IP, port, username validated; unknown JSON fields rejected |

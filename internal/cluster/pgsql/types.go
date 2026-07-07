@@ -35,6 +35,7 @@ type DeployRequest struct {
 	NewUserSSLRequired *bool    `json:"new_user_ssl_required"`
 	NewUserSuperuser   *bool    `json:"new_user_superuser"`
 	NewDB              string   `json:"new_db"`
+	ResetHostKeys      bool     `json:"reset_host_keys"`
 	SSHPort            int      `json:"ssh_port"`
 	PostgresPort       int      `json:"postgres_port"`
 	PostgresVersion    int      `json:"postgres_version"` // major version; default 16
@@ -46,6 +47,7 @@ type ResumeRequest struct {
 	ReplicatorPassword string `json:"replicator_password"`
 	AdminPassword      string `json:"admin_password"`
 	NewUserPassword    string `json:"new_user_password"`
+	ResetHostKeys      bool   `json:"reset_host_keys"`
 }
 
 type StoredSpec struct {
@@ -83,8 +85,9 @@ type StoredSecret struct {
 }
 
 type AddMemberRequest struct {
-	JobID     string   `json:"job_id"`
-	MemberIPs []string `json:"member_ips"`
+	JobID         string   `json:"job_id"`
+	MemberIPs     []string `json:"member_ips"`
+	ResetHostKeys bool     `json:"reset_host_keys,omitempty"`
 }
 
 type RemoveMemberRequest struct {

@@ -97,6 +97,14 @@ func (p SSHPolicy) SSHCommonArgs() string {
  * real key change later (MITM, host reimage) fails loudly instead of being
  * silently trusted.
  *
+ * When reset is true, any existing pinned entry for the given hosts is removed
+ * first, so they are treated as unseen and re-pinned with whatever key they
+ * currently present. This is an explicit, per-request escape hatch for the
+ * legitimate case of a rebuilt/reimaged node presenting a new (but expected)
+ * key — callers should only set it when the operator has explicitly asked to
+ * trust the node's current key, since it defeats the loud-failure protection
+ * above for exactly the hosts listed.
+ *
  * It is a no-op unless VerifyHostKeys and KnownHostsFile are both set: with
  * verification off there is nothing to pin, and without a pinned file Ansible
  * falls back to the ambient ~/.ssh/known_hosts, which this process does not
@@ -109,11 +117,12 @@ func (p SSHPolicy) SSHCommonArgs() string {
  *   ctx context.Context - context carrying cancellation signals and deadlines
  *   hosts []string - the hosts ([]string)
  *   port int - the port value
+ *   reset bool - when true, forget any pinned key for hosts before re-pinning
  *
  * Returns:
  *   error - error value; non-nil when a host's key could not be pinned
  */
-func (p SSHPolicy) EnsureKnownHosts(ctx context.Context, hosts []string, port int) error {
+func (p SSHPolicy) EnsureKnownHosts(ctx context.Context, hosts []string, port int, reset bool) error {
 	if !p.VerifyHostKeys || strings.TrimSpace(p.KnownHostsFile) == "" || len(hosts) == 0 {
 		return nil
 	}
@@ -134,6 +143,22 @@ func (p SSHPolicy) EnsureKnownHosts(ctx context.Context, hosts []string, port in
 	existing, err := io.ReadAll(f)
 	if err != nil {
 		return fmt.Errorf("read known_hosts: %w", err)
+	}
+
+	if reset {
+		filtered, changed := removeKnownHostsEntries(existing, hosts)
+		if changed {
+			if err := f.Truncate(0); err != nil {
+				return fmt.Errorf("truncate known_hosts: %w", err)
+			}
+			if _, err := f.Seek(0, io.SeekStart); err != nil {
+				return fmt.Errorf("seek known_hosts: %w", err)
+			}
+			if _, err := f.Write(filtered); err != nil {
+				return fmt.Errorf("rewrite known_hosts: %w", err)
+			}
+			existing = filtered
+		}
 	}
 
 	var missing []string
@@ -179,6 +204,52 @@ func knownHostsHasEntry(content []byte, host string) bool {
 		}
 	}
 	return false
+}
+
+// removeKnownHostsEntries strips every plaintext-marker line matching hosts
+// from content, reporting whether anything was removed. Like
+// knownHostsHasEntry, it cannot recognize pre-existing hashed entries (ssh's
+// HashKnownHosts) — those are left in place, matching the existing dedupe
+// limitation.
+func removeKnownHostsEntries(content []byte, hosts []string) ([]byte, bool) {
+	hostSet := make(map[string]bool, len(hosts))
+	for _, h := range hosts {
+		hostSet[strings.TrimSpace(h)] = true
+	}
+
+	changed := false
+	var kept []string
+	for _, line := range strings.Split(string(content), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if !strings.HasPrefix(trimmed, "#") && !strings.HasPrefix(trimmed, "|") {
+			fields := strings.Fields(trimmed)
+			if len(fields) > 0 {
+				matched := false
+				for _, marker := range strings.Split(fields[0], ",") {
+					if hostSet[normalizeHostMarker(marker)] {
+						matched = true
+						break
+					}
+				}
+				if matched {
+					changed = true
+					continue
+				}
+			}
+		}
+		kept = append(kept, line)
+	}
+	if !changed {
+		return content, false
+	}
+	out := strings.Join(kept, "\n")
+	if out != "" {
+		out += "\n"
+	}
+	return []byte(out), true
 }
 
 // normalizeHostMarker strips the "[host]:port" bracketing ssh-keyscan/ssh use

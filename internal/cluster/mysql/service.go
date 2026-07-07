@@ -204,8 +204,9 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 	if err != nil {
 		return nil, err
 	}
+	resetHostKeys := req.ResetHostKeys
 	s.start(func() {
-		_ = s.executeFrom(s.ctx, bgJob, 0, secrets)
+		_ = s.executeFrom(s.ctx, bgJob, 0, secrets, resetHostKeys)
 	})
 	return job, nil
 }
@@ -288,8 +289,9 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 	if err != nil {
 		return nil, err
 	}
+	resetHostKeys := req.ResetHostKeys
 	s.start(func() {
-		_ = s.executeFrom(s.ctx, bgJob, startIndex, secret)
+		_ = s.executeFrom(s.ctx, bgJob, startIndex, secret, resetHostKeys)
 	})
 	return job, nil
 }
@@ -562,8 +564,9 @@ func (s *Service) AddMember(ctx context.Context, req AddMemberRequest) (*Job, er
 	if err != nil {
 		return nil, err
 	}
+	resetHostKeys := req.ResetHostKeys
 	s.start(func() {
-		s.executeMemberAdd(s.ctx, bgMemberJob, bgDeployJob)
+		s.executeMemberAdd(s.ctx, bgMemberJob, bgDeployJob, resetHostKeys)
 	})
 	return memberJob, nil
 }
@@ -657,8 +660,10 @@ func (s *Service) RemoveMember(ctx context.Context, req RemoveMemberRequest) (*J
  *   ctx context.Context - context carrying cancellation signals and deadlines
  *   memberJob *Job - the memberJob (*Job)
  *   deployJob *Job - the deployJob (*Job)
+ *   resetHostKeys bool - when true, forget any pinned SSH host key for the
+ *     new member before connecting
  */
-func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJob *Job) {
+func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJob *Job, resetHostKeys bool) {
 	storedSecret, err := s.store.LoadSecret(deployJob.ID)
 	if err != nil {
 		memberJob.Status = JobStatusFailed
@@ -676,11 +681,12 @@ func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJo
 		_ = s.store.Save(memberJob)
 
 		result := s.doAddMember(ctx, memberRunConfig{
-			jobID:    deployJob.ID,
-			spec:     deployJob.Request,
-			secret:   secret,
-			memberIP: ip,
-			timeout:  timeout,
+			jobID:         deployJob.ID,
+			spec:          deployJob.Request,
+			secret:        secret,
+			memberIP:      ip,
+			timeout:       timeout,
+			resetHostKeys: resetHostKeys,
 		})
 		memberJob.Steps = append(memberJob.Steps, result)
 
@@ -935,11 +941,14 @@ func (s *Service) hydrateStoredSSHConfig(job *Job) error {
  *   job *Job - the job (*Job)
  *   startIndex int - the startIndex value
  *   secret SecretInput - the secret (SecretInput)
+ *   resetHostKeys bool - when true, forget any pinned SSH host key for this
+ *     cluster's nodes before connecting, so a rebuilt/reimaged node's new key
+ *     is trusted instead of failing host-key verification
  *
  * Returns:
  *   error - error value; non-nil when the operation fails
  */
-func (s *Service) executeFrom(ctx context.Context, job *Job, startIndex int, secret SecretInput) error {
+func (s *Service) executeFrom(ctx context.Context, job *Job, startIndex int, secret SecretInput, resetHostKeys bool) error {
 	timeout := time.Duration(job.Request.StepTimeoutSeconds) * time.Second
 	for i := startIndex; i < len(s.steps); i++ {
 		st := s.steps[i]
@@ -968,11 +977,12 @@ func (s *Service) executeFrom(ctx context.Context, job *Job, startIndex int, sec
 		}
 
 		res := s.runDeploy(ctx, runConfig{
-			jobID:   job.ID,
-			spec:    job.Request,
-			secret:  secret,
-			step:    st,
-			timeout: timeout,
+			jobID:         job.ID,
+			spec:          job.Request,
+			secret:        secret,
+			step:          st,
+			timeout:       timeout,
+			resetHostKeys: resetHostKeys,
 		})
 		job.Steps = append(job.Steps, res)
 
