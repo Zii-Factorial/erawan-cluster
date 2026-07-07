@@ -188,6 +188,11 @@ func (r *Runner) RunRemoveMember(ctx context.Context, cfg memberRunConfig) StepR
  *   StepResult - the resulting StepResult
  */
 func (r *Runner) run(ctx context.Context, cfg runConfig) StepResult {
+	hosts := append([]string{cfg.spec.PrimaryIP}, cfg.spec.StandbyIPs...)
+	if err := r.sshPolicy.EnsureKnownHosts(ctx, hosts, cfg.spec.SSHPort); err != nil {
+		return core.FailedStep(cfg.step.Name, err)
+	}
+
 	stepTimeout := cfg.spec.StepTimeoutSeconds
 	if stepTimeout <= 0 {
 		stepTimeout = 900
@@ -254,6 +259,12 @@ func (r *Runner) run(ctx context.Context, cfg runConfig) StepResult {
  *   StepResult - the resulting StepResult
  */
 func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, stepName string) StepResult {
+	if stepName == "add_member" {
+		if err := r.sshPolicy.EnsureKnownHosts(ctx, []string{cfg.memberIP}, cfg.spec.SSHPort); err != nil {
+			return core.FailedStep(stepName, err)
+		}
+	}
+
 	stepTimeout := cfg.spec.StepTimeoutSeconds
 	if stepTimeout <= 0 {
 		stepTimeout = 900

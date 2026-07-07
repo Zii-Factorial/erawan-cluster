@@ -269,26 +269,52 @@ API_PORT=8080
 ENV=prod
 API_KEY=CHANGE_TO_STRONG_RANDOM_KEY
 # ENCRYPTION_KEY: 64-char hex (AES-256-GCM payload encryption). Generate: openssl rand -hex 32
-# ENCRYPTION_KEY=
+ENCRYPTION_KEY=
+PROXY_HOST=127.0.0.1
 
 TENANTS_DIR=${TENANTS_DIR}
 HAPROXY_RELOAD_CMD=sudo /bin/systemctl reload haproxy
 HAPROXY_RELOAD_TIMEOUT_SECONDS=15
+# Comma-separated list of base HAProxy config files that tenant operations must
+# never touch. Add the operator-managed haproxy.cfg here.
+# HAPROXY_MAIN_CONFIGS=${HAPROXY_CONFIG_FILE}
+
+# PostgreSQL-backed job store + HAProxy config persistence (Active/Passive HA).
+# When set, jobs and HAProxy tenant configs are persisted in the database so a
+# standby node can take over the VIP and serve requests without operator action.
+# DB_CONNECTION=postgres://erawan:secret@127.0.0.1:5432/erawan?sslmode=disable
+
+# DB connection-pool sizing — raise proportionally when scaling vertically.
+# Rule of thumb: DB_MAX_OPEN_CONNS = (num_cpu * 2) + headroom
+DB_MAX_OPEN_CONNS=25
+DB_MAX_IDLE_CONNS=10
+DB_CONN_MAX_LIFETIME_SECONDS=300
+DB_CONN_MAX_IDLE_TIME_SECONDS=60
 
 CLUSTER_STATE_DIR=${JOBS_DIR}
+CLUSTER_MAX_CONCURRENT_JOBS=4
+
+# Seconds to wait for in-flight Ansible jobs to write their final status before
+# the process exits on SIGTERM. Raise if deploy steps exceed 5 minutes.
+SHUTDOWN_DRAIN_SECONDS=300
 
 ANSIBLE_PLAYBOOK_BIN=/usr/bin/ansible-playbook
 MYSQL_DEPLOY_PLAYBOOK=${CLUSTER_INSTALL_DIR}/mysql/playbooks/deploy.yml
 MYSQL_ROLLBACK_PLAYBOOK=${CLUSTER_INSTALL_DIR}/mysql/playbooks/rollback.yml
 PGSQL_DEPLOY_PLAYBOOK=${CLUSTER_INSTALL_DIR}/pgsql/playbooks/deploy.yml
+
 CLUSTER_SSH_USER=
 CLUSTER_SSH_PRIVATE_KEY_PATH=
+# Set CLUSTER_SSH_INSECURE_HOST_KEY=true only for greenfield bootstrap where
+# host keys are not yet known. Always use known_hosts in production.
+CLUSTER_SSH_INSECURE_HOST_KEY=false
 CLUSTER_SSH_KNOWN_HOSTS=${KEYS_DIR}/known_hosts
-# CLUSTER_SSH_INSECURE_HOST_KEY=true  # uncomment only for first-time bootstrap before host keys are scanned
 
 CLUSTER_ANSIBLE_DEBUG=false
 CLUSTER_ANSIBLE_VERBOSITY=0
 CLUSTER_STEP_OUTPUT_MAX_CHARS=8000
+
+ENABLE_PPROF=false
 EOF
   fi
   chown root:"${APP_GROUP}" "${APP_ENV_FILE}"
