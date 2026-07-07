@@ -235,8 +235,6 @@ func (r *Runner) run(ctx context.Context, cfg runConfig, playbook string) StepRe
 		"mysql_port":                 cfg.spec.MySQLPort,
 		"erawan_mysql_major_version": cfg.spec.MySQLVersion,
 		"assume_prepared":            cfg.spec.AssumePrepared,
-		"bootstrap_router":           cfg.spec.BootstrapRouter,
-		"router_service_name":        "mysqlrouter-" + cfg.spec.ClusterName,
 		"step_timeout_seconds":       stepTimeout,
 	}
 	return core.AnsibleRun(ctx, core.AnsibleSpec{
@@ -314,8 +312,6 @@ func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, s
 		"mysql_port":                 cfg.spec.MySQLPort,
 		"erawan_mysql_major_version": cfg.spec.MySQLVersion,
 		"assume_prepared":            cfg.spec.AssumePrepared,
-		"bootstrap_router":           cfg.spec.BootstrapRouter,
-		"router_service_name":        "mysqlrouter-" + cfg.spec.ClusterName,
 		"step_timeout_seconds":       stepTimeout,
 		"expected_cluster_nodes":     len(effectiveStandbys) + 1,
 	}

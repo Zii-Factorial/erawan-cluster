@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+# Reports whether THIS node is the current Group Replication primary, so
+# HAProxy can httpchk it directly instead of relying on MySQL Router.
+# GET / -> 200 when this node is PRIMARY, 503 otherwise (secondary or unknown).
+import http.server
+import socketserver
+import subprocess
+
+PORT = {{ primary_check_port }}
+SOCKETS = ("/var/run/mysqld/mysqld.sock", "/run/mysqld/mysqld.sock", "/var/lib/mysql/mysql.sock")
+QUERY = (
+    "SELECT MEMBER_ROLE FROM performance_schema.replication_group_members "
+    "WHERE MEMBER_ID = @@server_uuid"
+)
+
+
+def is_primary() -> bool:
+    for sock in SOCKETS:
+        try:
+            result = subprocess.run(
+                ["mysql", "--protocol=socket", f"--socket={sock}", "-uroot", "-N", "-B", "-e", QUERY],
+                capture_output=True, text=True, timeout=3,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode == 0:
+            return result.stdout.strip() == "PRIMARY"
+    return False
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200 if is_primary() else 503)
+        self.end_headers()
+
+    def log_message(self, fmt, *args):
+        pass
+
+
+class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
+if __name__ == "__main__":
+    Server(("0.0.0.0", PORT), Handler).serve_forever()

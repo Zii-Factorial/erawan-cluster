@@ -37,7 +37,6 @@ type DeployRequest struct {
 	NewUserSuperuser   bool     `json:"new_user_superuser"`
 	NewDB              string   `json:"new_db"`
 	AssumePrepared     bool     `json:"assume_prepared"`
-	BootstrapRouter    *bool    `json:"bootstrap_router"`
 	SSHPort            int      `json:"ssh_port"`
 	MySQLPort          int      `json:"mysql_port"`
 	MySQLVersion       int      `json:"mysql_version"` // major version: 7=5.7, 8=8.x, 9=9.x; default 8
@@ -49,23 +48,6 @@ func (r DeployRequest) NewUserSSLRequiredEnabled() bool {
 		return true
 	}
 	return *r.NewUserSSLRequired
-}
-
-/**
- * BootstrapRouterEnabled.
- *
- * Receiver:
- *   r DeployRequest - value receiver; the method operates on a copy of the DeployRequest
- *
- * Returns:
- *   bool - boolean result
- */
-
-func (r DeployRequest) BootstrapRouterEnabled() bool {
-	if r.BootstrapRouter == nil {
-		return true
-	}
-	return *r.BootstrapRouter
 }
 
 type ResumeRequest struct {
@@ -89,7 +71,6 @@ type StoredSpec struct {
 	NewUserSuperuser   bool     `json:"new_user_superuser"`
 	NewDB              string   `json:"new_db"`
 	AssumePrepared     bool     `json:"assume_prepared"`
-	BootstrapRouter    bool     `json:"bootstrap_router"`
 	SSHUser            string   `json:"ssh_user"`
 	SSHPrivateKeyPath  string   `json:"ssh_private_key_path,omitempty"`
 	SSHPort            int      `json:"ssh_port"`

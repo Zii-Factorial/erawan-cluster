@@ -4,8 +4,6 @@
     path: /etc/erawan-cluster
     state: directory
     mode: "0700"
-  delegate_to: "{{ item }}"
-  loop: "{{ groups['all'] }}"
   tags: ["boot_recovery"]
 
 - name: Write cluster recovery credentials
@@ -21,8 +19,6 @@
         'mysql_port':   mysql_port | int,
         'node_ips':     ([primary_ip] + standby_ips) | list
       } | to_nice_json }}
-  delegate_to: "{{ item }}"
-  loop: "{{ groups['all'] }}"
   tags: ["boot_recovery"]
 
 - name: Install boot recovery script
@@ -30,8 +26,6 @@
     src: mysql_boot_recovery.sh.j2
     dest: /usr/local/bin/erawan-mysql-boot-recovery
     mode: "0755"
-  delegate_to: "{{ item }}"
-  loop: "{{ groups['all'] }}"
   tags: ["boot_recovery"]
 
 - name: Install boot recovery systemd service
@@ -40,9 +34,7 @@
     dest: /etc/systemd/system/erawan-mysql-boot-recovery.service
     mode: "0644"
   vars:
-    boot_recovery_delay_seconds: "{{ ((groups['all'] | list).index(item) + 1) * (boot_recovery_delay_step_seconds | int) }}"
-  delegate_to: "{{ item }}"
-  loop: "{{ groups['all'] }}"
+    boot_recovery_delay_seconds: "{{ ((groups['all'] | list).index(inventory_hostname) + 1) * (boot_recovery_delay_step_seconds | int) }}"
   tags: ["boot_recovery"]
 
 - name: Enable boot recovery service on all nodes
@@ -50,6 +42,4 @@
     name: erawan-mysql-boot-recovery.service
     daemon_reload: true
     enabled: true
-  delegate_to: "{{ item }}"
-  loop: "{{ groups['all'] }}"
   tags: ["boot_recovery"]

@@ -21,8 +21,6 @@
     SQL
   args:
     executable: /bin/bash
-  delegate_to: "{{ item }}"
-  loop: "{{ groups['all'] }}"
   register: enable_auto_rejoin_result
   retries: "{{ enable_auto_rejoin_retries }}"
   delay: "{{ enable_auto_rejoin_retry_delay_seconds }}"
@@ -35,8 +33,6 @@
     src: gr_watchdog.sh.j2
     dest: /usr/local/bin/erawan-gr-watchdog
     mode: "0755"
-  delegate_to: "{{ item }}"
-  loop: "{{ groups['all'] }}"
   tags: ["enable_auto_rejoin"]
 
 - name: Install GR watchdog systemd service unit
@@ -44,8 +40,6 @@
     src: gr_watchdog.service.j2
     dest: /etc/systemd/system/erawan-gr-watchdog.service
     mode: "0644"
-  delegate_to: "{{ item }}"
-  loop: "{{ groups['all'] }}"
   tags: ["enable_auto_rejoin"]
 
 - name: Install GR watchdog systemd timer unit
@@ -53,8 +47,6 @@
     src: gr_watchdog.timer.j2
     dest: /etc/systemd/system/erawan-gr-watchdog.timer
     mode: "0644"
-  delegate_to: "{{ item }}"
-  loop: "{{ groups['all'] }}"
   tags: ["enable_auto_rejoin"]
 
 - name: Enable and start GR watchdog timer
@@ -63,6 +55,4 @@
     daemon_reload: true
     enabled: true
     state: started
-  delegate_to: "{{ item }}"
-  loop: "{{ groups['all'] }}"
   tags: ["enable_auto_rejoin"]

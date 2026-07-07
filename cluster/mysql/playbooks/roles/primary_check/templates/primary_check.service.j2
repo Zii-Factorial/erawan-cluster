@@ -1,0 +1,13 @@
+[Unit]
+Description=Erawan MySQL primary-check HTTP endpoint (GR role for HAProxy)
+After=mysql.service
+Requires=mysql.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/erawan-mysql-primary-check
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

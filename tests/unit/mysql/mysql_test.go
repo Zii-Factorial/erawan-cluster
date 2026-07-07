@@ -126,8 +126,7 @@ func TestGetComputesProgressWithSkippedSteps(t *testing.T) {
 		ID:     testJobID,
 		Status: mysql.JobStatusRunning,
 		Request: mysql.StoredSpec{
-			AssumePrepared:  true,
-			BootstrapRouter: false,
+			AssumePrepared: true,
 		},
 		Steps: []mysql.StepResult{
 			{Name: "preflight", Status: core.JobStatusSkipped},
@@ -143,7 +142,7 @@ func TestGetComputesProgressWithSkippedSteps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if got.TotalSteps != 4 || got.CompletedSteps != 1 || got.ProgressPercent != 25 {
+	if got.TotalSteps != 5 || got.CompletedSteps != 1 || got.ProgressPercent != 20 {
 		t.Fatalf("unexpected progress: total=%d completed=%d pct=%d", got.TotalSteps, got.CompletedSteps, got.ProgressPercent)
 	}
 }

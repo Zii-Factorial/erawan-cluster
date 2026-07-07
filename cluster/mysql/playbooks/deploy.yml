@@ -32,18 +32,60 @@
   roles:
     - create_cluster
     - add_instances
-    - auto_rejoin
-    - verify_cluster
-    - init_app_db
-    - boot_recovery
 
 # ---------------------------------------------------------------------------
-# PLAY 4 — Bootstrap MySQL Router on all nodes
+# PLAY 4 — Enable Group Replication auto-rejoin on all nodes (parallel)
 # ---------------------------------------------------------------------------
-- name: Bootstrap MySQL Router on all nodes
+- name: Enable auto-rejoin on all nodes
   hosts: all
   gather_facts: false
   become: true
   any_errors_fatal: true
   roles:
-    - bootstrap_router
+    - auto_rejoin
+
+# ---------------------------------------------------------------------------
+# PLAY 5 — Verify cluster health
+# ---------------------------------------------------------------------------
+- name: Verify cluster health
+  hosts: mysql_primary
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  roles:
+    - verify_cluster
+
+# ---------------------------------------------------------------------------
+# PLAY 6 — Initialize application database (optional)
+# ---------------------------------------------------------------------------
+- name: Initialize application database
+  hosts: mysql_primary
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  roles:
+    - init_app_db
+
+# ---------------------------------------------------------------------------
+# PLAY 7 — Install boot-recovery service on all nodes (parallel)
+# ---------------------------------------------------------------------------
+- name: Install boot recovery on all nodes
+  hosts: all
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  roles:
+    - boot_recovery
+
+# ---------------------------------------------------------------------------
+# PLAY 8 — Install MySQL primary-check endpoint on all nodes (used by HAProxy
+#           to route writes to the current Group Replication primary now that
+#           MySQL Router is no longer part of this deployment)
+# ---------------------------------------------------------------------------
+- name: Install MySQL primary-check endpoint
+  hosts: all
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  roles:
+    - primary_check

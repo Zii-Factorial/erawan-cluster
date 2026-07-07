@@ -31,3 +31,14 @@
   any_errors_fatal: true
   roles:
     - verify_cluster
+
+# ---------------------------------------------------------------------------
+# PLAY 4 — Install MySQL primary-check endpoint on the new member
+# ---------------------------------------------------------------------------
+- name: Install MySQL primary-check endpoint on new member
+  hosts: mysql_new_member
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  roles:
+    - primary_check

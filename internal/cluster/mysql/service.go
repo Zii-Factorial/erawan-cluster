@@ -58,7 +58,7 @@ func NewService(store Store, runner *Runner) *Service {
 			{Name: "verify_cluster", Tag: "verify_cluster"},
 			{Name: "init_app_db", Tag: "init_app_db"},
 			{Name: "boot_recovery", Tag: "boot_recovery"},
-			{Name: "bootstrap_router", Tag: "bootstrap_router", Skippable: true},
+			{Name: "primary_check", Tag: "primary_check"},
 		},
 	}
 	svc.launcher = core.NewLauncher(defaultMaxConcurrentJobs)
@@ -176,7 +176,6 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 			NewUserSuperuser:   req.NewUserSuperuser,
 			NewDB:              req.NewDB,
 			AssumePrepared:     req.AssumePrepared,
-			BootstrapRouter:    req.BootstrapRouterEnabled(),
 			SSHUser:            s.sshUser,
 			SSHPrivateKeyPath:  s.sshKeyPath,
 			SSHPort:            req.SSHPort,
@@ -297,9 +296,9 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 
 /**
  * Recover launches a new recovery job against the cluster owned by jobID, running
- * the boot_recovery Ansible step (and bootstrap_router when configured). Use after
- * a complete datacenter outage: MySQL InnoDB Cluster cannot reform automatically
- * without dba.rebootClusterFromCompleteOutage(), which this step executes. The
+ * the boot_recovery Ansible step. Use after a complete datacenter outage: MySQL
+ * InnoDB Cluster cannot reform automatically without
+ * dba.rebootClusterFromCompleteOutage(), which this step executes. The
  * stored secret is used so no passwords are required at call time.
  *
  * Receiver:
@@ -335,7 +334,7 @@ func (s *Service) Recover(ctx context.Context, jobID string) (*Job, error) {
 	}
 	secret := SecretInput{AdminPassword: storedSecret.AdminPassword}
 
-	recoverySteps := s.recoveryStepsFor(deployJob.Request)
+	recoverySteps := s.recoveryStepsFor()
 	recoveryJob := &Job{
 		ID:                newJobID(),
 		Status:            JobStatusRunning,
@@ -367,27 +366,16 @@ func (s *Service) Recover(ctx context.Context, jobID string) (*Job, error) {
 
 /**
  * recoveryStepsFor returns the ordered Ansible steps to run for a post-outage
- * recovery: always boot_recovery, plus bootstrap_router when configured.
+ * recovery: boot_recovery only.
  *
  * Receiver:
  *   s *Service - pointer receiver; the method may mutate this Service instance
  *
- * Params:
- *   spec StoredSpec - the stored deploy specification
- *
  * Returns:
  *   []step - ordered recovery steps
  */
-func (s *Service) recoveryStepsFor(spec StoredSpec) []step {
-	steps := []step{{Name: "boot_recovery", Tag: "boot_recovery"}}
-	for _, st := range s.steps {
-		if st.Name == "bootstrap_router" {
-			if _, skip := shouldSkipStep(st, spec); !skip {
-				steps = append(steps, st)
-			}
-		}
-	}
-	return steps
+func (s *Service) recoveryStepsFor() []step {
+	return []step{{Name: "boot_recovery", Tag: "boot_recovery"}}
 }
 
 /**
@@ -404,7 +392,7 @@ func (s *Service) recoveryStepsFor(spec StoredSpec) []step {
  */
 func (s *Service) executeRecovery(ctx context.Context, recoveryJob *Job, deployJob *Job, secret SecretInput) {
 	timeout := time.Duration(deployJob.Request.StepTimeoutSeconds) * time.Second
-	recoverySteps := s.recoveryStepsFor(deployJob.Request)
+	recoverySteps := s.recoveryStepsFor()
 
 	for i, st := range recoverySteps {
 		recoveryJob.CurrentStep = st.Name
@@ -1089,7 +1077,7 @@ func (s *Service) updateJobProgress(job *Job) {
 		total = len(job.MemberOp.MemberIPs)
 	}
 	if job.RecoveryOp != nil {
-		total = len(s.recoveryStepsFor(job.Request))
+		total = len(s.recoveryStepsFor())
 	}
 	core.ApplyProgress(job, total)
 }
@@ -1184,9 +1172,6 @@ func shouldSkipStep(st step, spec StoredSpec) (string, bool) {
 	}
 	if st.Name == "init_app_db" && (spec.NewUser == "" || spec.NewDB == "") {
 		return "new_user/new_db not provided", true
-	}
-	if st.Skippable && !spec.BootstrapRouter {
-		return "bootstrap_router is false", true
 	}
 	if spec.AssumePrepared && (st.Name == "preflight" || st.Name == "configure_instances") {
 		return "assume_prepared is true", true

@@ -110,8 +110,3 @@ NEW_STATE=$(mysql -uroot -Nse \
   "SELECT member_state FROM performance_schema.replication_group_members \
    WHERE member_host = @@report_host LIMIT 1" 2>/dev/null)
 logger -t erawan-gr-watchdog "GR state after recovery attempt: '${NEW_STATE:-unknown}'"
-
-if [[ "$NEW_STATE" == "ONLINE" ]]; then
-  logger -t erawan-gr-watchdog "Restarting MySQL Router to re-discover cluster topology"
-  systemctl restart {{ router_service_name }} 2>/dev/null || true
-fi

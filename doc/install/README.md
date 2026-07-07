@@ -13,7 +13,7 @@ PostgreSQL deployment note:
 MySQL deployment note:
 
 - MySQL InnoDB Cluster can be deployed as a single primary node or as a primary with one or more secondary nodes.
-- MySQL Router bootstrap is optional and controlled by the API request.
+- This deployment does not use MySQL Router; every node runs a lightweight primary-check HTTP endpoint (`:9200` by default) that HAProxy uses to find the current Group Replication primary.
 
 SSH access note:
 
