@@ -1,0 +1,57 @@
+---
+# Graceful, data-preserving shutdown of a Patroni/PostgreSQL cluster.
+#
+# Order follows standard cluster practice:
+#   1. Stop Patroni on standbys first — the primary keeps serving until last,
+#      so no standby restarts ahead of WAL it never received.
+#   2. Stop Patroni on the primary — Patroni performs a clean (fast) PostgreSQL
+#      shutdown, checkpointing and flushing WAL to disk.
+#   3. Stop etcd on all nodes — only after every Patroni is down, so no member
+#      loses its DCS session mid-shutdown and triggers a spurious failover.
+#
+# Data directories (PostgreSQL, etcd) are never touched. Services stay
+# `enabled`, but a stopped cluster should be started with the start/recover
+# API — not by rebooting nodes one at a time — so the DCS is re-registered
+# and the cluster verified.
+
+# ---------------------------------------------------------------------------
+# PLAY 1 — Stop Patroni on standby nodes
+# ---------------------------------------------------------------------------
+- name: Stop Patroni on standby nodes
+  hosts: pgsql_standby
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Stop Patroni (clean PostgreSQL shutdown)
+      ansible.builtin.systemd:
+        name: patroni
+        state: stopped
+
+# ---------------------------------------------------------------------------
+# PLAY 2 — Stop Patroni on the primary
+# ---------------------------------------------------------------------------
+- name: Stop Patroni on primary node
+  hosts: pgsql_primary
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Stop Patroni (clean PostgreSQL shutdown)
+      ansible.builtin.systemd:
+        name: patroni
+        state: stopped
+
+# ---------------------------------------------------------------------------
+# PLAY 3 — Stop etcd everywhere once all Patroni instances are down
+# ---------------------------------------------------------------------------
+- name: Stop etcd on all nodes
+  hosts: all
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Stop etcd
+      ansible.builtin.systemd:
+        name: etcd
+        state: stopped

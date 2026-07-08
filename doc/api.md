@@ -227,7 +227,10 @@ The response contains the job object plus a `secret` block with the cluster admi
 | `progress_percent` | `completed_steps / total_steps * 100` |
 | `error` | Error message if `status` is `failed` |
 | `steps` | Array of step results (see below) |
-| `member_op` | Present for add/remove member jobs |
+| `member_op` | Present for add/remove member jobs (`type`, `member_ips`, `source_job_id`) |
+| `recovery_op` | Present for recovery/start jobs (`source_job_id`) |
+| `service_op` | Present for stop jobs (`type: "stop"`, `source_job_id`) |
+| `active_member_job_id` | On a deploy job: ID of the member/stop operation currently holding the cluster, if any |
 
 **Step result fields:**
 | Field | Description |
@@ -279,6 +282,44 @@ Resume a failed MySQL deploy job from the last completed step.
 
 ---
 
+### `POST /cluster/mysql/stop`
+
+Gracefully stop the whole MySQL InnoDB Cluster **without touching any data**. MySQL is stopped on secondaries first, then on the primary (a clean InnoDB shutdown that flushes the redo log), so the primary always holds the complete transaction set. Data directories are preserved; restart the cluster later with **Start** below.
+
+**Request:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `job_id` | string | yes | Deploy job ID that owns the cluster |
+
+```json
+{ "job_id": "abc123" }
+```
+
+Returns a new job with `service_op: {"type": "stop", "source_job_id": ...}` — poll **Get Job** with the new job's ID until `completed`.
+
+Rejected while the deploy job is running, while another member/stop operation holds the cluster, or if the deployment was rolled back.
+
+---
+
+### `POST /cluster/mysql/start`
+
+Start a stopped cluster (or one that went through a full outage). Executes `dba.rebootClusterFromCompleteOutage()`, which restores the InnoDB Cluster from its on-disk state — the member with the most complete GTID set becomes the primary — without touching data. Uses stored credentials.
+
+**Request:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `job_id` | string | yes | Deploy job ID that owns the cluster |
+
+```json
+{ "job_id": "abc123" }
+```
+
+`POST /cluster/mysql/jobs/{jobID}/recover` is the same operation under its original name (job ID as path parameter, no body); both remain supported. Returns a new job carrying `recovery_op`.
+
+A typical maintenance window is therefore: **Stop → (maintenance) → Start**, with zero data loss as long as the same VMs/disks come back.
+
+---
+
 ### `POST /cluster/mysql/jobs/{jobID}/rollback`
 
 Roll back a MySQL cluster deployment (removes cluster config, unjoins nodes).
@@ -294,7 +335,7 @@ Roll back a MySQL cluster deployment (removes cluster config, unjoins nodes).
 
 ### `POST /cluster/mysql/members`
 
-Add one or more secondary nodes to an existing MySQL InnoDB Cluster.
+Add one or more secondary nodes to an existing MySQL InnoDB Cluster. When several `member_ips` are given they are joined **one at a time, in order**; each successful node is recorded in the cluster's standby list before the next join starts, and the job stops at the first failure (already-joined nodes stay in the cluster).
 
 Only one add/remove-member operation may run at a time per cluster (`job_id`), and the deploy job must not itself be running (mid-deploy or mid-resume). Two concurrent member operations both mutate Group Replication membership and can transiently break quorum on the primary — the API rejects the second call immediately with an error instead of racing inside Ansible. Wait for the current operation to finish (poll **Get Job**) before starting another.
 
@@ -592,9 +633,47 @@ Resume a failed PostgreSQL deploy job.
 
 ---
 
+### `POST /cluster/pgsql/stop`
+
+Gracefully stop the whole Patroni/PostgreSQL cluster **without touching any data**. Shutdown follows standard cluster order: Patroni is stopped on standbys first, then on the primary (a clean PostgreSQL shutdown that checkpoints and flushes WAL), then etcd is stopped on every node. Data directories (PostgreSQL and etcd) are preserved; restart the cluster later with **Start** below.
+
+**Request:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `job_id` | string | yes | Deploy job ID that owns the cluster |
+
+```json
+{ "job_id": "xyz456" }
+```
+
+Returns a new job with `service_op: {"type": "stop", "source_job_id": ...}` — poll **Get Job** with the new job's ID until `completed`.
+
+Rejected while the deploy job is running, while another member/stop operation holds the cluster, or if the deployment was rolled back.
+
+---
+
+### `POST /cluster/pgsql/start`
+
+Start a stopped cluster (or one that went through a full outage). Runs `cluster_bootstrap` and `verify_cluster`: etcd is started on all nodes, the cluster is re-registered in the DCS, and Patroni is started on the primary first, then the standbys. Data directories are never touched — the etcd data-dir reset inside `cluster_bootstrap` is marker-guarded per deploy job and is skipped on start/recover. Uses stored credentials.
+
+**Request:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `job_id` | string | yes | Deploy job ID that owns the cluster |
+
+```json
+{ "job_id": "xyz456" }
+```
+
+`POST /cluster/pgsql/jobs/{jobID}/recover` is the same operation under its original name (job ID as path parameter, no body); both remain supported. Returns a new job carrying `recovery_op`.
+
+A typical maintenance window is therefore: **Stop → (maintenance) → Start**, with zero data loss as long as the same VMs/disks come back.
+
+---
+
 ### `POST /cluster/pgsql/members`
 
-Add one or more standby nodes to an existing Patroni cluster.
+Add one or more standby nodes to an existing Patroni cluster. When several `member_ips` are given they are joined **one at a time, in order** — each addition registers an etcd learner on the primary and etcd allows only one unpromoted learner at a time. Each successful node is recorded in the cluster's standby list before the next join starts, and the job stops at the first failure (already-joined nodes stay in the cluster).
 
 Only one add/remove-member operation may run at a time per cluster (`job_id`), and the deploy job must not itself be running (mid-deploy or mid-resume). Two concurrent member operations both mutate etcd/Patroni membership and can transiently break quorum on the primary — the API rejects the second call immediately with an error instead of racing inside Ansible. Wait for the current operation to finish (poll **Get Job**) before starting another.
 

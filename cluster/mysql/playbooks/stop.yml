@@ -1,0 +1,40 @@
+---
+# Graceful, data-preserving shutdown of a MySQL InnoDB Cluster.
+#
+# Order follows standard cluster practice:
+#   1. Stop MySQL on secondaries first — the primary keeps serving until last,
+#      so every secondary shuts down with the full transaction set it has
+#      certified; the primary's GTID set is the superset.
+#   2. Stop MySQL on the primary — clean InnoDB shutdown flushes the redo log.
+#
+# Data directories are never touched. Start a stopped cluster with the
+# start/recover API, which runs dba.rebootClusterFromCompleteOutage() so the
+# member with the most complete GTID set is chosen as the new primary.
+
+# ---------------------------------------------------------------------------
+# PLAY 1 — Stop MySQL on secondary nodes
+# ---------------------------------------------------------------------------
+- name: Stop MySQL on secondary nodes
+  hosts: mysql_standby
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Stop MySQL (clean InnoDB shutdown)
+      ansible.builtin.systemd:
+        name: mysql
+        state: stopped
+
+# ---------------------------------------------------------------------------
+# PLAY 2 — Stop MySQL on the primary
+# ---------------------------------------------------------------------------
+- name: Stop MySQL on primary node
+  hosts: mysql_primary
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Stop MySQL (clean InnoDB shutdown)
+      ansible.builtin.systemd:
+        name: mysql
+        state: stopped

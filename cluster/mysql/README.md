@@ -18,6 +18,11 @@ Implemented workflow:
 - Primary-check HTTP endpoint on every node so HAProxy can route writes to
   the current Group Replication primary without MySQL Router
 - Rollback playbook for primary-check cleanup and cluster dissolve
+- Add member: clone + join of new secondaries (one node at a time)
+- Remove member: graceful removal of a secondary from the group
+- Stop: data-preserving ordered shutdown (secondaries → primary)
+- Start / recover: reboot a stopped or outage-hit cluster from existing data
+  via `dba.rebootClusterFromCompleteOutage()`
 
 Architecture overview:
 
@@ -47,3 +52,6 @@ Entry points:
 
 - `cluster/mysql/playbooks/deploy.yml`
 - `cluster/mysql/playbooks/rollback.yml`
+- `cluster/mysql/playbooks/add_member.yml`
+- `cluster/mysql/playbooks/remove_member.yml`
+- `cluster/mysql/playbooks/stop.yml`

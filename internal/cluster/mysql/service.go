@@ -26,6 +26,7 @@ type Service struct {
 	runRollbackStep  func(context.Context, string, StoredSpec, SecretInput, time.Duration) StepResult
 	runAddMemberStep func(context.Context, memberRunConfig) StepResult
 	runRemMemberStep func(context.Context, memberRunConfig) StepResult
+	runStopStep      func(context.Context, runConfig) StepResult
 }
 
 // defaultMaxConcurrentJobs bounds concurrent background jobs until configured.
@@ -68,6 +69,7 @@ func NewService(store Store, runner *Runner) *Service {
 		svc.runRollbackStep = runner.RunRollback
 		svc.runAddMemberStep = runner.RunAddMember
 		svc.runRemMemberStep = runner.RunRemoveMember
+		svc.runStopStep = runner.RunStop
 	}
 	return svc
 }
@@ -493,6 +495,133 @@ func (s *Service) Rollback(ctx context.Context, jobID string, req RollbackReques
 		return nil, err
 	}
 	return job, nil
+}
+
+/**
+ * Stop launches a graceful, data-preserving shutdown of the cluster owned by
+ * jobID: MySQL is stopped on secondaries first, then the primary (a clean
+ * InnoDB shutdown). Data directories are never touched; bring the cluster
+ * back with Recover (the start operation), which reboots the InnoDB Cluster
+ * from complete outage.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   jobID string - ID of the deploy job whose cluster should be stopped
+ *
+ * Returns:
+ *   *Job - the new running stop job
+ *   error - error value; non-nil when the operation fails
+ */
+func (s *Service) Stop(ctx context.Context, jobID string) (*Job, error) {
+	_ = ctx
+	deployJob, err := s.store.Load(jobID)
+	if err != nil {
+		return nil, fmt.Errorf("load job %q: %w", jobID, err)
+	}
+	if err := s.hydrateStoredSSHConfig(deployJob); err != nil {
+		return nil, err
+	}
+	if deployJob.Status == core.JobStatusRolledBack {
+		return nil, fmt.Errorf("job %s was rolled back; there is no cluster to stop", jobID)
+	}
+
+	stopJobID := newJobID()
+	// Reuse the member-operation claim: a stop racing an add/remove-member or
+	// another stop against the same cluster mutates shared service state, so
+	// the second caller is rejected up front (and a Running deploy is too).
+	if err := s.claimMemberOpLock(jobID, stopJobID); err != nil {
+		return nil, err
+	}
+
+	stopJob := &Job{
+		ID:                stopJobID,
+		Status:            JobStatusRunning,
+		CreatedAt:         time.Now().UTC(),
+		UpdatedAt:         time.Now().UTC(),
+		LastCompletedStep: -1,
+		Request:           deployJob.Request,
+		ServiceOp:         &core.ServiceOperation{Type: "stop", SourceJobID: jobID},
+		Steps:             make([]StepResult, 0, 1),
+	}
+	s.updateJobProgress(stopJob)
+	if err := s.store.Save(stopJob); err != nil {
+		s.releaseMemberOpLock(jobID, stopJobID)
+		return nil, err
+	}
+
+	bgStopJob, err := s.store.Load(stopJob.ID)
+	if err != nil {
+		s.releaseMemberOpLock(jobID, stopJobID)
+		return nil, err
+	}
+	bgDeployJob, err := s.store.Load(jobID)
+	if err != nil {
+		s.releaseMemberOpLock(jobID, stopJobID)
+		return nil, err
+	}
+	s.start(func() {
+		defer s.releaseMemberOpLock(jobID, stopJobID)
+		s.executeStop(s.ctx, bgStopJob, bgDeployJob)
+	})
+	return stopJob, nil
+}
+
+/**
+ * executeStop runs the stop playbook as a single step and records the result.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   stopJob *Job - the stop job being tracked
+ *   deployJob *Job - the original deploy job supplying the cluster configuration
+ */
+func (s *Service) executeStop(ctx context.Context, stopJob *Job, deployJob *Job) {
+	timeout := time.Duration(deployJob.Request.StepTimeoutSeconds) * time.Second
+	st := step{Name: "stop_cluster"}
+
+	stopJob.CurrentStep = st.Name
+	s.updateJobProgress(stopJob)
+	_ = s.store.Save(stopJob)
+
+	var res StepResult
+	if s.runStopStep == nil {
+		res = StepResult{
+			Name:      st.Name,
+			Status:    JobStatusFailed,
+			StartedAt: time.Now().UTC(),
+			EndedAt:   time.Now().UTC(),
+			ExitCode:  -1,
+			Message:   "stop runner is not configured",
+		}
+	} else {
+		res = s.runStopStep(ctx, runConfig{
+			jobID:   deployJob.ID,
+			spec:    deployJob.Request,
+			step:    st,
+			timeout: timeout,
+		})
+	}
+	stopJob.Steps = append(stopJob.Steps, res)
+	stopJob.CurrentStep = ""
+
+	if res.Status != JobStatusCompleted {
+		stopJob.Status = JobStatusFailed
+		stopJob.Error = res.Message
+		if stopJob.Error == "" {
+			stopJob.Error = "stop cluster failed"
+		}
+	} else {
+		stopJob.Status = JobStatusCompleted
+		stopJob.LastCompletedStep = 0
+		stopJob.Error = ""
+	}
+	s.updateJobProgress(stopJob)
+	_ = s.store.Save(stopJob)
 }
 
 /**
@@ -1159,6 +1288,9 @@ func (s *Service) updateJobProgress(job *Job) {
 	}
 	if job.RecoveryOp != nil {
 		total = len(s.recoveryStepsFor())
+	}
+	if job.ServiceOp != nil {
+		total = 1
 	}
 	core.ApplyProgress(job, total)
 }

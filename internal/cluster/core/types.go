@@ -62,6 +62,15 @@ type RecoveryOperation struct {
 	SourceJobID string `json:"source_job_id"`
 }
 
+// ServiceOperation records a whole-cluster service action (currently "stop"),
+// linking the job back to the deploy job whose cluster it acts on. Starting a
+// stopped cluster is the recovery operation above — a stopped cluster and a
+// cluster after a full outage are the same state to the engines.
+type ServiceOperation struct {
+	Type        string `json:"type"` // "stop"
+	SourceJobID string `json:"source_job_id"`
+}
+
 // Job is the persisted state of one cluster operation, generic over the
 // engine-specific stored spec carried in Request.
 type Job[Spec any] struct {
@@ -79,6 +88,7 @@ type Job[Spec any] struct {
 	Steps             []StepResult        `json:"steps"`
 	MemberOp          *MemberOperation    `json:"member_op,omitempty"`
 	RecoveryOp        *RecoveryOperation  `json:"recovery_op,omitempty"`
+	ServiceOp         *ServiceOperation   `json:"service_op,omitempty"`
 
 	// ActiveMemberJobID holds the ID of an in-flight add/remove-member job
 	// for this deploy job, if any. It exists because concurrent member

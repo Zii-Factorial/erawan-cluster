@@ -165,6 +165,11 @@
       "key": "RECOVERY_JOB_ID",
       "value": "",
       "description": "Job ID returned by Recover Job — use this to poll the recovery operation. JOB_ID always stays as the original deploy job ID."
+    },
+    {
+      "key": "STOP_JOB_ID",
+      "value": "",
+      "description": "Auto-set by Stop Cluster — ID of the stop job; poll Get Job with it until completed"
     }
   ],
   "event": [
@@ -827,6 +832,120 @@
           }
         },
         {
+          "name": "Stop Cluster",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Auto-extract STOP_JOB_ID from the response (no encryption).",
+                  "// JOB_ID is intentionally NOT updated — it stays as the original deploy job ID.",
+                  "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
+                  "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
+                  "try {",
+                  "    const body = pm.response.json();",
+                  "    if (body && body.data && body.data.id) {",
+                  "        pm.collectionVariables.set('STOP_JOB_ID', body.data.id);",
+                  "        console.log('[erawan] STOP_JOB_ID set to:', body.data.id);",
+                  "        console.log('[erawan] Poll GET /cluster/mysql/jobs/' + body.data.id + ' to track progress');",
+                  "    }",
+                  "} catch(e) {}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "Gracefully stops the whole MySQL InnoDB Cluster **without touching any data**.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID that owns the cluster |\n\nMySQL is stopped on secondaries first, then on the primary (a clean InnoDB shutdown that flushes the redo log), so the primary always holds the complete transaction set. Data directories are preserved.\n\nRejected while the deploy job is running, while another member/stop operation holds the cluster, or if the deployment was rolled back. Returns a new stop job immediately (`202 Accepted`) carrying `service_op: {\"type\": \"stop\"}`. Poll **Get Job** using `STOP_JOB_ID` until `completed`, then restart later with **Start Cluster**.",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/stop",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "mysql",
+                "stop"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Start Cluster",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Auto-extract RECOVERY_JOB_ID from the response (no encryption).",
+                  "// JOB_ID is intentionally NOT updated — it stays as the original deploy job ID.",
+                  "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
+                  "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
+                  "try {",
+                  "    const body = pm.response.json();",
+                  "    if (body && body.data && body.data.id) {",
+                  "        pm.collectionVariables.set('RECOVERY_JOB_ID', body.data.id);",
+                  "        console.log('[erawan] RECOVERY_JOB_ID set to:', body.data.id);",
+                  "        console.log('[erawan] Poll GET /cluster/mysql/jobs/' + body.data.id + ' to track progress');",
+                  "    }",
+                  "} catch(e) {}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "Starts a stopped cluster (or one recovering from a full outage).\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID that owns the cluster |\n\nSame operation as **Recover Job** (`/recover` remains supported as an alias): executes `dba.rebootClusterFromCompleteOutage()`, restoring the InnoDB Cluster from its on-disk state — the member with the most complete GTID set becomes the primary — without touching data. Uses stored credentials.\n\nTypical maintenance window: **Stop Cluster → (maintenance) → Start Cluster**, with zero data loss as long as the same VMs/disks come back. Returns a new job (`202 Accepted`); poll **Get Job** using `RECOVERY_JOB_ID` to track progress.",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/start",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "mysql",
+                "start"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\"\n}"
+            }
+          }
+        },
+        {
           "name": "Rollback Job",
           "request": {
             "method": "POST",
@@ -1210,6 +1329,120 @@
                 "{{JOB_ID}}",
                 "recover"
               ]
+            }
+          }
+        },
+        {
+          "name": "Stop Cluster",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Auto-extract STOP_JOB_ID from the response (no encryption).",
+                  "// JOB_ID is intentionally NOT updated — it stays as the original deploy job ID.",
+                  "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
+                  "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
+                  "try {",
+                  "    const body = pm.response.json();",
+                  "    if (body && body.data && body.data.id) {",
+                  "        pm.collectionVariables.set('STOP_JOB_ID', body.data.id);",
+                  "        console.log('[erawan] STOP_JOB_ID set to:', body.data.id);",
+                  "        console.log('[erawan] Poll GET /cluster/pgsql/jobs/' + body.data.id + ' to track progress');",
+                  "    }",
+                  "} catch(e) {}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "Gracefully stops the whole Patroni/PostgreSQL cluster **without touching any data**.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID that owns the cluster |\n\nShutdown order: Patroni on standbys first, then the primary (a clean PostgreSQL shutdown that checkpoints and flushes WAL), then etcd on every node. Data directories (PostgreSQL and etcd) are preserved.\n\nRejected while the deploy job is running, while another member/stop operation holds the cluster, or if the deployment was rolled back. Returns a new stop job immediately (`202 Accepted`) carrying `service_op: {\"type\": \"stop\"}`. Poll **Get Job** using `STOP_JOB_ID` until `completed`, then restart later with **Start Cluster**.",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/stop",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "pgsql",
+                "stop"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Start Cluster",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Auto-extract RECOVERY_JOB_ID from the response (no encryption).",
+                  "// JOB_ID is intentionally NOT updated — it stays as the original deploy job ID.",
+                  "const encryptionKey = pm.variables.get('ENCRYPTION_KEY');",
+                  "if (encryptionKey && encryptionKey.trim() !== '') { return; }",
+                  "try {",
+                  "    const body = pm.response.json();",
+                  "    if (body && body.data && body.data.id) {",
+                  "        pm.collectionVariables.set('RECOVERY_JOB_ID', body.data.id);",
+                  "        console.log('[erawan] RECOVERY_JOB_ID set to:', body.data.id);",
+                  "        console.log('[erawan] Poll GET /cluster/pgsql/jobs/' + body.data.id + ' to track progress');",
+                  "    }",
+                  "} catch(e) {}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "description": "Starts a stopped cluster (or one recovering from a full outage).\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID that owns the cluster |\n\nSame operation as **Recover Job** (`/recover` remains supported as an alias): runs `cluster_bootstrap` (starts etcd on all nodes, re-registers the cluster in the DCS, starts Patroni primary then standbys) and `verify_cluster` using stored credentials. Data directories are never touched — the etcd data-dir reset is marker-guarded per deploy job and skipped here.\n\nTypical maintenance window: **Stop Cluster → (maintenance) → Start Cluster**, with zero data loss as long as the same VMs/disks come back. Returns a new job (`202 Accepted`); poll **Get Job** using `RECOVERY_JOB_ID` to track progress.",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/start",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "pgsql",
+                "start"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\"\n}"
             }
           }
         },

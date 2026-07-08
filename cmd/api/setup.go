@@ -170,6 +170,7 @@ func buildMySQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConf
 	runner := mysqlcluster.NewRunner(cfg.ansible.bin, cfg.deployPlaybook, cfg.rollbackPlaybook)
 	runner.SetAddMemberPlaybook(cfg.addMemberPlaybook)
 	runner.SetRemoveMemberPlaybook(cfg.removeMemberPlaybook)
+	runner.SetStopPlaybook(cfg.stopPlaybook)
 	runner.SetDebug(cfg.ansible.verbosity, cfg.ansible.debug, cfg.ansible.stepOutputMaxChars)
 	runner.SetSSHPolicy(ssh.policy())
 
@@ -210,6 +211,7 @@ func buildPGSQLCluster(ctx context.Context, cfg clusterEngineConfig, ssh sshConf
 	runner := pgsqlcluster.NewRunner(cfg.ansible.bin, cfg.deployPlaybook)
 	runner.SetAddMemberPlaybook(cfg.addMemberPlaybook)
 	runner.SetRemoveMemberPlaybook(cfg.removeMemberPlaybook)
+	runner.SetStopPlaybook(cfg.stopPlaybook)
 	runner.SetDebug(cfg.ansible.verbosity, cfg.ansible.debug, cfg.ansible.stepOutputMaxChars)
 	runner.SetSSHPolicy(ssh.policy())
 

@@ -1,8 +1,10 @@
 package mysql
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	mysqlcluster "erawan-cluster/internal/cluster/mysql"
 	mysqldbmanager "erawan-cluster/internal/cluster/mysql/dbmanager"
@@ -180,6 +182,77 @@ func (h *Handler) RecoverJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	render.Accepted(w, "MySQL cluster recovery started", job)
+}
+
+// serviceOpRequest is the body of the stop/start cluster endpoints: the deploy
+// job that owns the cluster, passed as payload like the member endpoints.
+type serviceOpRequest struct {
+	JobID string `json:"job_id"`
+}
+
+func decodeServiceOpRequest(r *http.Request) (string, error) {
+	var req serviceOpRequest
+	if err := render.DecodeJSON(r, &req); err != nil {
+		return "", err
+	}
+	jobID := strings.TrimSpace(req.JobID)
+	if jobID == "" {
+		return "", errors.New("job_id is required")
+	}
+	return jobID, nil
+}
+
+/**
+ * StartJob starts a stopped cluster. Starting is the same operation as
+ * post-outage recovery — dba.rebootClusterFromCompleteOutage() restores the
+ * InnoDB Cluster from its on-disk state without touching data — so this
+ * delegates to Recover. The deploy job ID comes in the request body.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
+func (h *Handler) StartJob(w http.ResponseWriter, r *http.Request) {
+	jobID, err := decodeServiceOpRequest(r)
+	if err != nil {
+		render.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	job, err := h.cluster.Recover(r.Context(), jobID)
+	if err != nil {
+		render.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	render.Accepted(w, "MySQL cluster start initiated", job)
+}
+
+/**
+ * StopJob gracefully stops the cluster owned by the job_id in the request
+ * body without touching any data: MySQL is stopped on secondaries first,
+ * then the primary. Restart with StartJob.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
+func (h *Handler) StopJob(w http.ResponseWriter, r *http.Request) {
+	jobID, err := decodeServiceOpRequest(r)
+	if err != nil {
+		render.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	job, err := h.cluster.Stop(r.Context(), jobID)
+	if err != nil {
+		render.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	render.Accepted(w, "MySQL cluster stop initiated", job)
 }
 
 /**

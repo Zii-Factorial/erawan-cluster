@@ -292,9 +292,15 @@ Only the leader receives client connections. After a failover, Patroni elects a 
 
 ```
 POST /cluster/pgsql/members
-  { "job_id": "abc", "member_ips": ["10.0.0.4"] }
+  { "job_id": "abc", "member_ips": ["10.0.0.4", "10.0.0.5"] }
            │
-           ▼
+           ▼   (members join ONE AT A TIME, in order — etcd allows a
+           │    single unpromoted learner; each success is added to the
+           │    standby list before the next join starts)
+  0. Clean up stale etcd registrations left by destroyed nodes; if dead
+     stale voters already cost the primary its quorum, recover etcd with
+     force-new-cluster (only when every other voter is stale AND
+     unreachable — otherwise the job fails with a reason)
   1. Register new node as etcd learner
   2. Configure etcd on new node (joins existing cluster)
   3. Promote etcd learner to full voting member
@@ -305,6 +311,35 @@ POST /cluster/pgsql/members
   8. Patroni verifies /replica API returns 200
   9. If no sync_standby exists, new node may be elected sync_standby
 ```
+
+On failure the job stops at the failing member; nodes that already joined
+stay in the cluster. Retry with only the remaining IPs.
+
+---
+
+## Stop / Start Workflow
+
+Stop and start the whole cluster without losing data (planned maintenance,
+VM resizing, etc.).
+
+```
+POST /cluster/pgsql/jobs/{jobID}/stop
+  1. systemctl stop patroni on all standbys   (primary keeps serving)
+  2. systemctl stop patroni on the primary    (clean shutdown, WAL flushed)
+  3. systemctl stop etcd on all nodes         (after every Patroni is down)
+
+POST /cluster/pgsql/jobs/{jobID}/start        (alias: /recover)
+  1. Start etcd on all nodes (existing data — no reset)
+  2. Re-register cluster in the DCS
+  3. Start Patroni on primary, verify leader election
+  4. Start Patroni on standbys, verify replica state
+  5. verify_cluster health checks
+```
+
+Data directories (PostgreSQL and etcd) are never touched by either
+operation. Stop is rejected while a deploy or member operation is running
+on the same cluster. The same VMs/disks must come back for start — start
+does not rebuild destroyed nodes (use add-member for that).
 
 ---
 
@@ -344,3 +379,6 @@ POST /cluster/pgsql/metrics
 - SSL is enabled using the distro default snakeoil certificate. Replace with a real cert for production.
 - Single-node mode: `standby_ips: []` — only primary is bootstrapped. No HA.
 - The deploy response credentials (`postgres_password`, `replicator_password`, `admin_password`) are stored per-job and used automatically when `job_id` is supplied to the metrics endpoint.
+- Multiple `member_ips` in one add-member request join sequentially, never in parallel — parallel joins race on etcd learner registration and can remove each other's in-progress registration.
+- Removing a node from the cluster must go through the remove-member API. Destroying a VM without it leaves a dead voter registered in etcd; enough dead voters cost the primary its quorum and wedge etcd (`unhealthy cluster` / `context deadline exceeded`). The next add-member run auto-recovers this when provably safe, but remove-member first is always the cleaner path.
+- Stop/start (and recover) never touch data directories; a stopped cluster restarts from its existing PostgreSQL and etcd data.

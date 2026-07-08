@@ -488,6 +488,30 @@ POST /cluster/mysql/metrics
 
 ---
 
+## Stop / Start
+
+Stop and start the whole cluster without losing data (planned maintenance,
+VM resizing, etc.).
+
+```
+POST /cluster/mysql/jobs/{jobID}/stop
+  1. systemctl stop mysql on all secondaries  (primary keeps serving)
+  2. systemctl stop mysql on the primary      (clean InnoDB shutdown,
+                                               redo log flushed)
+
+POST /cluster/mysql/jobs/{jobID}/start        (alias: /recover)
+  1. Start MySQL and run dba.rebootClusterFromCompleteOutage()
+  2. The member with the most complete GTID set becomes primary
+  3. Remaining members rejoin the group
+```
+
+Data directories are never touched by either operation. Stop is rejected
+while a deploy or member operation is running on the same cluster. The
+same VMs/disks must come back for start — start does not rebuild
+destroyed nodes (use add-member for that).
+
+---
+
 ## Rollback
 
 `POST /cluster/mysql/jobs/{jobID}/rollback` runs the rollback playbook, which:
@@ -504,4 +528,6 @@ POST /cluster/mysql/metrics
 - `assume_prepared: true` — skips preflight and `dba.configureInstance()`. Use when nodes were already prepared in a prior run.
 - Single-node clusters support rollback but not automatic failover.
 - A 3-node cluster survives loss of 1 node and keeps quorum. A 2-node cluster cannot tolerate any node loss (no quorum majority).
+- Multiple `member_ips` in one add-member request join sequentially, never in parallel; each successful node is recorded before the next join starts, and the job stops at the first failure.
+- Stop/start (and recover) never touch data directories; a stopped cluster restarts from its existing on-disk state via `dba.rebootClusterFromCompleteOutage()`.
 - The boot-recovery service on each node automatically recovers a complete 3-node outage. Node 1 bootstraps the cluster (`dba.reboot_cluster_from_complete_outage`); nodes 2 and 3 detect the cluster is already active and rejoin via `cluster.rejoinInstance()`. The GR watchdog (every 60s) is a second-chance safety net.

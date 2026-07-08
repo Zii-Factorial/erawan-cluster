@@ -266,6 +266,60 @@ func TestRecoverRejectsRolledBackJob(t *testing.T) {
 	}
 }
 
+func TestStopCreatesJobFromCompletedDeploy(t *testing.T) {
+	svc, store := newService(t)
+	_ = store.Save(&mysql.Job{
+		ID:                testJobID,
+		Status:            mysql.JobStatusCompleted,
+		LastCompletedStep: 8,
+		Request:           mysql.StoredSpec{ClusterName: "mysql-prod", PrimaryIP: "10.0.0.1"},
+	})
+
+	job, err := svc.Stop(context.Background(), testJobID)
+	if err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	svc.Wait(context.Background())
+
+	if job.ID == "" || job.ID == testJobID {
+		t.Fatalf("expected a new stop job, got id=%q", job.ID)
+	}
+	if job.ServiceOp == nil || job.ServiceOp.Type != "stop" || job.ServiceOp.SourceJobID != testJobID {
+		t.Fatalf("expected ServiceOp stop with SourceJobID=%q, got %+v", testJobID, job.ServiceOp)
+	}
+	// nil runner: the background run fails with "stop runner is not configured",
+	// which proves the executor ran and persisted a terminal state.
+	final, err := store.Load(job.ID)
+	if err != nil {
+		t.Fatalf("load stop job: %v", err)
+	}
+	if final.Status != mysql.JobStatusFailed {
+		t.Fatalf("expected failed stop job with nil runner, got %q", final.Status)
+	}
+	// The claim on the deploy job must be released when the stop job finishes.
+	deploy, _ := store.Load(testJobID)
+	if deploy.ActiveMemberJobID != "" {
+		t.Fatalf("expected member-op claim released, still held by %q", deploy.ActiveMemberJobID)
+	}
+}
+
+func TestStopRejectsRunningDeployAndConcurrentOps(t *testing.T) {
+	svc, store := newService(t)
+	_ = store.Save(&mysql.Job{ID: testJobID, Status: mysql.JobStatusRunning})
+	if _, err := svc.Stop(context.Background(), testJobID); err == nil {
+		t.Fatal("expected Stop to reject a running deploy job")
+	}
+
+	_ = store.Update(testJobID, func(j *mysql.Job) error {
+		j.Status = mysql.JobStatusCompleted
+		j.ActiveMemberJobID = "somememberjob"
+		return nil
+	})
+	if _, err := svc.Stop(context.Background(), testJobID); err == nil {
+		t.Fatal("expected Stop to reject while a member operation is running")
+	}
+}
+
 func TestListReturnsSeededJobs(t *testing.T) {
 	svc, store := newService(t)
 	_ = store.Save(&mysql.Job{ID: "a", Status: mysql.JobStatusCompleted})
