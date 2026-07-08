@@ -300,10 +300,11 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 
 /**
  * Recover launches a new recovery job against the cluster owned by jobID, running
- * the boot_recovery Ansible step. Use after a complete datacenter outage: MySQL
- * InnoDB Cluster cannot reform automatically without
- * dba.rebootClusterFromCompleteOutage(), which this step executes. The
- * stored secret is used so no passwords are required at call time.
+ * the boot_recovery Ansible step followed by verify_cluster. Use after a complete
+ * datacenter outage: MySQL InnoDB Cluster cannot reform automatically without
+ * dba.rebootClusterFromCompleteOutage(), which boot_recovery executes; verify_cluster
+ * then confirms every member actually reached ONLINE before the job is marked
+ * completed. The stored secret is used so no passwords are required at call time.
  *
  * Receiver:
  *   s *Service - pointer receiver; the method may mutate this Service instance
@@ -370,7 +371,9 @@ func (s *Service) Recover(ctx context.Context, jobID string) (*Job, error) {
 
 /**
  * recoveryStepsFor returns the ordered Ansible steps to run for a post-outage
- * recovery: boot_recovery only.
+ * recovery: boot_recovery to bring mysqld and Group Replication back up on
+ * every node, then verify_cluster to confirm all members actually reached
+ * ONLINE before the job is reported as completed.
  *
  * Receiver:
  *   s *Service - pointer receiver; the method may mutate this Service instance
@@ -379,7 +382,10 @@ func (s *Service) Recover(ctx context.Context, jobID string) (*Job, error) {
  *   []step - ordered recovery steps
  */
 func (s *Service) recoveryStepsFor() []step {
-	return []step{{Name: "boot_recovery", Tag: "boot_recovery"}}
+	return []step{
+		{Name: "boot_recovery", Tag: "boot_recovery"},
+		{Name: "verify_cluster", Tag: "verify_cluster"},
+	}
 }
 
 /**

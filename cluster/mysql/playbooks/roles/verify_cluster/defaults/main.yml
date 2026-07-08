@@ -1,2 +1,4 @@
 ---
 mysqlsh_verify_timeout_seconds: 180
+verify_cluster_retries: 6
+verify_cluster_retry_delay_seconds: 20

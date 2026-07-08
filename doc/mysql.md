@@ -503,6 +503,8 @@ POST /cluster/mysql/jobs/{jobID}/start        (alias: /recover)
   1. Start MySQL and run dba.rebootClusterFromCompleteOutage()
   2. The member with the most complete GTID set becomes primary
   3. Remaining members rejoin the group
+  4. Verify all members reached ONLINE (job fails if they don't within
+     the retry window)
 ```
 
 Data directories are never touched by either operation. Stop is rejected

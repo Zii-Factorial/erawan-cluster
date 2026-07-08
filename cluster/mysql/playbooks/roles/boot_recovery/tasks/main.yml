@@ -37,9 +37,19 @@
     boot_recovery_delay_seconds: "{{ ((groups['all'] | list).index(inventory_hostname) + 1) * (boot_recovery_delay_step_seconds | int) }}"
   tags: ["boot_recovery"]
 
-- name: Enable boot recovery service on all nodes
+- name: Ensure MySQL service is running
+  ansible.builtin.systemd:
+    name: mysql
+    state: started
+  tags: ["boot_recovery"]
+
+# Type=oneshot: "state: started" blocks until the script exits, so this also
+# runs recovery immediately (needed for on-demand /start and /recover — the
+# unit's WantedBy=multi-user.target only fires it on a real host reboot).
+- name: Enable and run boot recovery service on all nodes
   ansible.builtin.systemd:
     name: erawan-mysql-boot-recovery.service
     daemon_reload: true
     enabled: true
+    state: started
   tags: ["boot_recovery"]

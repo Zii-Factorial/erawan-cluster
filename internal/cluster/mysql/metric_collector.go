@@ -567,16 +567,24 @@ func collectReplication(primaryIP string, standbyIPs []string, primary core.Metr
 	}
 
 	// Fallback: traditional async/semi-sync replication — scrape per-node exporter.
+	// mysqld_exporter processes run independently of mysqld, so a reachable exporter
+	// doesn't imply a reachable mysqld: confirm via mysql_global_status_uptime (same
+	// signal collectUptime uses) before reporting the primary as online.
 	zero := float64(0)
 	zeroBytes := int64(0)
-	m.Members = append(m.Members, ReplicationMember{
-		Role:             "primary",
-		Host:             primaryIP,
-		State:            "online",
-		WriteLagSeconds:  &zero,
-		ReplayLagSeconds: &zero,
-		ReplayLagBytes:   &zeroBytes,
-	})
+	primaryMember := ReplicationMember{
+		Role: "primary",
+		Host: primaryIP,
+	}
+	if len(primary["mysql_global_status_uptime"]) > 0 {
+		primaryMember.State = "online"
+		primaryMember.WriteLagSeconds = &zero
+		primaryMember.ReplayLagSeconds = &zero
+		primaryMember.ReplayLagBytes = &zeroBytes
+	} else {
+		primaryMember.State = "offline"
+	}
+	m.Members = append(m.Members, primaryMember)
 
 	for _, ip := range standbyIPs {
 		f, ok := standbys[ip]

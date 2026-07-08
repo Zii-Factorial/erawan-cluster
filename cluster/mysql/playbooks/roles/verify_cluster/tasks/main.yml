@@ -47,5 +47,9 @@
   environment:
     CLUSTER_NAME:           "{{ cluster_name }}"
     EXPECTED_CLUSTER_NODES: "{{ (standby_ips | length + 1) | string }}"
+  register: verify_cluster_result
+  retries: "{{ verify_cluster_retries }}"
+  delay: "{{ verify_cluster_retry_delay_seconds }}"
+  until: verify_cluster_result.rc == 0
   changed_when: false
   tags: ["verify_cluster", "status_check"]
