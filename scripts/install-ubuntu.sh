@@ -36,8 +36,7 @@ UNIT_FILE="/etc/systemd/system/${APP_NAME}.service"
 HAPROXY_OVERRIDE_DIR="/etc/systemd/system/haproxy.service.d"
 HAPROXY_OVERRIDE_FILE="${HAPROXY_OVERRIDE_DIR}/override.conf"
 CLUSTER_INSTALL_DIR="${APP_ROOT}/cluster"
-LOG_DIR="${LOG_DIR:-/var/erawan-cluster}"
-LOG_FILE="${LOG_DIR}/erawan-cluster.log"
+LOG_FILE="${LOG_FILE:-/var/log/erawan-cluster.log}"
 TMP_CLUSTER_STAGE=""
 
 cleanup() {
@@ -224,7 +223,6 @@ create_user_and_directories() {
   install -d -o "${APP_USER}" -g "${APP_GROUP}" -m 0755 "${TENANTS_DIR}"
   install -d -o root -g root -m 0755 "${APP_ROOT}"
   install -d -o root -g "${APP_GROUP}" -m 0750 "${APP_ENV_DIR}"
-  install -d -o "${APP_USER}" -g "${APP_GROUP}" -m 0750 "${LOG_DIR}"
   touch "${LOG_FILE}"
   chown "${APP_USER}:${APP_GROUP}" "${LOG_FILE}"
   chmod 0640 "${LOG_FILE}"
@@ -383,7 +381,7 @@ LimitNOFILE=65535
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=full
-ReadWritePaths=${APP_STATE_DIR} ${LOG_DIR}
+ReadWritePaths=${APP_STATE_DIR} ${LOG_FILE}
 StandardOutput=append:${LOG_FILE}
 StandardError=append:${LOG_FILE}
 
