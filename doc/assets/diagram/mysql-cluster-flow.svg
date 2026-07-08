@@ -1,0 +1,173 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 950" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="m-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8891a0"/></marker>
+  </defs>
+  <rect x="0" y="0" width="1560" height="950" fill="#0d1117"/>
+  <text x="780" y="36" text-anchor="middle" font-size="22" font-weight="600" fill="#f5f5f9">MySQL InnoDB Cluster — Process Flow</text>
+  <text x="780" y="58" text-anchor="middle" font-size="13" fill="#9aa4b2">Deploy · Stop · Start/Recover, as executed by the Go API + Ansible today</text>
+
+  <!-- ===================== LANE 1: DEPLOY ===================== -->
+  <rect x="40" y="86" width="440" height="10" fill="#34d399"/>
+  <text x="40" y="112" font-size="15" font-weight="700" fill="#34d399">DEPLOY</text>
+  <text x="40" y="128" font-size="10.5" fill="#7c8a9e">POST /cluster/mysql/deploy</text>
+
+  <!-- step 1 -->
+  <rect x="40" y="140" width="440" height="64" rx="7" fill="#0f2620" stroke="#34d399" stroke-width="1.3"/>
+  <text x="54" y="160" font-size="12.5" font-weight="600" fill="#f5f5f9">1 · Preflight checks</text>
+  <text x="54" y="178" font-size="10.5" fill="#a9d9c4">binaries present, SSH reachable, disk space, ports free</text>
+  <text x="54" y="194" font-size="10.5" fill="#a9d9c4">(all nodes, parallel)</text>
+
+  <!-- step 2 -->
+  <rect x="40" y="220" width="440" height="64" rx="7" fill="#0f2620" stroke="#34d399" stroke-width="1.3"/>
+  <text x="54" y="240" font-size="12.5" font-weight="600" fill="#f5f5f9">2 · Configure instances</text>
+  <text x="54" y="258" font-size="10.5" fill="#a9d9c4">write 99-erawan-cluster.cnf, enable GR plugin,</text>
+  <text x="54" y="274" font-size="10.5" fill="#a9d9c4">dba.configureInstance() (all nodes)</text>
+
+  <!-- step 3 -->
+  <rect x="40" y="300" width="440" height="64" rx="7" fill="#0f2620" stroke="#34d399" stroke-width="1.3"/>
+  <text x="54" y="320" font-size="12.5" font-weight="600" fill="#f5f5f9">3 · Create cluster</text>
+  <text x="54" y="338" font-size="10.5" fill="#a9d9c4">dba.createCluster() on the primary node</text>
+  <text x="54" y="354" font-size="10.5" fill="#a9d9c4">(hosts: mysql_primary)</text>
+
+  <!-- step 4 -->
+  <rect x="40" y="380" width="440" height="64" rx="7" fill="#0f2620" stroke="#34d399" stroke-width="1.3"/>
+  <text x="54" y="400" font-size="12.5" font-weight="600" fill="#f5f5f9">4 · Add secondaries</text>
+  <text x="54" y="418" font-size="10.5" fill="#a9d9c4">cluster.addInstance() for each standby, one at a</text>
+  <text x="54" y="434" font-size="10.5" fill="#a9d9c4">time (never parallel) — recovery via clone/incremental</text>
+
+  <!-- step 5 -->
+  <rect x="40" y="460" width="440" height="64" rx="7" fill="#0f2620" stroke="#34d399" stroke-width="1.3"/>
+  <text x="54" y="480" font-size="12.5" font-weight="600" fill="#f5f5f9">5 · Enable auto-rejoin</text>
+  <text x="54" y="498" font-size="10.5" fill="#a9d9c4">PERSIST group_replication_start_on_boot=ON etc.,</text>
+  <text x="54" y="514" font-size="10.5" fill="#a9d9c4">install + start GR watchdog timer (all nodes)</text>
+
+  <!-- step 6 -->
+  <rect x="40" y="540" width="440" height="64" rx="7" fill="#0f2620" stroke="#34d399" stroke-width="1.3"/>
+  <text x="54" y="560" font-size="12.5" font-weight="600" fill="#f5f5f9">6 · Verify cluster health</text>
+  <text x="54" y="578" font-size="10.5" fill="#a9d9c4">dba.getCluster().status(); expects N ONLINE members</text>
+  <text x="54" y="594" font-size="10.5" fill="#a9d9c4">(hosts: mysql_primary)</text>
+
+  <!-- step 7 -->
+  <rect x="40" y="620" width="440" height="64" rx="7" fill="#0f2620" stroke="#34d399" stroke-width="1.3"/>
+  <text x="54" y="640" font-size="12.5" font-weight="600" fill="#f5f5f9">7 · Init app database (optional)</text>
+  <text x="54" y="658" font-size="10.5" fill="#a9d9c4">create new_db / new_user if requested in the</text>
+  <text x="54" y="674" font-size="10.5" fill="#a9d9c4">deploy request</text>
+
+  <!-- step 8 -->
+  <rect x="40" y="700" width="440" height="64" rx="7" fill="#0f2620" stroke="#34d399" stroke-width="1.3"/>
+  <text x="54" y="720" font-size="12.5" font-weight="600" fill="#f5f5f9">8 · Install boot-recovery + primary-check</text>
+  <text x="54" y="738" font-size="10.5" fill="#a9d9c4">erawan-mysql-boot-recovery.service (enabled),</text>
+  <text x="54" y="754" font-size="10.5" fill="#a9d9c4">primary-check HTTP endpoint :9200 (all nodes)</text>
+
+  <!-- connecting arrows between deploy steps -->
+  <line x1="260" y1="204" x2="260" y2="220" stroke="#8891a0" stroke-width="1.5" marker-end="url(#m-arrow)"/>
+  <line x1="260" y1="284" x2="260" y2="300" stroke="#8891a0" stroke-width="1.5" marker-end="url(#m-arrow)"/>
+  <line x1="260" y1="364" x2="260" y2="380" stroke="#8891a0" stroke-width="1.5" marker-end="url(#m-arrow)"/>
+  <line x1="260" y1="444" x2="260" y2="460" stroke="#8891a0" stroke-width="1.5" marker-end="url(#m-arrow)"/>
+  <line x1="260" y1="524" x2="260" y2="540" stroke="#8891a0" stroke-width="1.5" marker-end="url(#m-arrow)"/>
+  <line x1="260" y1="604" x2="260" y2="620" stroke="#8891a0" stroke-width="1.5" marker-end="url(#m-arrow)"/>
+  <line x1="260" y1="684" x2="260" y2="700" stroke="#8891a0" stroke-width="1.5" marker-end="url(#m-arrow)"/>
+
+  <!-- deploy outcome -->
+  <rect x="40" y="800" width="440" height="66" rx="7" fill="#0b1a14" stroke="#34d399" stroke-width="1.3" stroke-dasharray="4 3"/>
+  <text x="54" y="822" font-size="12" font-weight="600" fill="#8ff0ce">Outcome</text>
+  <text x="54" y="840" font-size="10.5" fill="#a9d9c4">Job status=completed only if every tagged step succeeds;</text>
+  <text x="54" y="856" font-size="10.5" fill="#a9d9c4">any failure → status=failed, resumable from last_completed_step+1</text>
+
+  <!-- ===================== LANE 2: STOP ===================== -->
+  <rect x="540" y="86" width="440" height="10" fill="#f87171"/>
+  <text x="540" y="112" font-size="15" font-weight="700" fill="#f87171">STOP</text>
+  <text x="540" y="128" font-size="10.5" fill="#7c8a9e">POST /cluster/mysql/stop</text>
+
+  <rect x="540" y="140" width="440" height="64" rx="7" fill="#2a1416" stroke="#f87171" stroke-width="1.3"/>
+  <text x="554" y="160" font-size="12.5" font-weight="600" fill="#f5f5f9">1 · Stop mysqld on secondaries first</text>
+  <text x="554" y="178" font-size="10.5" fill="#f0b3b3">systemctl stop mysql (hosts: mysql_standby)</text>
+  <text x="554" y="194" font-size="10.5" fill="#f0b3b3">primary keeps serving while this runs</text>
+
+  <rect x="540" y="220" width="440" height="64" rx="7" fill="#2a1416" stroke="#f87171" stroke-width="1.3"/>
+  <text x="554" y="240" font-size="12.5" font-weight="600" fill="#f5f5f9">2 · Stop mysqld on the primary</text>
+  <text x="554" y="258" font-size="10.5" fill="#f0b3b3">systemctl stop mysql (hosts: mysql_primary)</text>
+  <text x="554" y="274" font-size="10.5" fill="#f0b3b3">clean InnoDB shutdown — checkpoint + redo log flush</text>
+
+  <line x1="760" y1="204" x2="760" y2="220" stroke="#8891a0" stroke-width="1.5" marker-end="url(#m-arrow)"/>
+
+  <rect x="540" y="316" width="440" height="86" rx="7" fill="#171a22" stroke="#3a4150" stroke-width="1"/>
+  <text x="554" y="336" font-size="12" font-weight="600" fill="#e2e6eb">Why this order</text>
+  <text x="554" y="354" font-size="10.5" fill="#9aa4b2">Stopping secondaries before the primary means every</text>
+  <text x="554" y="370" font-size="10.5" fill="#9aa4b2">secondary's applied GTID set is already a subset of the</text>
+  <text x="554" y="386" font-size="10.5" fill="#9aa4b2">primary's — no data loss, no split-brain window.</text>
+
+  <rect x="540" y="418" width="440" height="92" rx="7" fill="#171f2a" stroke="#f59e0b" stroke-width="1.3"/>
+  <text x="554" y="438" font-size="12" font-weight="600" fill="#ffd48a">Fixed this session</text>
+  <text x="554" y="456" font-size="10.5" fill="#e2c48a">Metrics fallback no longer hardcodes the primary as</text>
+  <text x="554" y="472" font-size="10.5" fill="#e2c48a">"online" when unreachable — it now checks</text>
+  <text x="554" y="488" font-size="10.5" fill="#e2c48a">mysql_global_status_uptime, same as secondaries,</text>
+  <text x="554" y="504" font-size="10.5" fill="#e2c48a">before reporting a member online.</text>
+
+  <rect x="540" y="536" width="440" height="80" rx="7" fill="#0b1a14" stroke="#f87171" stroke-width="1.3" stroke-dasharray="4 3"/>
+  <text x="554" y="558" font-size="12" font-weight="600" fill="#f5b8b8">Outcome</text>
+  <text x="554" y="576" font-size="10.5" fill="#f0b3b3">mysqld down on all 3 nodes. Data directories untouched.</text>
+  <text x="554" y="592" font-size="10.5" fill="#f0b3b3">mysqld_exporter/node_exporter keep running independently —</text>
+  <text x="554" y="608" font-size="10.5" fill="#f0b3b3">metrics still show host stats even though mysqld is down.</text>
+
+  <!-- ===================== LANE 3: START / RECOVER ===================== -->
+  <rect x="1040" y="86" width="440" height="10" fill="#60a5fa"/>
+  <text x="1040" y="112" font-size="15" font-weight="700" fill="#60a5fa">START / RECOVER</text>
+  <text x="1040" y="128" font-size="10.5" fill="#7c8a9e">POST /cluster/mysql/start  (alias of /recover)</text>
+
+  <rect x="1040" y="140" width="440" height="56" rx="7" fill="#0f1826" stroke="#60a5fa" stroke-width="1.3"/>
+  <text x="1054" y="160" font-size="12.5" font-weight="600" fill="#f5f5f9">1 · Write recovery config</text>
+  <text x="1054" y="178" font-size="10.5" fill="#9db8e3">/etc/erawan-cluster/mysql-recovery.json (creds + node_ips)</text>
+
+  <rect x="1040" y="210" width="440" height="56" rx="7" fill="#0f1826" stroke="#60a5fa" stroke-width="1.3"/>
+  <text x="1054" y="230" font-size="12.5" font-weight="600" fill="#f5f5f9">2 · Install recovery script + systemd unit</text>
+  <text x="1054" y="248" font-size="10.5" fill="#9db8e3">erawan-mysql-boot-recovery.service (Type=oneshot)</text>
+
+  <rect x="1040" y="280" width="440" height="56" rx="7" fill="#122036" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="1054" y="300" font-size="12.5" font-weight="600" fill="#f5f5f9">3 · systemctl start mysql (all nodes)</text>
+  <text x="1054" y="318" font-size="10.5" fill="#ffd48a">FIXED — previously never explicitly started; only</text>
+  <rect x="1382" y="284" width="46" height="18" rx="9" fill="#f59e0b"/>
+  <text x="1405" y="297" text-anchor="middle" font-size="9.5" font-weight="700" fill="#1a1206">FIXED</text>
+
+  <rect x="1040" y="350" width="440" height="190" rx="7" fill="#122036" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="1054" y="370" font-size="12.5" font-weight="600" fill="#f5f5f9">4 · Run recovery service synchronously</text>
+  <rect x="1382" y="354" width="46" height="18" rx="9" fill="#f59e0b"/>
+  <text x="1405" y="367" text-anchor="middle" font-size="9.5" font-weight="700" fill="#1a1206">FIXED</text>
+  <text x="1054" y="390" font-size="10.5" fill="#9db8e3">state: started now blocks until the oneshot unit exits</text>
+  <text x="1054" y="406" font-size="10.5" fill="#9db8e3">(was: only "enabled" — armed for next real reboot only)</text>
+  <text x="1054" y="426" font-size="10.5" fill="#cdd6e0">· wait ≤120s for local mysqld to accept connections</text>
+  <text x="1054" y="444" font-size="10.5" fill="#cdd6e0">· staggered delay 30/60/90s by node index</text>
+  <text x="1054" y="462" font-size="10.5" fill="#cdd6e0">· if another member already ONLINE → rejoin_instance()</text>
+  <text x="1054" y="480" font-size="10.5" fill="#cdd6e0">· else → dba.reboot_cluster_from_complete_outage()</text>
+  <text x="1054" y="498" font-size="10.5" fill="#ffd48a">· mysqlsh call now wrapped in timeout 300s (FIXED)</text>
+  <text x="1054" y="516" font-size="10.5" fill="#ffd48a">· real mysqlsh failures now exit non-zero (FIXED —</text>
+  <text x="1054" y="532" font-size="10.5" fill="#ffd48a">  previously always exited 0, hiding genuine failures)</text>
+
+  <rect x="1040" y="560" width="440" height="110" rx="7" fill="#122036" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="1054" y="580" font-size="12.5" font-weight="600" fill="#f5f5f9">5 · verify_cluster — confirm all ONLINE</text>
+  <rect x="1382" y="564" width="46" height="18" rx="9" fill="#f59e0b"/>
+  <text x="1405" y="577" text-anchor="middle" font-size="9.5" font-weight="700" fill="#1a1206">NEW</text>
+  <text x="1054" y="600" font-size="10.5" fill="#9db8e3">dba.getCluster().status(); requires len(ONLINE) ==</text>
+  <text x="1054" y="616" font-size="10.5" fill="#9db8e3">expected node count</text>
+  <text x="1054" y="636" font-size="10.5" fill="#cdd6e0">retries: 6 attempts, 20s apart (was: single check,</text>
+  <text x="1054" y="652" font-size="10.5" fill="#cdd6e0">never previously run for start/recover at all)</text>
+
+  <line x1="1260" y1="196" x2="1260" y2="210" stroke="#8891a0" stroke-width="1.5" marker-end="url(#m-arrow)"/>
+  <line x1="1260" y1="266" x2="1260" y2="280" stroke="#8891a0" stroke-width="1.5" marker-end="url(#m-arrow)"/>
+  <line x1="1260" y1="336" x2="1260" y2="350" stroke="#8891a0" stroke-width="1.5" marker-end="url(#m-arrow)"/>
+  <line x1="1260" y1="540" x2="1260" y2="560" stroke="#8891a0" stroke-width="1.5" marker-end="url(#m-arrow)"/>
+
+  <rect x="1040" y="690" width="440" height="66" rx="7" fill="#0b1a14" stroke="#60a5fa" stroke-width="1.3" stroke-dasharray="4 3"/>
+  <text x="1054" y="712" font-size="12" font-weight="600" fill="#8fc0f0">Outcome</text>
+  <text x="1054" y="730" font-size="10.5" fill="#9db8e3">Job now reports failed (with a real error) if GR doesn't reach</text>
+  <text x="1054" y="746" font-size="10.5" fill="#9db8e3">full quorum — no more silent false-success.</text>
+
+  <rect x="1040" y="774" width="440" height="100" rx="7" fill="#2a1416" stroke="#f87171" stroke-width="1.3"/>
+  <text x="1054" y="796" font-size="12" font-weight="600" fill="#f5b8b8">Known real-world failure mode</text>
+  <text x="1054" y="814" font-size="10.5" fill="#f0b3b3">mysqlsh is a heavy JS/Python runtime. On memory-starved</text>
+  <text x="1054" y="830" font-size="10.5" fill="#f0b3b3">nodes (observed at &lt;1GB RAM, ~99% used) it can hang or get</text>
+  <text x="1054" y="846" font-size="10.5" fill="#f0b3b3">OOM-killed mid-recovery. Size nodes ≥2GB RAM for headroom</text>
+  <text x="1054" y="862" font-size="10.5" fill="#f0b3b3">alongside mysqld + mysqld_exporter + node_exporter.</text>
+
+  <text x="780" y="915" text-anchor="middle" font-size="10.5" fill="#7c8a9e">Sources: cluster/mysql/playbooks/*.yml, internal/cluster/mysql/service.go, doc/mysql.md</text>
+</svg>

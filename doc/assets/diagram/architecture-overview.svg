@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 980" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a-gray"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c7cdd6"/></marker>
+    <marker id="a-teal"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2dd4bf"/></marker>
+    <marker id="a-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#f59e0b"/></marker>
+  </defs>
+
+  <rect x="0" y="0" width="1440" height="980" fill="#0d1117"/>
+
+  <text x="720" y="38" text-anchor="middle" font-size="22" font-weight="600" fill="#f5f5f9">Erawan Cluster — Architecture Overview</text>
+  <text x="720" y="60" text-anchor="middle" font-size="13" fill="#9aa4b2">Control plane (Go API + Ansible/SSH) vs. data plane (HAProxy SQL routing)</text>
+
+  <!-- Clients -->
+  <ellipse cx="110" cy="330" rx="95" ry="50" fill="#1c1f26" stroke="#d7dce2" stroke-width="1.5"/>
+  <text x="110" y="325" text-anchor="middle" font-size="15" font-weight="600" fill="#f5f5f9">Clients</text>
+  <text x="110" y="343" text-anchor="middle" font-size="11" fill="#9aa4b2">apps / erawan-web / curl</text>
+
+  <line x1="205" y1="330" x2="300" y2="330" stroke="#c7cdd6" stroke-width="2" marker-end="url(#a-gray)"/>
+  <text x="252" y="320" text-anchor="middle" font-size="10.5" fill="#c7cdd6">SQL</text>
+  <line x1="205" y1="360" x2="300" y2="600" stroke="#2dd4bf" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#a-teal)"/>
+  <text x="230" y="470" font-size="10.5" fill="#2dd4bf" transform="rotate(70 230 470)">HTTPS + X-API-Key</text>
+
+  <!-- Proxy / control node container -->
+  <rect x="300" y="100" width="440" height="800" rx="14" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="3 4"/>
+  <text x="320" y="126" font-size="13" font-weight="600" fill="#f59e0b" letter-spacing="1">PROXY / CONTROL NODE</text>
+
+  <!-- Go API box -->
+  <rect x="330" y="580" width="380" height="130" rx="8" fill="#0f2620" stroke="#2dd4bf" stroke-width="1.5"/>
+  <text x="350" y="608" font-size="14" font-weight="600" fill="#f5f5f9">erawan-cluster API</text>
+  <text x="350" y="630" font-size="11" fill="#b7c0cc">:8080 · X-API-Key auth · optional AES-256-GCM body</text>
+  <text x="350" y="648" font-size="11" fill="#b7c0cc">SSH + Ansible orchestration (clusterops, key-only)</text>
+  <text x="350" y="666" font-size="11" fill="#b7c0cc">job store: /var/lib/erawan-cluster/cluster/jobs/</text>
+  <text x="350" y="684" font-size="11" fill="#b7c0cc">writes HAProxy tenant configs + reloads</text>
+
+  <!-- HAProxy box -->
+  <rect x="330" y="160" width="380" height="150" rx="8" fill="#241a08" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="350" y="188" font-size="14" font-weight="600" fill="#f5f5f9">HAProxy</text>
+  <text x="350" y="210" font-size="11" fill="#e2c48a">:25041 MySQL tenant → httpchk :9200 (primary-check)</text>
+  <text x="350" y="228" font-size="11" fill="#e2c48a">:25042 PostgreSQL tenant → httpchk :8008 (Patroni /leader)</text>
+  <text x="350" y="246" font-size="11" fill="#e2c48a">balance first — active server + backups, never round-robin</text>
+  <text x="350" y="264" font-size="11" fill="#e2c48a">tenants: /var/lib/erawan-cluster/haproxy/tenants/*.cfg</text>
+  <text x="350" y="282" font-size="11" fill="#e2c48a">one file per port; reload = systemctl reload haproxy</text>
+
+  <!-- API -> HAProxy control arrow -->
+  <line x1="520" y1="580" x2="520" y2="310" stroke="#2dd4bf" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#a-teal)"/>
+  <text x="530" y="450" font-size="10.5" fill="#2dd4bf">writes tenant .cfg + reload</text>
+
+  <!-- HAProxy trunk branches to each cluster -->
+  <path d="M710,235 H800 V190 H900" stroke="#f59e0b" stroke-width="1.5" fill="none" marker-end="url(#a-amber)"/>
+  <path d="M710,235 H800 V560 H900" stroke="#f59e0b" stroke-width="1.5" fill="none" marker-end="url(#a-amber)"/>
+  <circle cx="800" cy="235" r="3" fill="#f59e0b"/>
+  <text x="770" y="140" text-anchor="middle" font-size="10.5" fill="#f59e0b">SQL (TCP proxy)</text>
+
+  <!-- API trunk branches (SSH/Ansible) -->
+  <path d="M710,645 H850 V250 H900" stroke="#2dd4bf" stroke-width="1.5" stroke-dasharray="6 4" fill="none" marker-end="url(#a-teal)"/>
+  <path d="M710,645 H850 V620 H900" stroke="#2dd4bf" stroke-width="1.5" stroke-dasharray="6 4" fill="none" marker-end="url(#a-teal)"/>
+  <circle cx="850" cy="645" r="3" fill="#2dd4bf"/>
+  <text x="860" y="440" text-anchor="middle" font-size="10.5" fill="#2dd4bf" transform="rotate(-90 860 440)">SSH + Ansible (deploy/stop/start/recover)</text>
+
+  <!-- MySQL cluster group -->
+  <text x="920" y="145" font-size="13" font-weight="600" fill="#60a5fa">MySQL InnoDB Cluster — Group Replication</text>
+  <rect x="900" y="160" width="420" height="60" rx="8" fill="#0f1826" stroke="#60a5fa" stroke-width="1.5"/>
+  <text x="918" y="182" font-size="12.5" font-weight="600" fill="#f5f5f9">node1 · PRIMARY · :3306</text>
+  <text x="918" y="200" font-size="10.5" fill="#9db8e3">primary-check :9200 → 200 (HAProxy active server)</text>
+
+  <rect x="900" y="230" width="420" height="60" rx="8" fill="#0f1826" stroke="#60a5fa" stroke-width="1.5"/>
+  <text x="918" y="252" font-size="12.5" font-weight="600" fill="#f5f5f9">node2 · SECONDARY · :3306</text>
+  <text x="918" y="270" font-size="10.5" fill="#9db8e3">primary-check :9200 → 503 (HAProxy backup)</text>
+
+  <rect x="900" y="300" width="420" height="60" rx="8" fill="#0f1826" stroke="#60a5fa" stroke-width="1.5"/>
+  <text x="918" y="322" font-size="12.5" font-weight="600" fill="#f5f5f9">node3 · SECONDARY · :3306</text>
+  <text x="918" y="340" font-size="10.5" fill="#9db8e3">primary-check :9200 → 503 (HAProxy backup)</text>
+
+  <text x="920" y="385" font-size="10.5" fill="#7c8a9e">mysqld_exporter :9104 · node_exporter :9100 · GR watchdog every 60s</text>
+
+  <!-- PostgreSQL cluster group -->
+  <text x="920" y="535" font-size="13" font-weight="600" fill="#a78bfa">PostgreSQL Cluster — Patroni + etcd DCS</text>
+  <rect x="900" y="550" width="420" height="60" rx="8" fill="#1a1526" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="918" y="572" font-size="12.5" font-weight="600" fill="#f5f5f9">node1 · LEADER · :5432</text>
+  <text x="918" y="590" font-size="10.5" fill="#c3aef0">Patroni :8008 /leader → 200 (HAProxy active server)</text>
+
+  <rect x="900" y="620" width="420" height="60" rx="8" fill="#1a1526" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="918" y="642" font-size="12.5" font-weight="600" fill="#f5f5f9">node2 · SYNC STANDBY · :5432</text>
+  <text x="918" y="660" font-size="10.5" fill="#c3aef0">Patroni :8008 /leader → 503 (HAProxy backup)</text>
+
+  <rect x="900" y="690" width="420" height="60" rx="8" fill="#1a1526" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="918" y="712" font-size="12.5" font-weight="600" fill="#f5f5f9">node3 · REPLICA · :5432</text>
+  <text x="918" y="730" font-size="10.5" fill="#c3aef0">Patroni :8008 /leader → 503 (HAProxy backup)</text>
+
+  <text x="920" y="775" font-size="10.5" fill="#7c8a9e">postgres_exporter :9187 · node_exporter :9100 · etcd DCS :2379/2380</text>
+
+  <!-- legend -->
+  <rect x="330" y="740" width="380" height="140" rx="8" fill="#12151c" stroke="#3a4150" stroke-width="1"/>
+  <text x="350" y="764" font-size="12" font-weight="600" fill="#f5f5f9">Legend</text>
+  <line x1="350" y1="782" x2="400" y2="782" stroke="#c7cdd6" stroke-width="2"/>
+  <text x="410" y="786" font-size="11" fill="#c7cdd6">Client SQL traffic (via HAProxy only — never direct to a node)</text>
+  <line x1="350" y1="806" x2="400" y2="806" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="410" y="810" font-size="11" fill="#e2c48a">HAProxy TCP proxy → active DB node</text>
+  <line x1="350" y1="830" x2="400" y2="830" stroke="#2dd4bf" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="410" y="834" font-size="11" fill="#8fe6da">Control plane: SSH/Ansible (deploy) or HTTPS (client → API)</text>
+  <text x="350" y="860" font-size="10.5" fill="#7c8a9e">Full detail: doc/proxy-architecture.md, doc/mysql.md, doc/pgsql.md</text>
+</svg>

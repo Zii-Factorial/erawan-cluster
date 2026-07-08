@@ -3,7 +3,9 @@
 This document covers what gets deployed on each VM, what the tech stack is, how the config files look, and how the cluster workflow operates.
 
 See [doc/api.md](api.md) for the full API payload reference.  
-**Diagrams (draw.io):** [diagrams/mysql-cluster.drawio](diagrams/mysql-cluster.drawio)
+**Diagram source (draw.io):** [diagrams/mysql-cluster.drawio](diagrams/mysql-cluster.drawio)
+
+![MySQL InnoDB Cluster — process flow for deploy, stop, and start/recover](assets/diagram/mysql-cluster-flow.svg)
 
 ---
 
@@ -234,7 +236,7 @@ Verify: `sudo cat /etc/erawan-cluster/mysql-recovery.json`
 
 ### `/usr/local/bin/erawan-mysql-boot-recovery` (permissions: 0755)
 
-Runs once at boot (via the systemd service below) after MySQL and the network are ready. On a complete 3-node outage, the first node to wake calls `dba.reboot_cluster_from_complete_outage()`; the others detect the cluster is already active and call `cluster.rejoinInstance()` to join it.
+Runs after MySQL and the network are ready — either at boot (via `WantedBy=multi-user.target` on the systemd service below) or synchronously on demand: `POST /cluster/mysql/start` (or `/recover`) explicitly runs `systemctl start mysql` on every node and then triggers this service with `state: started`, which blocks until the script exits. On a complete outage, the first node to run calls `dba.reboot_cluster_from_complete_outage()`; the others detect the cluster is already active and call `cluster.rejoinInstance()` to join it. The `mysqlsh` call itself is wrapped in `timeout 300` (`boot_recovery_mysqlsh_timeout_seconds`), and a genuine failure now propagates as a real exit code — previously the script always exited 0, so a failed recovery could be silently reported as a success.
 
 **Same script on all nodes.** The staggered delay comes from `BOOT_RECOVERY_DELAY_SECONDS` in the service unit.
 
@@ -506,6 +508,8 @@ POST /cluster/mysql/jobs/{jobID}/start        (alias: /recover)
   4. Verify all members reached ONLINE (job fails if they don't within
      the retry window)
 ```
+
+See [assets/diagram/mysql-cluster-flow.svg](assets/diagram/mysql-cluster-flow.svg) for the full step-by-step flow including deploy.
 
 Data directories are never touched by either operation. Stop is rejected
 while a deploy or member operation is running on the same cluster. The

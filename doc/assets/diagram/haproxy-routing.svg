@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 900" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="h-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8891a0"/></marker>
+    <marker id="h-arrow-white" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#e6e6e6"/></marker>
+  </defs>
+  <rect x="0" y="0" width="1300" height="900" fill="#0d1117"/>
+  <text x="650" y="36" text-anchor="middle" font-size="22" font-weight="600" fill="#f5f5f9">HAProxy Node — Tenant Routing Detail</text>
+  <text x="650" y="58" text-anchor="middle" font-size="13" fill="#9aa4b2">Active/passive routing per tenant port — never round-robin, one healthy writer at a time</text>
+  <text x="650" y="78" text-anchor="middle" font-size="10.5" fill="#5b6473">solid arrow = SQL traffic to the active server · dotted arrows = httpchk health probes to every server</text>
+
+  <!-- ============ LEFT: MySQL tenant ============ -->
+  <text x="40" y="94" font-size="14" font-weight="700" fill="#60a5fa">MySQL tenant — 25041.cfg</text>
+  <rect x="40" y="104" width="580" height="96" rx="7" fill="#0f1826" stroke="#60a5fa" stroke-width="1.3"/>
+  <text x="56" y="126" font-size="11.5" font-family="Consolas, monospace" fill="#f5f5f9">listen node_25041 { bind *:25041, mode tcp, balance first }</text>
+  <text x="56" y="146" font-size="11.5" font-family="Consolas, monospace" fill="#9db8e3">option httpchk GET /  →  http-check expect status 200</text>
+  <text x="56" y="166" font-size="11.5" font-family="Consolas, monospace" fill="#9db8e3">check port 9200 (primary-check endpoint)</text>
+  <text x="56" y="186" font-size="11.5" font-family="Consolas, monospace" fill="#9db8e3">inter 500ms fastinter 100ms downinter 200ms fall 2 rise 2</text>
+
+  <rect x="60" y="232" width="540" height="48" rx="6" fill="#0f2620" stroke="#34d399" stroke-width="1.5"/>
+  <text x="76" y="260" font-size="12" font-family="Consolas, monospace" fill="#f5f5f9">server db1  10.0.0.1:3306  check</text>
+  <rect x="500" y="242" width="84" height="28" rx="14" fill="#34d399"/>
+  <text x="542" y="261" text-anchor="middle" font-size="11" font-weight="700" fill="#06251a">ACTIVE</text>
+
+  <rect x="60" y="292" width="540" height="48" rx="6" fill="#171a22" stroke="#5b6473" stroke-width="1.3"/>
+  <text x="76" y="320" font-size="12" font-family="Consolas, monospace" fill="#c7cdd6">server db2  10.0.0.2:3306  check backup</text>
+  <rect x="500" y="302" width="84" height="28" rx="14" fill="#2a2f3a"/>
+  <text x="542" y="321" text-anchor="middle" font-size="11" font-weight="700" fill="#c7cdd6">BACKUP</text>
+
+  <rect x="60" y="352" width="540" height="48" rx="6" fill="#171a22" stroke="#5b6473" stroke-width="1.3"/>
+  <text x="76" y="380" font-size="12" font-family="Consolas, monospace" fill="#c7cdd6">server db3  10.0.0.3:3306  check backup</text>
+  <rect x="500" y="362" width="84" height="28" rx="14" fill="#2a2f3a"/>
+  <text x="542" y="381" text-anchor="middle" font-size="11" font-weight="700" fill="#c7cdd6">BACKUP</text>
+
+  <path d="M330,200 V232" stroke="#e6e6e6" stroke-width="2.5" marker-end="url(#h-arrow-white)"/>
+  <text x="345" y="222" font-size="10.5" fill="#e6e6e6">SQL traffic</text>
+  <path d="M180,200 C 140,240 140,270 175,292" fill="none" stroke="#5b6473" stroke-width="1.3" stroke-dasharray="3 4" marker-end="url(#h-arrow)"/>
+  <path d="M180,200 C 130,260 130,330 175,352" fill="none" stroke="#5b6473" stroke-width="1.3" stroke-dasharray="3 4" marker-end="url(#h-arrow)"/>
+
+  <rect x="40" y="418" width="580" height="80" rx="7" fill="#171a22" stroke="#3a4150" stroke-width="1"/>
+  <text x="56" y="440" font-size="11.5" font-weight="600" fill="#e2e6eb">On failover</text>
+  <text x="56" y="458" font-size="10.5" fill="#9aa4b2">on-marked-down shutdown-sessions / on-marked-up</text>
+  <text x="56" y="474" font-size="10.5" fill="#9aa4b2">shutdown-backup-sessions — forces clients to reconnect</text>
+  <text x="56" y="490" font-size="10.5" fill="#9aa4b2">to the new primary within ~1s, no stale-writer window</text>
+
+  <!-- ============ RIGHT: PostgreSQL tenant ============ -->
+  <text x="680" y="94" font-size="14" font-weight="700" fill="#a78bfa">PostgreSQL tenant — 25042.cfg</text>
+  <rect x="680" y="104" width="580" height="96" rx="7" fill="#1a1526" stroke="#a78bfa" stroke-width="1.3"/>
+  <text x="696" y="126" font-size="11.5" font-family="Consolas, monospace" fill="#f5f5f9">listen node_25042 { bind *:25042, mode tcp, balance first }</text>
+  <text x="696" y="146" font-size="11.5" font-family="Consolas, monospace" fill="#c3aef0">option httpchk GET /leader  →  http-check expect status 200</text>
+  <text x="696" y="166" font-size="11.5" font-family="Consolas, monospace" fill="#c3aef0">check port 8008 (Patroni REST API)</text>
+  <text x="696" y="186" font-size="11.5" font-family="Consolas, monospace" fill="#c3aef0">inter 500ms fastinter 100ms downinter 200ms fall 2 rise 2</text>
+
+  <rect x="700" y="232" width="540" height="48" rx="6" fill="#0f2620" stroke="#34d399" stroke-width="1.5"/>
+  <text x="716" y="260" font-size="12" font-family="Consolas, monospace" fill="#f5f5f9">server db1  10.0.0.1:5432  check</text>
+  <rect x="1140" y="242" width="84" height="28" rx="14" fill="#34d399"/>
+  <text x="1182" y="261" text-anchor="middle" font-size="11" font-weight="700" fill="#06251a">ACTIVE</text>
+
+  <rect x="700" y="292" width="540" height="48" rx="6" fill="#171a22" stroke="#5b6473" stroke-width="1.3"/>
+  <text x="716" y="320" font-size="12" font-family="Consolas, monospace" fill="#c7cdd6">server db2  10.0.0.2:5432  check backup</text>
+  <rect x="1140" y="302" width="84" height="28" rx="14" fill="#2a2f3a"/>
+  <text x="1182" y="321" text-anchor="middle" font-size="11" font-weight="700" fill="#c7cdd6">BACKUP</text>
+
+  <rect x="700" y="352" width="540" height="48" rx="6" fill="#171a22" stroke="#5b6473" stroke-width="1.3"/>
+  <text x="716" y="380" font-size="12" font-family="Consolas, monospace" fill="#c7cdd6">server db3  10.0.0.3:5432  check backup</text>
+  <rect x="1140" y="362" width="84" height="28" rx="14" fill="#2a2f3a"/>
+  <text x="1182" y="381" text-anchor="middle" font-size="11" font-weight="700" fill="#c7cdd6">BACKUP</text>
+
+  <path d="M970,200 V232" stroke="#e6e6e6" stroke-width="2.5" marker-end="url(#h-arrow-white)"/>
+  <text x="985" y="222" font-size="10.5" fill="#e6e6e6">SQL traffic</text>
+  <path d="M820,200 C 780,240 780,270 815,292" fill="none" stroke="#5b6473" stroke-width="1.3" stroke-dasharray="3 4" marker-end="url(#h-arrow)"/>
+  <path d="M820,200 C 770,260 770,330 815,352" fill="none" stroke="#5b6473" stroke-width="1.3" stroke-dasharray="3 4" marker-end="url(#h-arrow)"/>
+
+  <rect x="680" y="418" width="580" height="80" rx="7" fill="#171a22" stroke="#3a4150" stroke-width="1"/>
+  <text x="696" y="440" font-size="11.5" font-weight="600" fill="#e2e6eb">On failover</text>
+  <text x="696" y="458" font-size="10.5" fill="#9aa4b2">Patroni elects a new leader via etcd DCS; its /leader</text>
+  <text x="696" y="474" font-size="10.5" fill="#9aa4b2">starts returning 200, HAProxy reroutes within the next</text>
+  <text x="696" y="490" font-size="10.5" fill="#9aa4b2">health-check interval (≤500ms)</text>
+
+  <!-- ============ BOTTOM: config storage + hot reload ============ -->
+  <text x="40" y="548" font-size="14" font-weight="700" fill="#f59e0b">Tenant config storage</text>
+  <rect x="40" y="560" width="580" height="110" rx="7" fill="#241a08" stroke="#f59e0b" stroke-width="1.3"/>
+  <text x="56" y="584" font-size="11" font-family="Consolas, monospace" fill="#f5f5f9">/var/lib/erawan-cluster/haproxy/tenants/</text>
+  <text x="56" y="602" font-size="11" font-family="Consolas, monospace" fill="#e2c48a">  25041.cfg   ← MySQL cluster A</text>
+  <text x="56" y="620" font-size="11" font-family="Consolas, monospace" fill="#e2c48a">  25042.cfg   ← PostgreSQL cluster B</text>
+  <text x="56" y="638" font-size="11" font-family="Consolas, monospace" fill="#e2c48a">  25043.cfg   ← MySQL cluster C</text>
+  <text x="56" y="658" font-size="10.5" fill="#e2c48a">included via: include tenants/*.cfg — one bad tenant never blocks others</text>
+
+  <text x="680" y="548" font-size="14" font-weight="700" fill="#f59e0b">Hot reload — every config write</text>
+  <rect x="680" y="560" width="580" height="52" rx="6" fill="#0f1826" stroke="#60a5fa" stroke-width="1.2"/>
+  <text x="696" y="590" font-size="11.5" fill="#f5f5f9">1 · write tenant .cfg (previous version copied to .bak)</text>
+
+  <rect x="680" y="622" width="580" height="52" rx="6" fill="#0f1826" stroke="#60a5fa" stroke-width="1.2"/>
+  <text x="696" y="652" font-size="11.5" fill="#f5f5f9">2 · haproxy -c validate — bad config never touches disk</text>
+
+  <rect x="680" y="684" width="580" height="52" rx="6" fill="#0f1826" stroke="#60a5fa" stroke-width="1.2"/>
+  <text x="696" y="714" font-size="11.5" fill="#f5f5f9">3 · systemctl reload haproxy — graceful, no dropped conns</text>
+
+  <rect x="680" y="746" width="580" height="52" rx="6" fill="#0f1826" stroke="#60a5fa" stroke-width="1.2"/>
+  <text x="696" y="776" font-size="11.5" fill="#f5f5f9">4 · verify port listening (or gone) before returning success</text>
+
+  <line x1="970" y1="612" x2="970" y2="622" stroke="#8891a0" stroke-width="1.3" marker-end="url(#h-arrow)"/>
+  <line x1="970" y1="674" x2="970" y2="684" stroke="#8891a0" stroke-width="1.3" marker-end="url(#h-arrow)"/>
+  <line x1="970" y1="736" x2="970" y2="746" stroke="#8891a0" stroke-width="1.3" marker-end="url(#h-arrow)"/>
+
+  <path d="M1260,648 C 1290,690 1290,760 1260,772" fill="none" stroke="#f87171" stroke-width="1.3" stroke-dasharray="5 4" marker-end="url(#h-arrow)"/>
+  <text x="1268" y="710" font-size="9.5" fill="#f5b8b8" transform="rotate(90 1268 710)">validate/reload fails → .bak restored immediately</text>
+
+  <text x="650" y="850" text-anchor="middle" font-size="10.5" fill="#7c8a9e">Sources: doc/proxy-architecture.md, internal/haproxy (tenant writer + reload)</text>
+</svg>

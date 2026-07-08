@@ -2,32 +2,13 @@
 
 This document explains how the erawan-cluster Cluster Management API and proxy node work together — what runs on each, how cluster jobs are controlled, and how SQL traffic flows through HAProxy.
 
-**Diagrams (draw.io):** [diagrams/proxy-architecture.drawio](diagrams/proxy-architecture.drawio) · [diagrams/deploy-job-workflow.drawio](diagrams/deploy-job-workflow.drawio)
+**Diagram sources (draw.io):** [diagrams/proxy-architecture.drawio](diagrams/proxy-architecture.drawio) · [diagrams/deploy-job-workflow.drawio](diagrams/deploy-job-workflow.drawio)
 
 ---
 
 ## Overview
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                            PROXY NODE                           │
-│                                                                 │
-│  ┌──────────────────────────────┐  ┌─────────────────────────┐  │
-│  │       erawan-cluster         │  │        HAProxy          │  │
-│  │  Cluster Management API      │─▶│  :25041  MySQL          │  │
-│  │  :8080                       │  │  :25042  PostgreSQL     │  │
-│  └──────────────┬───────────────┘  └────────────┬────────────┘  │
-│                 │  SSH + Ansible                │  TCP proxy    │
-└─────────────────┼───────────────────────────────┼───────────────┘
-                  │                               │
-                  ▼                               ▼
-      ┌───────────────────────┐     ┌──────────────────────────┐
-      │     MySQL Cluster     │     │   PostgreSQL Cluster     │
-      │  node1 :3306 primary  │     │  node1 :5432 leader      │
-      │  node2 :3306 secondary│     │  node2 :5432 sync_sb     │
-      │  node3 :3306 secondary│     │  node3 :5432 replica     │
-      └───────────────────────┘     └──────────────────────────┘
-```
+![Erawan Cluster architecture overview — clients, proxy/control node, MySQL and PostgreSQL clusters](assets/diagram/architecture-overview.svg)
 
 A single **proxy node** runs two services:
 
@@ -39,6 +20,8 @@ Client applications **never connect directly to DB node IPs**. All SQL connectio
 ---
 
 ## How HAProxy Config Works
+
+![HAProxy node tenant routing detail — MySQL and PostgreSQL listeners, active/backup servers, hot reload](assets/diagram/haproxy-routing.svg)
 
 For each database cluster, the API writes a HAProxy tenant config file and reloads HAProxy. Every write is validated with `haproxy -c` before touching disk — a bad config for one cluster never blocks other clusters.
 
@@ -151,31 +134,7 @@ All cluster operations (deploy, add member, remove member) run asynchronously as
 
 ### Job lifecycle
 
-```
-POST /cluster/mysql/deploy
-        │
-        ▼
-  Validate request
-        │
-        ▼
-  Create job file (status=pending)
-        │
-        ▼
-  Return 202 with job ID  ◀─── client polls GET /jobs/{id}
-        │
-        ▼  (background goroutine)
-  Build Ansible inventory
-        │
-        ▼
-  Run ansible-playbook
-        │
-        ├── step 1 complete → update job file
-        ├── step 2 complete → update job file
-        │   ...
-        ├── step N complete → status=completed
-        │
-        └── step X fails   → status=failed, error=<message>
-```
+![Go API async job lifecycle — deploy, background execution, resume and rollback](assets/diagram/job-lifecycle.svg)
 
 ### Job state storage
 

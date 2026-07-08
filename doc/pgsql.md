@@ -3,7 +3,9 @@
 This document covers what gets deployed on each VM, what the tech stack is, how the config files look, and how the cluster workflow operates.
 
 See [doc/api.md](api.md) for the full API payload reference.  
-**Diagrams (draw.io):** [diagrams/pgsql-cluster.drawio](diagrams/pgsql-cluster.drawio)
+**Diagram source (draw.io):** [diagrams/pgsql-cluster.drawio](diagrams/pgsql-cluster.drawio)
+
+![PostgreSQL Patroni + etcd cluster — process flow for deploy, stop, and start/recover](assets/diagram/pgsql-cluster-flow.svg)
 
 ---
 
@@ -326,15 +328,22 @@ VM resizing, etc.).
 POST /cluster/pgsql/jobs/{jobID}/stop
   1. systemctl stop patroni on all standbys   (primary keeps serving)
   2. systemctl stop patroni on the primary    (clean shutdown, WAL flushed)
-  3. systemctl stop etcd on all nodes         (after every Patroni is down)
+  3. Force-stop any PostgreSQL cluster still running on any node
+     (pg_lsclusters + pg_ctlcluster stop -m fast) — Patroni's own shutdown
+     of postgres isn't always reliable, so this is a belt-and-suspenders
+     check on every node before etcd goes down
+  4. systemctl stop etcd on all nodes         (after every Patroni/postgres is down)
 
 POST /cluster/pgsql/jobs/{jobID}/start        (alias: /recover)
-  1. Start etcd on all nodes (existing data — no reset)
-  2. Re-register cluster in the DCS
-  3. Start Patroni on primary, verify leader election
-  4. Start Patroni on standbys, verify replica state
-  5. verify_cluster health checks
+  1. cluster_bootstrap (re-run, idempotent): start etcd then patroni on
+     every node; Patroni starts postgres itself via pg_ctl against the
+     existing data directory and each node re-registers/rejoins via the DCS
+  2. verify_cluster: poll Patroni cluster status until it reports healthy
+     and every expected node is online (retries with backoff) — the job
+     fails if the cluster doesn't converge, instead of a false success
 ```
+
+See [assets/diagram/pgsql-cluster-flow.svg](assets/diagram/pgsql-cluster-flow.svg) for the full step-by-step flow including deploy.
 
 Data directories (PostgreSQL and etcd) are never touched by either
 operation. Stop is rejected while a deploy or member operation is running
