@@ -3,8 +3,6 @@ package pgsql
 import (
 	"context"
 	"fmt"
-	"strings"
-	"sync"
 	"time"
 
 	"erawan-cluster/internal/cluster/core"
@@ -720,72 +718,54 @@ func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJo
 		AdminPassword:      storedSecret.AdminPassword,
 	}
 	timeout := time.Duration(deployJob.Request.StepTimeoutSeconds) * time.Second
-	newIPs := memberJob.MemberOp.MemberIPs
 
-	// Snapshot the current spec so all goroutines share the same read-only base.
-	baseSpec := deployJob.Request
-	baseSpec.StandbyIPs = append([]string{}, deployJob.Request.StandbyIPs...)
-
-	// Mark all nodes as in-flight so the caller can see what's running.
-	memberJob.CurrentStep = strings.Join(newIPs, ",")
-	s.updateJobProgress(memberJob)
-	_ = s.store.Save(memberJob)
-
-	// Run each member addition in parallel — their Ansible runs are independent
-	// (separate temp dirs, inventories, and pg_basebackup streams from primary).
-	results := make([]StepResult, len(newIPs))
-	var wg sync.WaitGroup
-	for i, ip := range newIPs {
-		i, ip := i, ip
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			results[i] = s.doAddMember(ctx, memberRunConfig{
-				jobID:         deployJob.ID,
-				spec:          baseSpec,
-				secret:        secret,
-				memberIP:      ip,
-				timeout:       timeout,
-				resetHostKeys: resetHostKeys,
-			})
-		}()
-	}
-	wg.Wait()
-
-	// Collect results; add successful nodes to the deploy job's standby list.
-	var failed, added []string
-	for i, result := range results {
-		memberJob.Steps = append(memberJob.Steps, result)
-		ip := newIPs[i]
-		if result.Status == JobStatusCompleted {
-			added = append(added, ip)
-		} else {
-			msg := result.Message
-			if msg == "" {
-				msg = fmt.Sprintf("add member %s failed", ip)
-			}
-			failed = append(failed, msg)
-		}
-	}
-	// Re-read and persist the deploy job under the store lock so a concurrent
-	// member operation on the same cluster cannot clobber the standby list.
-	_ = s.store.Update(deployJob.ID, func(j *Job) error {
-		j.Request.StandbyIPs = append(j.Request.StandbyIPs, added...)
-		deployJob.Request.StandbyIPs = j.Request.StandbyIPs
-		return nil
-	})
-	memberJob.Request.StandbyIPs = deployJob.Request.StandbyIPs
-
-	memberJob.CurrentStep = ""
-	if len(failed) > 0 {
-		memberJob.Status = JobStatusFailed
-		memberJob.Error = strings.Join(failed, "; ")
+	// Members are added strictly one at a time: every addition mutates etcd
+	// membership on the primary (etcd allows a single unpromoted learner by
+	// default), and each run's register play treats members outside its
+	// standby list as stale registrations to clean up — so a sibling still
+	// mid-join would be seen as removable. Appending each success to
+	// StandbyIPs before the next run makes it a legitimate member for the
+	// runs that follow.
+	for _, ip := range memberJob.MemberOp.MemberIPs {
+		memberJob.CurrentStep = ip
 		s.updateJobProgress(memberJob)
 		_ = s.store.Save(memberJob)
-		return
+
+		result := s.doAddMember(ctx, memberRunConfig{
+			jobID:         deployJob.ID,
+			spec:          deployJob.Request,
+			secret:        secret,
+			memberIP:      ip,
+			timeout:       timeout,
+			resetHostKeys: resetHostKeys,
+		})
+		memberJob.Steps = append(memberJob.Steps, result)
+
+		if result.Status == JobStatusCompleted {
+			// Re-read and persist the deploy job under the store lock so a
+			// concurrent member operation on the same cluster cannot clobber the
+			// standby list.
+			_ = s.store.Update(deployJob.ID, func(j *Job) error {
+				j.Request.StandbyIPs = append(j.Request.StandbyIPs, ip)
+				deployJob.Request.StandbyIPs = j.Request.StandbyIPs
+				return nil
+			})
+			memberJob.Request.StandbyIPs = deployJob.Request.StandbyIPs
+		} else {
+			memberJob.Status = JobStatusFailed
+			memberJob.Error = result.Message
+			if memberJob.Error == "" {
+				memberJob.Error = fmt.Sprintf("add member %s failed", ip)
+			}
+			memberJob.CurrentStep = ""
+			s.updateJobProgress(memberJob)
+			_ = s.store.Save(memberJob)
+			return
+		}
 	}
 
 	memberJob.Status = JobStatusCompleted
+	memberJob.CurrentStep = ""
 	memberJob.Error = ""
 	s.updateJobProgress(memberJob)
 	_ = s.store.Save(memberJob)
