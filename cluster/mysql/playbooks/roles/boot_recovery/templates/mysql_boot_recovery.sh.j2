@@ -116,7 +116,7 @@ if is_already_active:
         print("all rejoin attempts failed — GR watchdog will retry within 60s")
 PY
 
-if mysqlsh --no-wizard --py --file "$_tmp"; then
+if timeout {{ boot_recovery_mysqlsh_timeout_seconds | int }} mysqlsh --no-wizard --py --file "$_tmp"; then
   logger -t erawan-boot-recovery "boot recovery succeeded"
 else
   rc=$?
