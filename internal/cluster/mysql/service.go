@@ -58,7 +58,7 @@ func NewService(store Store, runner *Runner) *Service {
 			{Name: "verify_cluster", Tag: "verify_cluster"},
 			{Name: "init_app_db", Tag: "init_app_db"},
 			{Name: "boot_recovery", Tag: "boot_recovery"},
-			{Name: "bootstrap_router", Tag: "bootstrap_router", Skippable: true},
+			{Name: "primary_check", Tag: "primary_check"},
 		},
 	}
 	svc.launcher = core.NewLauncher(defaultMaxConcurrentJobs)
@@ -176,7 +176,6 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 			NewUserSuperuser:   req.NewUserSuperuser,
 			NewDB:              req.NewDB,
 			AssumePrepared:     req.AssumePrepared,
-			BootstrapRouter:    req.BootstrapRouterEnabled(),
 			SSHUser:            s.sshUser,
 			SSHPrivateKeyPath:  s.sshKeyPath,
 			SSHPort:            req.SSHPort,
@@ -205,8 +204,9 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 	if err != nil {
 		return nil, err
 	}
+	resetHostKeys := req.ResetHostKeys
 	s.start(func() {
-		_ = s.executeFrom(s.ctx, bgJob, 0, secrets)
+		_ = s.executeFrom(s.ctx, bgJob, 0, secrets, resetHostKeys)
 	})
 	return job, nil
 }
@@ -289,17 +289,18 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 	if err != nil {
 		return nil, err
 	}
+	resetHostKeys := req.ResetHostKeys
 	s.start(func() {
-		_ = s.executeFrom(s.ctx, bgJob, startIndex, secret)
+		_ = s.executeFrom(s.ctx, bgJob, startIndex, secret, resetHostKeys)
 	})
 	return job, nil
 }
 
 /**
  * Recover launches a new recovery job against the cluster owned by jobID, running
- * the boot_recovery Ansible step (and bootstrap_router when configured). Use after
- * a complete datacenter outage: MySQL InnoDB Cluster cannot reform automatically
- * without dba.rebootClusterFromCompleteOutage(), which this step executes. The
+ * the boot_recovery Ansible step. Use after a complete datacenter outage: MySQL
+ * InnoDB Cluster cannot reform automatically without
+ * dba.rebootClusterFromCompleteOutage(), which this step executes. The
  * stored secret is used so no passwords are required at call time.
  *
  * Receiver:
@@ -335,7 +336,7 @@ func (s *Service) Recover(ctx context.Context, jobID string) (*Job, error) {
 	}
 	secret := SecretInput{AdminPassword: storedSecret.AdminPassword}
 
-	recoverySteps := s.recoveryStepsFor(deployJob.Request)
+	recoverySteps := s.recoveryStepsFor()
 	recoveryJob := &Job{
 		ID:                newJobID(),
 		Status:            JobStatusRunning,
@@ -367,27 +368,16 @@ func (s *Service) Recover(ctx context.Context, jobID string) (*Job, error) {
 
 /**
  * recoveryStepsFor returns the ordered Ansible steps to run for a post-outage
- * recovery: always boot_recovery, plus bootstrap_router when configured.
+ * recovery: boot_recovery only.
  *
  * Receiver:
  *   s *Service - pointer receiver; the method may mutate this Service instance
  *
- * Params:
- *   spec StoredSpec - the stored deploy specification
- *
  * Returns:
  *   []step - ordered recovery steps
  */
-func (s *Service) recoveryStepsFor(spec StoredSpec) []step {
-	steps := []step{{Name: "boot_recovery", Tag: "boot_recovery"}}
-	for _, st := range s.steps {
-		if st.Name == "bootstrap_router" {
-			if _, skip := shouldSkipStep(st, spec); !skip {
-				steps = append(steps, st)
-			}
-		}
-	}
-	return steps
+func (s *Service) recoveryStepsFor() []step {
+	return []step{{Name: "boot_recovery", Tag: "boot_recovery"}}
 }
 
 /**
@@ -404,7 +394,7 @@ func (s *Service) recoveryStepsFor(spec StoredSpec) []step {
  */
 func (s *Service) executeRecovery(ctx context.Context, recoveryJob *Job, deployJob *Job, secret SecretInput) {
 	timeout := time.Duration(deployJob.Request.StepTimeoutSeconds) * time.Second
-	recoverySteps := s.recoveryStepsFor(deployJob.Request)
+	recoverySteps := s.recoveryStepsFor()
 
 	for i, st := range recoverySteps {
 		recoveryJob.CurrentStep = st.Name
@@ -506,6 +496,59 @@ func (s *Service) Rollback(ctx context.Context, jobID string, req RollbackReques
 }
 
 /**
+ * claimMemberOpLock atomically marks deployJobID as owned by memberJobID for
+ * the duration of a member operation. Two add/remove-member calls racing
+ * against the same cluster both mutate etcd/Group Replication membership
+ * (e.g. overlapping learner promotions), which can transiently break quorum
+ * on the primary — see core.Job.ActiveMemberJobID. Rejecting the second
+ * caller up front surfaces a clear error immediately instead of letting it
+ * fail deep inside Ansible a minute later.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   deployJobID string - the deploy job whose cluster is being claimed
+ *   memberJobID string - the member job claiming it
+ *
+ * Returns:
+ *   error - non-nil if the deploy job is still running or another member
+ *     operation already holds the claim
+ */
+func (s *Service) claimMemberOpLock(deployJobID, memberJobID string) error {
+	return s.store.Update(deployJobID, func(j *Job) error {
+		if j.Status == JobStatusRunning {
+			return fmt.Errorf("deploy job %s is still running; wait for it to finish before starting a member operation", deployJobID)
+		}
+		if j.ActiveMemberJobID != "" {
+			return fmt.Errorf("another member operation (%s) is already running against job %s; wait for it to finish first", j.ActiveMemberJobID, deployJobID)
+		}
+		j.ActiveMemberJobID = memberJobID
+		return nil
+	})
+}
+
+/**
+ * releaseMemberOpLock clears deployJobID's claim if it is still held by
+ * memberJobID. Safe to call multiple times or after a failed claim.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   deployJobID string - the deploy job to release
+ *   memberJobID string - the member job releasing it
+ */
+func (s *Service) releaseMemberOpLock(deployJobID, memberJobID string) {
+	_ = s.store.Update(deployJobID, func(j *Job) error {
+		if j.ActiveMemberJobID == memberJobID {
+			j.ActiveMemberJobID = ""
+		}
+		return nil
+	})
+}
+
+/**
  * AddMember.
  *
  * Receiver:
@@ -547,8 +590,13 @@ func (s *Service) AddMember(ctx context.Context, req AddMemberRequest) (*Job, er
 		return nil, fmt.Errorf("load job secret %q: %w", req.JobID, err)
 	}
 
+	memberJobID := newJobID()
+	if err := s.claimMemberOpLock(req.JobID, memberJobID); err != nil {
+		return nil, err
+	}
+
 	memberJob := &Job{
-		ID:                newJobID(),
+		ID:                memberJobID,
 		Status:            JobStatusRunning,
 		CreatedAt:         time.Now().UTC(),
 		UpdatedAt:         time.Now().UTC(),
@@ -563,19 +611,24 @@ func (s *Service) AddMember(ctx context.Context, req AddMemberRequest) (*Job, er
 	}
 	s.updateJobProgress(memberJob)
 	if err := s.store.Save(memberJob); err != nil {
+		s.releaseMemberOpLock(req.JobID, memberJobID)
 		return nil, err
 	}
 
 	bgMemberJob, err := s.store.Load(memberJob.ID)
 	if err != nil {
+		s.releaseMemberOpLock(req.JobID, memberJobID)
 		return nil, err
 	}
 	bgDeployJob, err := s.store.Load(req.JobID)
 	if err != nil {
+		s.releaseMemberOpLock(req.JobID, memberJobID)
 		return nil, err
 	}
+	resetHostKeys := req.ResetHostKeys
 	s.start(func() {
-		s.executeMemberAdd(s.ctx, bgMemberJob, bgDeployJob)
+		defer s.releaseMemberOpLock(req.JobID, memberJobID)
+		s.executeMemberAdd(s.ctx, bgMemberJob, bgDeployJob, resetHostKeys)
 	})
 	return memberJob, nil
 }
@@ -625,8 +678,13 @@ func (s *Service) RemoveMember(ctx context.Context, req RemoveMemberRequest) (*J
 		return nil, fmt.Errorf("load job secret %q: %w", req.JobID, err)
 	}
 
+	memberJobID := newJobID()
+	if err := s.claimMemberOpLock(req.JobID, memberJobID); err != nil {
+		return nil, err
+	}
+
 	memberJob := &Job{
-		ID:                newJobID(),
+		ID:                memberJobID,
 		Status:            JobStatusRunning,
 		CreatedAt:         time.Now().UTC(),
 		UpdatedAt:         time.Now().UTC(),
@@ -641,19 +699,23 @@ func (s *Service) RemoveMember(ctx context.Context, req RemoveMemberRequest) (*J
 	}
 	s.updateJobProgress(memberJob)
 	if err := s.store.Save(memberJob); err != nil {
+		s.releaseMemberOpLock(req.JobID, memberJobID)
 		return nil, err
 	}
 
 	bgMemberJob, err := s.store.Load(memberJob.ID)
 	if err != nil {
+		s.releaseMemberOpLock(req.JobID, memberJobID)
 		return nil, err
 	}
 	bgDeployJob, err := s.store.Load(req.JobID)
 	if err != nil {
+		s.releaseMemberOpLock(req.JobID, memberJobID)
 		return nil, err
 	}
 	force := req.Force
 	s.start(func() {
+		defer s.releaseMemberOpLock(req.JobID, memberJobID)
 		s.executeMemberRemove(s.ctx, bgMemberJob, bgDeployJob, force)
 	})
 	return memberJob, nil
@@ -669,8 +731,10 @@ func (s *Service) RemoveMember(ctx context.Context, req RemoveMemberRequest) (*J
  *   ctx context.Context - context carrying cancellation signals and deadlines
  *   memberJob *Job - the memberJob (*Job)
  *   deployJob *Job - the deployJob (*Job)
+ *   resetHostKeys bool - when true, forget any pinned SSH host key for the
+ *     new member before connecting
  */
-func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJob *Job) {
+func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJob *Job, resetHostKeys bool) {
 	storedSecret, err := s.store.LoadSecret(deployJob.ID)
 	if err != nil {
 		memberJob.Status = JobStatusFailed
@@ -688,11 +752,12 @@ func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJo
 		_ = s.store.Save(memberJob)
 
 		result := s.doAddMember(ctx, memberRunConfig{
-			jobID:    deployJob.ID,
-			spec:     deployJob.Request,
-			secret:   secret,
-			memberIP: ip,
-			timeout:  timeout,
+			jobID:         deployJob.ID,
+			spec:          deployJob.Request,
+			secret:        secret,
+			memberIP:      ip,
+			timeout:       timeout,
+			resetHostKeys: resetHostKeys,
 		})
 		memberJob.Steps = append(memberJob.Steps, result)
 
@@ -947,11 +1012,14 @@ func (s *Service) hydrateStoredSSHConfig(job *Job) error {
  *   job *Job - the job (*Job)
  *   startIndex int - the startIndex value
  *   secret SecretInput - the secret (SecretInput)
+ *   resetHostKeys bool - when true, forget any pinned SSH host key for this
+ *     cluster's nodes before connecting, so a rebuilt/reimaged node's new key
+ *     is trusted instead of failing host-key verification
  *
  * Returns:
  *   error - error value; non-nil when the operation fails
  */
-func (s *Service) executeFrom(ctx context.Context, job *Job, startIndex int, secret SecretInput) error {
+func (s *Service) executeFrom(ctx context.Context, job *Job, startIndex int, secret SecretInput, resetHostKeys bool) error {
 	timeout := time.Duration(job.Request.StepTimeoutSeconds) * time.Second
 	for i := startIndex; i < len(s.steps); i++ {
 		st := s.steps[i]
@@ -980,11 +1048,12 @@ func (s *Service) executeFrom(ctx context.Context, job *Job, startIndex int, sec
 		}
 
 		res := s.runDeploy(ctx, runConfig{
-			jobID:   job.ID,
-			spec:    job.Request,
-			secret:  secret,
-			step:    st,
-			timeout: timeout,
+			jobID:         job.ID,
+			spec:          job.Request,
+			secret:        secret,
+			step:          st,
+			timeout:       timeout,
+			resetHostKeys: resetHostKeys,
 		})
 		job.Steps = append(job.Steps, res)
 
@@ -1089,7 +1158,7 @@ func (s *Service) updateJobProgress(job *Job) {
 		total = len(job.MemberOp.MemberIPs)
 	}
 	if job.RecoveryOp != nil {
-		total = len(s.recoveryStepsFor(job.Request))
+		total = len(s.recoveryStepsFor())
 	}
 	core.ApplyProgress(job, total)
 }
@@ -1184,9 +1253,6 @@ func shouldSkipStep(st step, spec StoredSpec) (string, bool) {
 	}
 	if st.Name == "init_app_db" && (spec.NewUser == "" || spec.NewDB == "") {
 		return "new_user/new_db not provided", true
-	}
-	if st.Skippable && !spec.BootstrapRouter {
-		return "bootstrap_router is false", true
 	}
 	if spec.AssumePrepared && (st.Name == "preflight" || st.Name == "configure_instances") {
 		return "assume_prepared is true", true

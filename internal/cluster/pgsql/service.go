@@ -3,8 +3,6 @@ package pgsql
 import (
 	"context"
 	"fmt"
-	"strings"
-	"sync"
 	"time"
 
 	"erawan-cluster/internal/cluster/core"
@@ -211,8 +209,9 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 	if err != nil {
 		return nil, err
 	}
+	resetHostKeys := req.ResetHostKeys
 	s.start(func() {
-		_ = s.executeFrom(s.ctx, bgJob, 0, secrets)
+		_ = s.executeFrom(s.ctx, bgJob, 0, secrets, resetHostKeys)
 	})
 	return job, nil
 }
@@ -320,8 +319,9 @@ func (s *Service) Resume(ctx context.Context, jobID string, req ResumeRequest) (
 	if err != nil {
 		return nil, err
 	}
+	resetHostKeys := req.ResetHostKeys
 	s.start(func() {
-		_ = s.executeFrom(s.ctx, bgJob, startIndex, secret)
+		_ = s.executeFrom(s.ctx, bgJob, startIndex, secret, resetHostKeys)
 	})
 	return job, nil
 }
@@ -465,6 +465,59 @@ func (s *Service) executeRecovery(ctx context.Context, recoveryJob *Job, deployJ
 }
 
 /**
+ * claimMemberOpLock atomically marks deployJobID as owned by memberJobID for
+ * the duration of a member operation. Two add/remove-member calls racing
+ * against the same cluster both mutate etcd/Patroni membership (e.g.
+ * overlapping learner promotions), which can transiently break quorum on the
+ * primary — see core.Job.ActiveMemberJobID. Rejecting the second caller up
+ * front surfaces a clear error immediately instead of letting it fail deep
+ * inside Ansible a minute later.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   deployJobID string - the deploy job whose cluster is being claimed
+ *   memberJobID string - the member job claiming it
+ *
+ * Returns:
+ *   error - non-nil if the deploy job is still running or another member
+ *     operation already holds the claim
+ */
+func (s *Service) claimMemberOpLock(deployJobID, memberJobID string) error {
+	return s.store.Update(deployJobID, func(j *Job) error {
+		if j.Status == JobStatusRunning {
+			return fmt.Errorf("deploy job %s is still running; wait for it to finish before starting a member operation", deployJobID)
+		}
+		if j.ActiveMemberJobID != "" {
+			return fmt.Errorf("another member operation (%s) is already running against job %s; wait for it to finish first", j.ActiveMemberJobID, deployJobID)
+		}
+		j.ActiveMemberJobID = memberJobID
+		return nil
+	})
+}
+
+/**
+ * releaseMemberOpLock clears deployJobID's claim if it is still held by
+ * memberJobID. Safe to call multiple times or after a failed claim.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   deployJobID string - the deploy job to release
+ *   memberJobID string - the member job releasing it
+ */
+func (s *Service) releaseMemberOpLock(deployJobID, memberJobID string) {
+	_ = s.store.Update(deployJobID, func(j *Job) error {
+		if j.ActiveMemberJobID == memberJobID {
+			j.ActiveMemberJobID = ""
+		}
+		return nil
+	})
+}
+
+/**
  * AddMember.
  *
  * Receiver:
@@ -506,8 +559,13 @@ func (s *Service) AddMember(ctx context.Context, req AddMemberRequest) (*Job, er
 		return nil, fmt.Errorf("load job secret %q: %w", req.JobID, err)
 	}
 
+	memberJobID := newJobID()
+	if err := s.claimMemberOpLock(req.JobID, memberJobID); err != nil {
+		return nil, err
+	}
+
 	memberJob := &Job{
-		ID:                newJobID(),
+		ID:                memberJobID,
 		Status:            JobStatusRunning,
 		CreatedAt:         time.Now().UTC(),
 		UpdatedAt:         time.Now().UTC(),
@@ -522,19 +580,24 @@ func (s *Service) AddMember(ctx context.Context, req AddMemberRequest) (*Job, er
 	}
 	s.updateJobProgress(memberJob)
 	if err := s.store.Save(memberJob); err != nil {
+		s.releaseMemberOpLock(req.JobID, memberJobID)
 		return nil, err
 	}
 
 	bgMemberJob, err := s.store.Load(memberJob.ID)
 	if err != nil {
+		s.releaseMemberOpLock(req.JobID, memberJobID)
 		return nil, err
 	}
 	bgDeployJob, err := s.store.Load(req.JobID)
 	if err != nil {
+		s.releaseMemberOpLock(req.JobID, memberJobID)
 		return nil, err
 	}
+	resetHostKeys := req.ResetHostKeys
 	s.start(func() {
-		s.executeMemberAdd(s.ctx, bgMemberJob, bgDeployJob)
+		defer s.releaseMemberOpLock(req.JobID, memberJobID)
+		s.executeMemberAdd(s.ctx, bgMemberJob, bgDeployJob, resetHostKeys)
 	})
 	return memberJob, nil
 }
@@ -584,8 +647,13 @@ func (s *Service) RemoveMember(ctx context.Context, req RemoveMemberRequest) (*J
 		return nil, fmt.Errorf("load job secret %q: %w", req.JobID, err)
 	}
 
+	memberJobID := newJobID()
+	if err := s.claimMemberOpLock(req.JobID, memberJobID); err != nil {
+		return nil, err
+	}
+
 	memberJob := &Job{
-		ID:                newJobID(),
+		ID:                memberJobID,
 		Status:            JobStatusRunning,
 		CreatedAt:         time.Now().UTC(),
 		UpdatedAt:         time.Now().UTC(),
@@ -600,19 +668,23 @@ func (s *Service) RemoveMember(ctx context.Context, req RemoveMemberRequest) (*J
 	}
 	s.updateJobProgress(memberJob)
 	if err := s.store.Save(memberJob); err != nil {
+		s.releaseMemberOpLock(req.JobID, memberJobID)
 		return nil, err
 	}
 
 	bgMemberJob, err := s.store.Load(memberJob.ID)
 	if err != nil {
+		s.releaseMemberOpLock(req.JobID, memberJobID)
 		return nil, err
 	}
 	bgDeployJob, err := s.store.Load(req.JobID)
 	if err != nil {
+		s.releaseMemberOpLock(req.JobID, memberJobID)
 		return nil, err
 	}
 	force := req.Force
 	s.start(func() {
+		defer s.releaseMemberOpLock(req.JobID, memberJobID)
 		s.executeMemberRemove(s.ctx, bgMemberJob, bgDeployJob, force)
 	})
 	return memberJob, nil
@@ -628,8 +700,10 @@ func (s *Service) RemoveMember(ctx context.Context, req RemoveMemberRequest) (*J
  *   ctx context.Context - context carrying cancellation signals and deadlines
  *   memberJob *Job - the memberJob (*Job)
  *   deployJob *Job - the deployJob (*Job)
+ *   resetHostKeys bool - when true, forget any pinned SSH host key for the
+ *     new members before connecting
  */
-func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJob *Job) {
+func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJob *Job, resetHostKeys bool) {
 	storedSecret, err := s.store.LoadSecret(deployJob.ID)
 	if err != nil {
 		memberJob.Status = JobStatusFailed
@@ -644,71 +718,54 @@ func (s *Service) executeMemberAdd(ctx context.Context, memberJob *Job, deployJo
 		AdminPassword:      storedSecret.AdminPassword,
 	}
 	timeout := time.Duration(deployJob.Request.StepTimeoutSeconds) * time.Second
-	newIPs := memberJob.MemberOp.MemberIPs
 
-	// Snapshot the current spec so all goroutines share the same read-only base.
-	baseSpec := deployJob.Request
-	baseSpec.StandbyIPs = append([]string{}, deployJob.Request.StandbyIPs...)
-
-	// Mark all nodes as in-flight so the caller can see what's running.
-	memberJob.CurrentStep = strings.Join(newIPs, ",")
-	s.updateJobProgress(memberJob)
-	_ = s.store.Save(memberJob)
-
-	// Run each member addition in parallel — their Ansible runs are independent
-	// (separate temp dirs, inventories, and pg_basebackup streams from primary).
-	results := make([]StepResult, len(newIPs))
-	var wg sync.WaitGroup
-	for i, ip := range newIPs {
-		i, ip := i, ip
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			results[i] = s.doAddMember(ctx, memberRunConfig{
-				jobID:    deployJob.ID,
-				spec:     baseSpec,
-				secret:   secret,
-				memberIP: ip,
-				timeout:  timeout,
-			})
-		}()
-	}
-	wg.Wait()
-
-	// Collect results; add successful nodes to the deploy job's standby list.
-	var failed, added []string
-	for i, result := range results {
-		memberJob.Steps = append(memberJob.Steps, result)
-		ip := newIPs[i]
-		if result.Status == JobStatusCompleted {
-			added = append(added, ip)
-		} else {
-			msg := result.Message
-			if msg == "" {
-				msg = fmt.Sprintf("add member %s failed", ip)
-			}
-			failed = append(failed, msg)
-		}
-	}
-	// Re-read and persist the deploy job under the store lock so a concurrent
-	// member operation on the same cluster cannot clobber the standby list.
-	_ = s.store.Update(deployJob.ID, func(j *Job) error {
-		j.Request.StandbyIPs = append(j.Request.StandbyIPs, added...)
-		deployJob.Request.StandbyIPs = j.Request.StandbyIPs
-		return nil
-	})
-	memberJob.Request.StandbyIPs = deployJob.Request.StandbyIPs
-
-	memberJob.CurrentStep = ""
-	if len(failed) > 0 {
-		memberJob.Status = JobStatusFailed
-		memberJob.Error = strings.Join(failed, "; ")
+	// Members are added strictly one at a time: every addition mutates etcd
+	// membership on the primary (etcd allows a single unpromoted learner by
+	// default), and each run's register play treats members outside its
+	// standby list as stale registrations to clean up — so a sibling still
+	// mid-join would be seen as removable. Appending each success to
+	// StandbyIPs before the next run makes it a legitimate member for the
+	// runs that follow.
+	for _, ip := range memberJob.MemberOp.MemberIPs {
+		memberJob.CurrentStep = ip
 		s.updateJobProgress(memberJob)
 		_ = s.store.Save(memberJob)
-		return
+
+		result := s.doAddMember(ctx, memberRunConfig{
+			jobID:         deployJob.ID,
+			spec:          deployJob.Request,
+			secret:        secret,
+			memberIP:      ip,
+			timeout:       timeout,
+			resetHostKeys: resetHostKeys,
+		})
+		memberJob.Steps = append(memberJob.Steps, result)
+
+		if result.Status == JobStatusCompleted {
+			// Re-read and persist the deploy job under the store lock so a
+			// concurrent member operation on the same cluster cannot clobber the
+			// standby list.
+			_ = s.store.Update(deployJob.ID, func(j *Job) error {
+				j.Request.StandbyIPs = append(j.Request.StandbyIPs, ip)
+				deployJob.Request.StandbyIPs = j.Request.StandbyIPs
+				return nil
+			})
+			memberJob.Request.StandbyIPs = deployJob.Request.StandbyIPs
+		} else {
+			memberJob.Status = JobStatusFailed
+			memberJob.Error = result.Message
+			if memberJob.Error == "" {
+				memberJob.Error = fmt.Sprintf("add member %s failed", ip)
+			}
+			memberJob.CurrentStep = ""
+			s.updateJobProgress(memberJob)
+			_ = s.store.Save(memberJob)
+			return
+		}
 	}
 
 	memberJob.Status = JobStatusCompleted
+	memberJob.CurrentStep = ""
 	memberJob.Error = ""
 	s.updateJobProgress(memberJob)
 	_ = s.store.Save(memberJob)
@@ -939,11 +996,14 @@ func (s *Service) hydrateStoredSSHConfig(job *Job) error {
  *   job *Job - the job (*Job)
  *   startIndex int - the startIndex value
  *   secret SecretInput - the secret (SecretInput)
+ *   resetHostKeys bool - when true, forget any pinned SSH host key for this
+ *     cluster's nodes before connecting, so a rebuilt/reimaged node's new key
+ *     is trusted instead of failing host-key verification
  *
  * Returns:
  *   error - error value; non-nil when the operation fails
  */
-func (s *Service) executeFrom(ctx context.Context, job *Job, startIndex int, secret SecretInput) error {
+func (s *Service) executeFrom(ctx context.Context, job *Job, startIndex int, secret SecretInput, resetHostKeys bool) error {
 	timeout := time.Duration(job.Request.StepTimeoutSeconds) * time.Second
 	for i := startIndex; i < len(s.steps); i++ {
 		st := s.steps[i]
@@ -972,11 +1032,12 @@ func (s *Service) executeFrom(ctx context.Context, job *Job, startIndex int, sec
 		}
 
 		res := s.runDeploy(ctx, runConfig{
-			jobID:   job.ID,
-			spec:    job.Request,
-			secret:  secret,
-			step:    st,
-			timeout: timeout,
+			jobID:         job.ID,
+			spec:          job.Request,
+			secret:        secret,
+			step:          st,
+			timeout:       timeout,
+			resetHostKeys: resetHostKeys,
 		})
 		job.Steps = append(job.Steps, res)
 

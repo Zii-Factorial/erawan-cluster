@@ -1,0 +1,49 @@
+---
+- name: Install MySQL primary-check script
+  ansible.builtin.template:
+    src: primary_check.py.j2
+    dest: /usr/local/bin/erawan-mysql-primary-check
+    mode: "0755"
+  tags: ["primary_check"]
+
+- name: Install MySQL primary-check systemd service
+  ansible.builtin.template:
+    src: primary_check.service.j2
+    dest: /etc/systemd/system/erawan-mysql-primary-check.service
+    mode: "0644"
+  tags: ["primary_check"]
+
+- name: Check UFW availability and status
+  ansible.builtin.command:
+    argv: [ufw, status]
+  register: _ufw_status
+  changed_when: false
+  failed_when: false
+  tags: ["primary_check"]
+
+- name: Allow primary-check port through UFW
+  community.general.ufw:
+    rule: allow
+    port: "{{ primary_check_port | string }}"
+    proto: tcp
+    comment: MySQL primary-check for HAProxy
+  when: "_ufw_status.rc == 0 and 'Status: active' in (_ufw_status.stdout | default(''))"
+  tags: ["primary_check"]
+
+- name: Enable and restart MySQL primary-check service
+  ansible.builtin.systemd:
+    name: erawan-mysql-primary-check.service
+    daemon_reload: true
+    enabled: true
+    state: restarted
+  tags: ["primary_check"]
+
+- name: Verify primary-check endpoint responds
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ primary_check_port }}/"
+    status_code: [200, 503]
+  register: _primary_check_probe
+  retries: 5
+  delay: 2
+  until: _primary_check_probe is succeeded
+  tags: ["primary_check"]

@@ -17,7 +17,7 @@
 | Build | Makefile | Build, test, and run targets |
 | Automation | Ansible | Cluster deploy, configuration, and member management via SSH |
 | Proxy / Load Balancer | HAProxy | TCP proxy and SQL routing to DB cluster nodes |
-| MySQL Cluster | MySQL InnoDB Cluster + MySQL Shell + MySQL Router | HA MySQL with Group Replication and automatic failover |
+| MySQL Cluster | MySQL InnoDB Cluster + MySQL Shell + primary-check endpoint | HA MySQL with Group Replication and automatic failover |
 | PostgreSQL Cluster | PostgreSQL + Patroni + etcd | HA PostgreSQL with leader election and synchronous replication |
 
 ---

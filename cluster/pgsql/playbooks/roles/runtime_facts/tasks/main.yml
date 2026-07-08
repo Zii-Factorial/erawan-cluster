@@ -50,6 +50,22 @@
   failed_when: not pgsql_server_bin.stat.exists
   when: erawan_pg_bindir is not defined
 
+# postgres_exporter has no distro package, so it can't be assumed present the
+# way postgres/patroni/etcd are. Checked here (Play 1 preflight) rather than
+# only in setup_exporters (Play 7) so a missing binary fails in seconds
+# instead of after a 30s wait_for timeout deep into the deploy.
+- name: Ensure postgres_exporter binary is installed
+  ansible.builtin.stat:
+    path: "{{ postgres_exporter_bin }}"
+  register: postgres_exporter_bin_stat
+  failed_when: not postgres_exporter_bin_stat.stat.exists
+  when: erawan_postgres_exporter_checked is not defined
+
+- name: Mark postgres_exporter binary as checked
+  ansible.builtin.set_fact:
+    erawan_postgres_exporter_checked: true
+  when: erawan_postgres_exporter_checked is not defined
+
 - name: Derive per-node PostgreSQL cluster facts
   ansible.builtin.set_fact:
     erawan_pg_node_id: "{{ (groups['all'] | list).index(inventory_hostname) + 1 }}"

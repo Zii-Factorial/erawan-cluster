@@ -1,13 +1,13 @@
 ---
 # ---------------------------------------------------------------------------
-# PLAY 1 — Remove mysqlrouter from every node
+# PLAY 1 — Remove the primary-check endpoint from every node
 # ---------------------------------------------------------------------------
-- name: Rollback mysqlrouter services
+- name: Rollback MySQL primary-check endpoint
   hosts: all
   gather_facts: false
   become: true
   roles:
-    - rollback
+    - cleanup_primary_check
 
 # ---------------------------------------------------------------------------
 # PLAY 2 — Dissolve InnoDB cluster from primary, then reset GR on all nodes

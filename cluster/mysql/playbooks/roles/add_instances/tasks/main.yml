@@ -61,7 +61,7 @@
         print("  " + host + ": " + str(node_status))
         if node_status == "ONLINE":
           break
-        time.sleep(10)
+        time.sleep(2)
       else:
         raise RuntimeError("timed out waiting for " + host + " to be ONLINE: " + json.dumps(dba.get_cluster(cluster_name).status(), indent=2))
 

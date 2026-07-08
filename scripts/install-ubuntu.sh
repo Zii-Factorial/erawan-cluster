@@ -36,8 +36,7 @@ UNIT_FILE="/etc/systemd/system/${APP_NAME}.service"
 HAPROXY_OVERRIDE_DIR="/etc/systemd/system/haproxy.service.d"
 HAPROXY_OVERRIDE_FILE="${HAPROXY_OVERRIDE_DIR}/override.conf"
 CLUSTER_INSTALL_DIR="${APP_ROOT}/cluster"
-LOG_DIR="${LOG_DIR:-/var/erawan-cluster}"
-LOG_FILE="${LOG_DIR}/erawan-cluster.log"
+LOG_FILE="${LOG_FILE:-/var/log/erawan-cluster.log}"
 TMP_CLUSTER_STAGE=""
 
 cleanup() {
@@ -101,15 +100,16 @@ required_cluster_files=(
   "mysql/playbooks/roles/boot_recovery/defaults/main.yml"
   "mysql/playbooks/roles/boot_recovery/templates/mysql_boot_recovery.sh.j2"
   "mysql/playbooks/roles/boot_recovery/templates/mysql_boot_recovery.service.j2"
-  "mysql/playbooks/roles/bootstrap_router/tasks/main.yml"
-  "mysql/playbooks/roles/bootstrap_router/defaults/main.yml"
-  "mysql/playbooks/roles/bootstrap_router/templates/mysqlrouter.service.j2"
+  "mysql/playbooks/roles/primary_check/tasks/main.yml"
+  "mysql/playbooks/roles/primary_check/defaults/main.yml"
+  "mysql/playbooks/roles/primary_check/templates/primary_check.py.j2"
+  "mysql/playbooks/roles/primary_check/templates/primary_check.service.j2"
   "mysql/playbooks/roles/dissolve_cluster/tasks/main.yml"
   "mysql/playbooks/roles/dissolve_cluster/defaults/main.yml"
   "mysql/playbooks/roles/reset_gr_state/tasks/main.yml"
   "mysql/playbooks/roles/reset_gr_state/defaults/main.yml"
-  "mysql/playbooks/roles/rollback/tasks/main.yml"
-  "mysql/playbooks/roles/rollback/handlers/main.yml"
+  "mysql/playbooks/roles/cleanup_primary_check/tasks/main.yml"
+  "mysql/playbooks/roles/cleanup_primary_check/handlers/main.yml"
   "pgsql/playbooks/deploy.yml"
   "pgsql/playbooks/group_vars/all.yml"
   "pgsql/playbooks/roles/preflight/tasks/main.yml"
@@ -223,7 +223,6 @@ create_user_and_directories() {
   install -d -o "${APP_USER}" -g "${APP_GROUP}" -m 0755 "${TENANTS_DIR}"
   install -d -o root -g root -m 0755 "${APP_ROOT}"
   install -d -o root -g "${APP_GROUP}" -m 0750 "${APP_ENV_DIR}"
-  install -d -o "${APP_USER}" -g "${APP_GROUP}" -m 0750 "${LOG_DIR}"
   touch "${LOG_FILE}"
   chown "${APP_USER}:${APP_GROUP}" "${LOG_FILE}"
   chmod 0640 "${LOG_FILE}"
@@ -269,26 +268,55 @@ API_PORT=8080
 ENV=prod
 API_KEY=CHANGE_TO_STRONG_RANDOM_KEY
 # ENCRYPTION_KEY: 64-char hex (AES-256-GCM payload encryption). Generate: openssl rand -hex 32
-# ENCRYPTION_KEY=
+ENCRYPTION_KEY=
+PROXY_HOST=127.0.0.1
 
 TENANTS_DIR=${TENANTS_DIR}
 HAPROXY_RELOAD_CMD=sudo /bin/systemctl reload haproxy
 HAPROXY_RELOAD_TIMEOUT_SECONDS=15
+# Comma-separated list of base HAProxy config files that tenant operations must
+# never touch. Add the operator-managed haproxy.cfg here.
+# HAPROXY_MAIN_CONFIGS=${HAPROXY_CONFIG_FILE}
+
+# PostgreSQL-backed job store + HAProxy config persistence (Active/Passive HA).
+# When set, jobs and HAProxy tenant configs are persisted in the database so a
+# standby node can take over the VIP and serve requests without operator action.
+# DB_CONNECTION=postgres://erawan:secret@127.0.0.1:5432/erawan?sslmode=disable
+
+# DB connection-pool sizing — raise proportionally when scaling vertically.
+# Rule of thumb: DB_MAX_OPEN_CONNS = (num_cpu * 2) + headroom
+DB_MAX_OPEN_CONNS=25
+DB_MAX_IDLE_CONNS=10
+DB_CONN_MAX_LIFETIME_SECONDS=300
+DB_CONN_MAX_IDLE_TIME_SECONDS=60
 
 CLUSTER_STATE_DIR=${JOBS_DIR}
+CLUSTER_MAX_CONCURRENT_JOBS=4
+
+# Seconds to wait for in-flight Ansible jobs to write their final status before
+# the process exits on SIGTERM. Raise if deploy steps exceed 5 minutes.
+SHUTDOWN_DRAIN_SECONDS=300
 
 ANSIBLE_PLAYBOOK_BIN=/usr/bin/ansible-playbook
 MYSQL_DEPLOY_PLAYBOOK=${CLUSTER_INSTALL_DIR}/mysql/playbooks/deploy.yml
 MYSQL_ROLLBACK_PLAYBOOK=${CLUSTER_INSTALL_DIR}/mysql/playbooks/rollback.yml
 PGSQL_DEPLOY_PLAYBOOK=${CLUSTER_INSTALL_DIR}/pgsql/playbooks/deploy.yml
+
 CLUSTER_SSH_USER=
 CLUSTER_SSH_PRIVATE_KEY_PATH=
+# New node host keys are auto-pinned to CLUSTER_SSH_KNOWN_HOSTS via ssh-keyscan
+# before each connection (trust-on-first-use), so this should stay false even
+# for greenfield bootstrap. Only set true as a manual escape hatch if
+# ssh-keyscan can't reach nodes from this host (e.g. firewalled) or
+# CLUSTER_SSH_KNOWN_HOSTS is unset.
+CLUSTER_SSH_INSECURE_HOST_KEY=false
 CLUSTER_SSH_KNOWN_HOSTS=${KEYS_DIR}/known_hosts
-# CLUSTER_SSH_INSECURE_HOST_KEY=true  # uncomment only for first-time bootstrap before host keys are scanned
 
 CLUSTER_ANSIBLE_DEBUG=false
 CLUSTER_ANSIBLE_VERBOSITY=0
 CLUSTER_STEP_OUTPUT_MAX_CHARS=8000
+
+ENABLE_PPROF=false
 EOF
   fi
   chown root:"${APP_GROUP}" "${APP_ENV_FILE}"
@@ -353,7 +381,7 @@ LimitNOFILE=65535
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=full
-ReadWritePaths=${APP_STATE_DIR} ${LOG_DIR}
+ReadWritePaths=${APP_STATE_DIR} ${LOG_FILE}
 StandardOutput=append:${LOG_FILE}
 StandardError=append:${LOG_FILE}
 
@@ -390,9 +418,8 @@ print_summary() {
   echo "  CLUSTER_SSH_USER             — SSH user for cluster nodes"
   echo "  CLUSTER_SSH_PRIVATE_KEY_PATH — path to the SSH private key"
   echo ""
-  echo "Before first deploy, scan cluster node SSH host keys:"
-  echo "  ssh-keyscan -H <node-ip> [<node-ip> ...] >> ${KEYS_DIR}/known_hosts"
-  echo "  (or set CLUSTER_SSH_INSECURE_HOST_KEY=true in ${APP_ENV_FILE} for bootstrap only)"
+  echo "New node SSH host keys are pinned automatically to ${KEYS_DIR}/known_hosts"
+  echo "on first connection (trust-on-first-use) — no manual ssh-keyscan step needed."
   echo ""
   echo "Logs: ${LOG_FILE}"
   echo "  tail -f ${LOG_FILE}"

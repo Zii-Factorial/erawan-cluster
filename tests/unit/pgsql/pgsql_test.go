@@ -86,6 +86,62 @@ func TestSetSSHConfigRejectsInvalidUser(t *testing.T) {
 	}
 }
 
+// Two add/remove-member calls racing against the same cluster both mutate
+// etcd/Patroni membership, which can transiently break quorum on the
+// primary. AddMember must reject a second call while one is already in
+// flight rather than let them race inside Ansible.
+func TestAddMemberRejectsWhileAnotherMemberOpRunning(t *testing.T) {
+	svc, store := newService(t)
+	_ = store.Save(&pgsql.Job{
+		ID:                testJobID,
+		Status:            pgsql.JobStatusCompleted,
+		Request:           pgsql.StoredSpec{ClusterName: "prod", PrimaryIP: "10.0.0.1"},
+		ActiveMemberJobID: "already-running-job",
+	})
+	_ = store.SaveSecret(testJobID, pgsql.StoredSecret{PostgresUser: "postgres", PostgresPassword: "pw", AdminPassword: "pw"})
+
+	if _, err := svc.AddMember(context.Background(), pgsql.AddMemberRequest{JobID: testJobID, MemberIPs: []string{"10.0.0.5"}}); err == nil {
+		t.Fatal("expected AddMember to reject when another member operation is already running")
+	}
+}
+
+func TestAddMemberRejectsWhileDeployJobRunning(t *testing.T) {
+	svc, store := newService(t)
+	_ = store.Save(&pgsql.Job{
+		ID:      testJobID,
+		Status:  pgsql.JobStatusRunning,
+		Request: pgsql.StoredSpec{ClusterName: "prod", PrimaryIP: "10.0.0.1"},
+	})
+	_ = store.SaveSecret(testJobID, pgsql.StoredSecret{PostgresUser: "postgres", PostgresPassword: "pw", AdminPassword: "pw"})
+
+	if _, err := svc.AddMember(context.Background(), pgsql.AddMemberRequest{JobID: testJobID, MemberIPs: []string{"10.0.0.5"}}); err == nil {
+		t.Fatal("expected AddMember to reject while the deploy job is still running")
+	}
+}
+
+func TestAddMemberReleasesLockAfterCompletion(t *testing.T) {
+	svc, store := newService(t)
+	_ = store.Save(&pgsql.Job{
+		ID:      testJobID,
+		Status:  pgsql.JobStatusCompleted,
+		Request: pgsql.StoredSpec{ClusterName: "prod", PrimaryIP: "10.0.0.1"},
+	})
+	_ = store.SaveSecret(testJobID, pgsql.StoredSecret{PostgresUser: "postgres", PostgresPassword: "pw", AdminPassword: "pw"})
+
+	if _, err := svc.AddMember(context.Background(), pgsql.AddMemberRequest{JobID: testJobID, MemberIPs: []string{"10.0.0.5"}}); err != nil {
+		t.Fatalf("add member: %v", err)
+	}
+	svc.Wait(context.Background())
+
+	job, err := store.Load(testJobID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if job.ActiveMemberJobID != "" {
+		t.Fatalf("expected lock to be released once the member op finished, got %q", job.ActiveMemberJobID)
+	}
+}
+
 func TestDeployPersistsRunningJobAndSecret(t *testing.T) {
 	svc, store := newService(t)
 	job, err := svc.Deploy(context.Background(), pgsql.DeployRequest{

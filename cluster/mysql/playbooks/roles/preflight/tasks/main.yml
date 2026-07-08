@@ -32,12 +32,3 @@
   changed_when: false
   failed_when: mysql_ping.rc != 0
   tags: ["preflight"]
-
-- name: Ensure mysqlrouter is installed when bootstrap is enabled
-  ansible.builtin.command:
-    argv: [mysqlrouter, --version]
-  register: mysqlrouter_check
-  changed_when: false
-  failed_when: mysqlrouter_check.rc != 0
-  when: bootstrap_router | default(false) | bool
-  tags: ["preflight", "bootstrap_router"]

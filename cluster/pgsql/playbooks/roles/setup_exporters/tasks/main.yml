@@ -91,23 +91,10 @@
     state: started
   tags: ["setup_exporters"]
 
-# ── 4. Allow exporter port through UFW (if active) ──────────────────────────
-- name: Check UFW status
-  ansible.builtin.command:
-    argv: [ufw, status]
-  register: _ufw_status
-  changed_when: false
-  failed_when: false
-  tags: ["setup_exporters"]
+# postgres_exporter_port is already opened through UFW by base_config's single
+# pass in Play 2 — no need for a second ufw-status round trip here.
 
-- name: Allow postgres_exporter port through UFW
-  ansible.builtin.command:
-    argv: [ufw, allow, "{{ postgres_exporter_port }}/tcp"]
-  when: "_ufw_status.rc == 0 and 'Status: active' in (_ufw_status.stdout | default(''))"
-  changed_when: false
-  tags: ["setup_exporters"]
-
-# ── 5. Verify ────────────────────────────────────────────────────────────────
+# ── 4. Verify ────────────────────────────────────────────────────────────────
 - name: Wait for postgres_exporter to open port {{ postgres_exporter_port }}
   ansible.builtin.wait_for:
     host: "{{ ansible_host }}"
@@ -122,7 +109,7 @@
     return_content: true
   register: _exporter_metrics
   until: "'pg_up 1' in _exporter_metrics.content"
-  retries: 10
-  delay: 3
+  retries: 30
+  delay: 1
   changed_when: false
   tags: ["setup_exporters"]

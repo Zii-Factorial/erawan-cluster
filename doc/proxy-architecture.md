@@ -44,7 +44,13 @@ For each database cluster, the API writes a HAProxy tenant config file and reloa
 
 ### MySQL config layout
 
-MySQL uses **active/passive** routing: the first server receives all traffic; the others are `backup` servers used only when the primary is down. MySQL Router on each node handles primary detection internally.
+This deployment does not run MySQL Router. Instead, every DB node runs a
+lightweight primary-check HTTP endpoint (`:9200` by default — see
+[doc/mysql.md](mysql.md#primary-check-endpoint)) that reports `200` when the
+node is the current Group Replication primary and `503` otherwise. MySQL
+uses **active/passive** routing just like PostgreSQL: HAProxy `httpchk`s the
+primary-check endpoint on each node, and only the one currently answering
+`200` receives traffic; the others sit as `backup` servers.
 
 ```haproxy
 listen node_25041
@@ -55,29 +61,32 @@ listen node_25041
 
     option clitcpka
     option srvtcpka
-    option tcp-check
+    option httpchk GET /
+    http-check expect status 200
 
-    timeout connect  1s
-    timeout check    500ms
-    timeout queue    10s
+    timeout connect  500ms
+    timeout check    200ms
+    timeout queue    5s
     timeout client   10m
     timeout server   10m
-    timeout client-fin  5s
-    timeout server-fin  5s
+    timeout client-fin  2s
+    timeout server-fin  2s
 
     option redispatch 1
-    retries 3
+    retries 2
 
-    default-server inter 2s fastinter 500ms downinter 500ms fall 3 rise 3 on-marked-down shutdown-sessions slowstart 10s
+    default-server inter 500ms fastinter 100ms downinter 200ms fall 2 rise 2 on-marked-down shutdown-sessions on-marked-up shutdown-backup-sessions check port 9200
 
-    # Backend port 6446 (MySQL Router R/W)
+    # Backend port 3306 (MySQL)
     # Use first server as primary, others as backup
-    server db1 10.0.0.1:6446 check
-    server db2 10.0.0.2:6446 check backup
-    server db3 10.0.0.3:6446 check backup
+    server db1 10.0.0.1:3306 check
+    server db2 10.0.0.2:3306 check backup
+    server db3 10.0.0.3:3306 check backup
 ```
 
-`db_port` in the create request should be the **MySQL Router R/W port** (`6446`) so HAProxy routes through Router, which then picks the cluster primary. Using the raw MySQL port (`3306`) bypasses Router.
+`db_port` in the create request should be the **raw MySQL port** (`3306`).
+`primary_check_port` (default `9200`) is the port HAProxy health-checks to
+find the current primary.
 
 ### PostgreSQL config layout
 
@@ -250,6 +259,7 @@ POST /cluster/pgsql/metrics  { "job_id": "abc", "proxy_port": 25042 }
 | API authentication | `X-API-Key` header required on every request |
 | Request body encryption | Optional AES-256-GCM via `ENCRYPTION_KEY` env |
 | SSH to DB nodes | Dedicated `clusterops` user with key-only auth and passwordless sudo |
+| SSH host key verification | Trust-on-first-use: a node's key is pinned to `known_hosts` the first time it's contacted, then `StrictHostKeyChecking=yes` on every later connection. A real key change (MITM, or a rebuilt/reimaged node) fails loudly instead of being silently trusted. Pass `reset_host_keys: true` on deploy/resume/add-member to explicitly re-trust a node's current key (e.g. after rebuilding it) |
 | Cluster passwords | Stored in `.secret` files with `0600` permissions; never logged |
 | SQL connections | Always via HAProxy, never direct DB VM IPs |
 | Input validation | IP, port, username validated; unknown JSON fields rejected |
@@ -289,7 +299,7 @@ This value is injected server-side — clients never specify the SQL host. Clien
    │                             │                              ││ configure instances
    │── GET /cluster/mysql/jobs/{id} ─────▶                     ││ create cluster
    │◀── 200 { status:running, progress_percent:40 } ──────────││ add secondaries
-   │                             │                              ││ bootstrap router
+   │                             │                              ││ install primary-check
    │── GET /cluster/mysql/jobs/{id} ─────▶                     ││
    │◀── 200 { status:completed, secret:{...} } ◀──────────────│
    │                             │                              │

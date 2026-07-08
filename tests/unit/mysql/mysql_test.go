@@ -86,6 +86,62 @@ func TestSetSSHConfigRejectsInvalidUser(t *testing.T) {
 	}
 }
 
+// Two add/remove-member calls racing against the same cluster both mutate
+// Group Replication membership, which can transiently break quorum on the
+// primary. AddMember must reject a second call while one is already in
+// flight rather than let them race inside Ansible.
+func TestAddMemberRejectsWhileAnotherMemberOpRunning(t *testing.T) {
+	svc, store := newService(t)
+	_ = store.Save(&mysql.Job{
+		ID:                testJobID,
+		Status:            mysql.JobStatusCompleted,
+		Request:           mysql.StoredSpec{ClusterName: "prod", PrimaryIP: "10.0.0.1"},
+		ActiveMemberJobID: "already-running-job",
+	})
+	_ = store.SaveSecret(testJobID, mysql.StoredSecret{AdminUser: "admin", AdminPassword: "pw"})
+
+	if _, err := svc.AddMember(context.Background(), mysql.AddMemberRequest{JobID: testJobID, MemberIPs: []string{"10.0.0.5"}}); err == nil {
+		t.Fatal("expected AddMember to reject when another member operation is already running")
+	}
+}
+
+func TestAddMemberRejectsWhileDeployJobRunning(t *testing.T) {
+	svc, store := newService(t)
+	_ = store.Save(&mysql.Job{
+		ID:      testJobID,
+		Status:  mysql.JobStatusRunning,
+		Request: mysql.StoredSpec{ClusterName: "prod", PrimaryIP: "10.0.0.1"},
+	})
+	_ = store.SaveSecret(testJobID, mysql.StoredSecret{AdminUser: "admin", AdminPassword: "pw"})
+
+	if _, err := svc.AddMember(context.Background(), mysql.AddMemberRequest{JobID: testJobID, MemberIPs: []string{"10.0.0.5"}}); err == nil {
+		t.Fatal("expected AddMember to reject while the deploy job is still running")
+	}
+}
+
+func TestAddMemberReleasesLockAfterCompletion(t *testing.T) {
+	svc, store := newService(t)
+	_ = store.Save(&mysql.Job{
+		ID:      testJobID,
+		Status:  mysql.JobStatusCompleted,
+		Request: mysql.StoredSpec{ClusterName: "prod", PrimaryIP: "10.0.0.1"},
+	})
+	_ = store.SaveSecret(testJobID, mysql.StoredSecret{AdminUser: "admin", AdminPassword: "pw"})
+
+	if _, err := svc.AddMember(context.Background(), mysql.AddMemberRequest{JobID: testJobID, MemberIPs: []string{"10.0.0.5"}}); err != nil {
+		t.Fatalf("add member: %v", err)
+	}
+	svc.Wait(context.Background())
+
+	job, err := store.Load(testJobID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if job.ActiveMemberJobID != "" {
+		t.Fatalf("expected lock to be released once the member op finished, got %q", job.ActiveMemberJobID)
+	}
+}
+
 func TestDeployPersistsRunningJobAndSecret(t *testing.T) {
 	svc, store := newService(t)
 	job, err := svc.Deploy(context.Background(), mysql.DeployRequest{
@@ -126,8 +182,7 @@ func TestGetComputesProgressWithSkippedSteps(t *testing.T) {
 		ID:     testJobID,
 		Status: mysql.JobStatusRunning,
 		Request: mysql.StoredSpec{
-			AssumePrepared:  true,
-			BootstrapRouter: false,
+			AssumePrepared: true,
 		},
 		Steps: []mysql.StepResult{
 			{Name: "preflight", Status: core.JobStatusSkipped},
@@ -143,7 +198,7 @@ func TestGetComputesProgressWithSkippedSteps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if got.TotalSteps != 4 || got.CompletedSteps != 1 || got.ProgressPercent != 25 {
+	if got.TotalSteps != 5 || got.CompletedSteps != 1 || got.ProgressPercent != 20 {
 		t.Fatalf("unexpected progress: total=%d completed=%d pct=%d", got.TotalSteps, got.CompletedSteps, got.ProgressPercent)
 	}
 }

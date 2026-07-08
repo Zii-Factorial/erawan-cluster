@@ -3,12 +3,15 @@
   ansible.builtin.import_role:
     name: runtime_facts
 
+# openssl ships in every Debian/Ubuntu base image (core dependency of apt/SSH
+# itself), so this resolves from the local dpkg status with no network call —
+# update_cache would force an apt-get update (several seconds to tens of
+# seconds against a real mirror) on every node for a package that's never
+# actually missing.
 - name: Ensure openssl is installed for certificate generation
   ansible.builtin.apt:
     name: openssl
     state: present
-    update_cache: true
-    cache_valid_time: 3600
 
 - name: Generate self-signed SSL certificate for PostgreSQL
   ansible.builtin.shell: |

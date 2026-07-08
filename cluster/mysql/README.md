@@ -13,9 +13,11 @@ Implemented workflow:
 - Instance preparation for InnoDB Cluster
 - Cluster creation on the requested primary node
 - Secondary-node addition when `standby_ips` is provided
-- Optional MySQL Router bootstrap on all DB nodes
+- Group Replication auto-rejoin and boot-recovery setup on all nodes
 - Cluster verification and optional application database bootstrap
-- Rollback playbook for router cleanup and cluster dissolve
+- Primary-check HTTP endpoint on every node so HAProxy can route writes to
+  the current Group Replication primary without MySQL Router
+- Rollback playbook for primary-check cleanup and cluster dissolve
 
 Architecture overview:
 
@@ -36,8 +38,8 @@ Architecture overview:
            |
            v
    +---------------------+
-   | MySQL Router        |
-   | optional per node   |
+   | primary-check :9200 |
+   | on every node       |
    +---------------------+
 ```
 

@@ -79,6 +79,16 @@ type Job[Spec any] struct {
 	Steps             []StepResult        `json:"steps"`
 	MemberOp          *MemberOperation    `json:"member_op,omitempty"`
 	RecoveryOp        *RecoveryOperation  `json:"recovery_op,omitempty"`
+
+	// ActiveMemberJobID holds the ID of an in-flight add/remove-member job
+	// for this deploy job, if any. It exists because concurrent member
+	// operations against the same cluster race on etcd/Group Replication
+	// membership changes (e.g. two overlapping etcd learner promotions),
+	// which can transiently break quorum. Set when a member job claims the
+	// cluster and cleared when that job finishes, so a second member
+	// operation started while one is still running is rejected up front
+	// instead of racing at the Ansible layer.
+	ActiveMemberJobID string `json:"active_member_job_id,omitempty"`
 }
 
 /**

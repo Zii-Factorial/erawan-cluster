@@ -2,7 +2,7 @@
 # ---------------------------------------------------------------------------
 # Site-wide defaults — override via extra vars (-e) or host_vars as needed.
 # Required vars (cluster_name, cluster_admin_username, cluster_admin_password,
-# mysql_port, standby_ips, router_service_name) must be provided at runtime.
+# mysql_port, standby_ips) must be provided at runtime.
 # ---------------------------------------------------------------------------
 
 # MySQL port (must match the server listen port)
@@ -14,8 +14,8 @@
 # cluster_admin_password: ""
 # standby_ips: []
 
-# Router
-# router_service_name: mysqlrouter
+# HAProxy primary-check endpoint (see roles/primary_check)
+# primary_check_port: 9200
 
 # App database (optional)
 # new_user: ""

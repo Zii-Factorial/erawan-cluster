@@ -37,7 +37,7 @@ type DeployRequest struct {
 	NewUserSuperuser   bool     `json:"new_user_superuser"`
 	NewDB              string   `json:"new_db"`
 	AssumePrepared     bool     `json:"assume_prepared"`
-	BootstrapRouter    *bool    `json:"bootstrap_router"`
+	ResetHostKeys      bool     `json:"reset_host_keys"`
 	SSHPort            int      `json:"ssh_port"`
 	MySQLPort          int      `json:"mysql_port"`
 	MySQLVersion       int      `json:"mysql_version"` // major version: 7=5.7, 8=8.x, 9=9.x; default 8
@@ -51,27 +51,11 @@ func (r DeployRequest) NewUserSSLRequiredEnabled() bool {
 	return *r.NewUserSSLRequired
 }
 
-/**
- * BootstrapRouterEnabled.
- *
- * Receiver:
- *   r DeployRequest - value receiver; the method operates on a copy of the DeployRequest
- *
- * Returns:
- *   bool - boolean result
- */
-
-func (r DeployRequest) BootstrapRouterEnabled() bool {
-	if r.BootstrapRouter == nil {
-		return true
-	}
-	return *r.BootstrapRouter
-}
-
 type ResumeRequest struct {
 	RootPassword    string `json:"root_password"`
 	AdminPassword   string `json:"admin_password"`
 	NewUserPassword string `json:"new_user_password"`
+	ResetHostKeys   bool   `json:"reset_host_keys"`
 }
 
 type RollbackRequest struct {
@@ -89,7 +73,6 @@ type StoredSpec struct {
 	NewUserSuperuser   bool     `json:"new_user_superuser"`
 	NewDB              string   `json:"new_db"`
 	AssumePrepared     bool     `json:"assume_prepared"`
-	BootstrapRouter    bool     `json:"bootstrap_router"`
 	SSHUser            string   `json:"ssh_user"`
 	SSHPrivateKeyPath  string   `json:"ssh_private_key_path,omitempty"`
 	SSHPort            int      `json:"ssh_port"`
@@ -175,6 +158,7 @@ type AddMemberRequest struct {
 	JobID          string   `json:"job_id"`
 	MemberIPs      []string `json:"member_ips"`
 	AssumePrepared bool     `json:"assume_prepared,omitempty"`
+	ResetHostKeys  bool     `json:"reset_host_keys,omitempty"`
 }
 
 type RemoveMemberRequest struct {

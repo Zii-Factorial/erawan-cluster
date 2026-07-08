@@ -304,12 +304,17 @@ func (b *cappedBytes) String() string {
 }
 
 const defaultPatroniPort = 8008
+const defaultPrimaryCheckPort = 9200
 
-// CreateMySQLConfigInput is the input for creating an HAProxy config for a MySQL Router cluster.
+// CreateMySQLConfigInput is the input for creating an HAProxy config for a MySQL
+// InnoDB Cluster. This deployment does not use MySQL Router; HAProxy instead
+// polls the primary-check HTTP endpoint on each node to find the current
+// Group Replication primary.
 type CreateMySQLConfigInput struct {
-	Port    int      `json:"port"`
-	NodeIPs []string `json:"node_ips"`
-	DBPort  int      `json:"db_port"`
+	Port             int      `json:"port"`
+	NodeIPs          []string `json:"node_ips"`
+	DBPort           int      `json:"db_port"`
+	PrimaryCheckPort int      `json:"primary_check_port"` // primary-check HTTP port; defaults to 9200 when omitted
 }
 
 // CreatePGSQLConfigInput is the input for creating an HAProxy config for a PostgreSQL/Patroni cluster.
@@ -440,7 +445,11 @@ func (s *Service) CreateMySQLConfig(ctx context.Context, in CreateMySQLConfigInp
 	if err != nil {
 		return err
 	}
-	return s.applyConfig(ctx, in.Port, BuildMySQLConfig(in.Port, nodes, in.DBPort))
+	primaryCheckPort := in.PrimaryCheckPort
+	if primaryCheckPort == 0 {
+		primaryCheckPort = defaultPrimaryCheckPort
+	}
+	return s.applyConfig(ctx, in.Port, BuildMySQLConfig(in.Port, nodes, in.DBPort, primaryCheckPort))
 }
 
 /**
@@ -870,19 +879,24 @@ func waitForPortState(port int, shouldListen bool, timeout time.Duration) error 
 }
 
 /**
- * BuildMySQLConfig renders the HAProxy `listen` section for a MySQL Router
- * cluster on the given frontend port, routing to nodeIPs on dbPort. It is a
- * pure function (no I/O); CreateMySQLConfig writes and reloads the result.
+ * BuildMySQLConfig renders the HAProxy `listen` section for a MySQL InnoDB
+ * Cluster on the given frontend port, routing to nodeIPs on dbPort and using
+ * the primary-check HTTP endpoint on primaryCheckPort for leader health
+ * checks. This deployment does not run MySQL Router; primary detection is
+ * done by HAProxy itself, the same way BuildPGSQLConfig uses Patroni's
+ * /leader endpoint. It is a pure function (no I/O); CreateMySQLConfig writes
+ * and reloads the result.
  *
  * Params:
  *   port int - the port value
  *   nodeIPs []string - the nodeIPs ([]string)
  *   dbPort int - the dbPort value
+ *   primaryCheckPort int - the primaryCheckPort value
  *
  * Returns:
  *   string - the resulting string
  */
-func BuildMySQLConfig(port int, nodeIPs []string, dbPort int) string {
+func BuildMySQLConfig(port int, nodeIPs []string, dbPort int, primaryCheckPort int) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("listen node_%d\n", port))
 	b.WriteString(fmt.Sprintf("    bind *:%d\n", port))
@@ -895,34 +909,34 @@ func BuildMySQLConfig(port int, nodeIPs []string, dbPort int) string {
 	b.WriteString("    option clitcpka\n")
 	b.WriteString("    option srvtcpka\n")
 	b.WriteString("\n")
-	b.WriteString("    # TCP connect health check — MySQL Router handles its own primary detection;\n")
-	b.WriteString("    # a raw mysql-check bypasses Router and marks backends DOWN incorrectly.\n")
-	b.WriteString("    option tcp-check\n")
+	b.WriteString("    # Primary-check HTTP health check: only route to the Group Replication primary.\n")
+	b.WriteString("    # GET / → 200 means this node is the current GR primary.\n")
+	b.WriteString("    option httpchk GET /\n")
+	b.WriteString("    http-check expect status 200\n")
 	b.WriteString("\n")
 	b.WriteString("    # Proper timeouts\n")
-	b.WriteString("    timeout connect  1s\n")
-	b.WriteString("    timeout check    500ms\n")
-	b.WriteString("    timeout queue    10s\n")
+	b.WriteString("    timeout connect  500ms\n")
+	b.WriteString("    timeout check    200ms\n")
+	b.WriteString("    timeout queue    5s\n")
 	b.WriteString("    timeout client   10m\n")
 	b.WriteString("    timeout server   10m\n")
-	b.WriteString("    timeout client-fin  5s\n")
-	b.WriteString("    timeout server-fin  5s\n")
+	b.WriteString("    timeout client-fin  2s\n")
+	b.WriteString("    timeout server-fin  2s\n")
 	b.WriteString("\n")
-	b.WriteString("    # Redispatch to backup on the first retry — don't waste retries on a dead router\n")
+	b.WriteString("    # Redispatch to backup on the first retry — don't waste retries on a dead primary\n")
 	b.WriteString("    option redispatch 1\n")
-	b.WriteString("    retries 3\n")
+	b.WriteString("    retries 2\n")
 	b.WriteString("\n")
 	b.WriteString("    # Health check tuning\n")
-	b.WriteString("    # fall 3      = mark DOWN after 3 consecutive failures — avoids false DOWN on brief Router hiccup\n")
-	b.WriteString("    # rise 3      = mark UP after 3 consecutive successes — avoids premature recovery after rejoin\n")
-	b.WriteString("    # inter       = check every 2s when healthy — reduces check storm and flapping\n")
-	b.WriteString("    # fastinter   = check every 500ms when just failed (faster failure detection)\n")
-	b.WriteString("    # downinter   = check every 500ms when DOWN (consistent with fastinter)\n")
+	b.WriteString("    # fall 2      = mark DOWN after 2 consecutive failures — detects dead/demoted primary in ~1s\n")
+	b.WriteString("    # rise 2      = mark UP after 2 consecutive successes (avoid premature recovery)\n")
+	b.WriteString("    # inter       = check every 500ms when healthy\n")
+	b.WriteString("    # fastinter   = check every 100ms when just failed (detect recovery fast)\n")
+	b.WriteString("    # downinter   = check every 200ms when DOWN\n")
 	b.WriteString("    # on-marked-down shutdown-sessions = kill connections immediately when server goes down\n")
-	b.WriteString("    # slowstart 10s = ramp up traffic to rejoining server gradually — prevents connection flood\n")
-	b.WriteString("    default-server inter 2s fastinter 500ms downinter 500ms fall 3 rise 3 on-marked-down shutdown-sessions slowstart 10s\n")
+	b.WriteString(fmt.Sprintf("    default-server inter 500ms fastinter 100ms downinter 200ms fall 2 rise 2 on-marked-down shutdown-sessions on-marked-up shutdown-backup-sessions check port %d\n", primaryCheckPort))
 	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("    # Backend port %d (%s)\n", dbPort, mysqlPortDesc(dbPort)))
+	b.WriteString(fmt.Sprintf("    # Backend port %d (MySQL)\n", dbPort))
 	b.WriteString("    # Use first server as primary, others as backup\n")
 	for i, ip := range nodeIPs {
 		b.WriteString(fmt.Sprintf("    server db%d %s:%d check", i+1, ip, dbPort))
@@ -1039,7 +1053,8 @@ func (s *Service) AddMySQLMember(ctx context.Context, in AddMemberConfigInput) e
 		return fmt.Errorf("read config: %w", err)
 	}
 
-	ips, dbPort := parseConfigServers(string(data))
+	content := string(data)
+	ips, dbPort := parseConfigServers(content)
 	if dbPort == 0 {
 		return fmt.Errorf("could not determine db_port from existing config for port %d", in.Port)
 	}
@@ -1049,8 +1064,13 @@ func (s *Service) AddMySQLMember(ctx context.Context, in AddMemberConfigInput) e
 		}
 	}
 
+	primaryCheckPort := parseHealthCheckPort(content)
+	if primaryCheckPort == 0 {
+		primaryCheckPort = defaultPrimaryCheckPort
+	}
+
 	ips = append(ips, nodeIP)
-	return s.applyConfig(ctx, in.Port, BuildMySQLConfig(in.Port, ips, dbPort))
+	return s.applyConfig(ctx, in.Port, BuildMySQLConfig(in.Port, ips, dbPort, primaryCheckPort))
 }
 
 /**
@@ -1096,7 +1116,7 @@ func (s *Service) AddPGSQLMember(ctx context.Context, in AddMemberConfigInput) e
 		}
 	}
 
-	patroniPort := parsePatroniPort(content)
+	patroniPort := parseHealthCheckPort(content)
 	if patroniPort == 0 {
 		patroniPort = defaultPatroniPort
 	}
@@ -1145,8 +1165,9 @@ func parseConfigServers(content string) (ips []string, dbPort int) {
 }
 
 /**
- * parsePatroniPort extracts the patroni check port from the default-server line.
- * It reads: `    default-server ... check port {n}`
+ * parseHealthCheckPort extracts the health-check port (Patroni REST API for
+ * PostgreSQL, primary-check HTTP endpoint for MySQL) from the default-server
+ * line. It reads: `    default-server ... check port {n}`
  *
  * Params:
  *   content string - the content string
@@ -1154,7 +1175,7 @@ func parseConfigServers(content string) (ips []string, dbPort int) {
  * Returns:
  *   int - the resulting integer
  */
-func parsePatroniPort(content string) int {
+func parseHealthCheckPort(content string) int {
 	for _, line := range strings.Split(content, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if !strings.HasPrefix(trimmed, "default-server ") {
@@ -1185,26 +1206,6 @@ func parsePatroniPort(content string) int {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
-}
-
-/**
- * mysqlPortDesc.
- *
- * Params:
- *   port int - the port value
- *
- * Returns:
- *   string - the resulting string
- */
-func mysqlPortDesc(port int) string {
-	switch port {
-	case 6446:
-		return "MySQL Router R/W"
-	case 6447:
-		return "MySQL Router R/O"
-	default:
-		return "custom"
-	}
 }
 
 /**

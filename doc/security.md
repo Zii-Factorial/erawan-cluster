@@ -48,9 +48,13 @@ Ansible verifies node SSH host keys **by default**
 | `CLUSTER_SSH_KNOWN_HOSTS` | _(unset)_ | Pin a `known_hosts` file (`UserKnownHostsFile`). |
 | `CLUSTER_SSH_INSECURE_HOST_KEY` | `false` | `true` disables host-key verification (greenfield bootstrap only). |
 
-> Provisioning brand-new nodes whose host keys are not yet known will fail until
-> you either pre-seed `known_hosts` or temporarily set
-> `CLUSTER_SSH_INSECURE_HOST_KEY=true`.
+> When `CLUSTER_SSH_KNOWN_HOSTS` is set, each deploy/add-member step pins any
+> node not already present in that file via a trust-on-first-use `ssh-keyscan`
+> before Ansible connects (see `SSHPolicy.EnsureKnownHosts` in
+> `internal/cluster/core/ssh.go`), so brand-new nodes no longer need a manual
+> pre-seed step. `StrictHostKeyChecking=yes` still applies afterwards, so a
+> real key change on a previously-provisioned node (MITM, host reimage) still
+> fails the step instead of being silently trusted.
 
 ---
 

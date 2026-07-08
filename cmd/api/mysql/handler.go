@@ -162,8 +162,8 @@ func (h *Handler) ResumeJob(w http.ResponseWriter, r *http.Request) {
 
 /**
  * RecoverJob triggers a post-outage cluster recovery for the deploy job identified
- * by {jobID}. It runs the boot_recovery Ansible step (plus bootstrap_router when
- * configured) using stored credentials — no request body is required.
+ * by {jobID}. It runs the boot_recovery Ansible step using stored credentials —
+ * no request body is required.
  *
  * Receiver:
  *   h *Handler - pointer receiver; the method may mutate this Handler instance

@@ -57,10 +57,11 @@ func (s *stringList) UnmarshalJSON(data []byte) error {
 }
 
 type createMySQLRequest struct {
-	Port    int        `json:"port"`
-	NodeIPs stringList `json:"node_ips"`
-	NodeIP  string     `json:"node_ip"`
-	DBPort  int        `json:"db_port"`
+	Port             int        `json:"port"`
+	NodeIPs          stringList `json:"node_ips"`
+	NodeIP           string     `json:"node_ip"`
+	DBPort           int        `json:"db_port"`
+	PrimaryCheckPort int        `json:"primary_check_port"`
 }
 
 type createPGSQLRequest struct {
@@ -120,18 +121,20 @@ func (h *Handler) CreateMySQLConfig(w http.ResponseWriter, r *http.Request) {
 	nodes := resolveNodeIPs(req.NodeIPs, req.NodeIP)
 
 	if err := h.service.CreateMySQLConfig(r.Context(), haproxy.CreateMySQLConfigInput{
-		Port:    req.Port,
-		NodeIPs: nodes,
-		DBPort:  req.DBPort,
+		Port:             req.Port,
+		NodeIPs:          nodes,
+		DBPort:           req.DBPort,
+		PrimaryCheckPort: req.PrimaryCheckPort,
 	}); err != nil {
 		render.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	render.OK(w, "HAProxy MySQL config created and reloaded", map[string]any{
-		"port":     req.Port,
-		"node_ips": nodes,
-		"db_port":  req.DBPort,
+		"port":               req.Port,
+		"node_ips":           nodes,
+		"db_port":            req.DBPort,
+		"primary_check_port": req.PrimaryCheckPort,
 	})
 }
 

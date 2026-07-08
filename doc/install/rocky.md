@@ -109,7 +109,7 @@ sudo systemctl restart erawan-cluster
 sudo systemctl status erawan-cluster --no-pager
 sudo systemctl status haproxy --no-pager
 curl -s http://127.0.0.1:8080/health
-sudo ss -lntp | grep -E ':8080|:25000|:6446' || true
+sudo ss -lntp | grep -E ':8080|:25000|:9200' || true
 ```
 
 ## 8) Live logs
@@ -122,7 +122,7 @@ sudo journalctl -u haproxy -f
 If you use the PostgreSQL Patroni/etcd cluster API, the target topology can be either 1 primary node only or 1 primary node with 1 or more standby nodes. Use `standby_ips: []` for a small single-node deployment.
 
 ## MySQL deployment note
-If you use the MySQL InnoDB Cluster API, the target topology can be either 1 primary node only or 1 primary node with 1 or more secondary nodes. MySQL Router bootstrap is optional.
+If you use the MySQL InnoDB Cluster API, the target topology can be either 1 primary node only or 1 primary node with 1 or more secondary nodes. This deployment does not use MySQL Router; every node runs a lightweight primary-check HTTP endpoint (`:9200` by default) that HAProxy uses to find the current Group Replication primary.
 
 ## Rocky HAProxy notes
 1. Installer adds systemd override at:

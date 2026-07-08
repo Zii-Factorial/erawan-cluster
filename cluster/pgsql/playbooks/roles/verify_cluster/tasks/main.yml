@@ -49,8 +49,10 @@
     - patroni_cluster_view.status == 200
     - (patroni_cluster_view.json | default({})).members | default([]) | length >= (standby_ips | length + 1)
     - (patroni_cluster_view.json | default({})).members | default([]) | selectattr('role', 'equalto', 'leader') | list | length == 1
-  retries: "{{ ((step_timeout_seconds | default(900) | int) / 5) | int }}"
-  delay: 5
+  # Polled at 1s instead of 5s so the ceiling (step_timeout_seconds) stays the
+  # same but a cluster that's already converged is detected sooner.
+  retries: "{{ ((step_timeout_seconds | default(900) | int) / 1) | int }}"
+  delay: 1
   changed_when: false
   run_once: true
   delegate_to: "{{ groups['pgsql_primary'][0] }}"
@@ -62,8 +64,8 @@
     return_content: true
   register: _sync_check
   until: (_sync_check.json | default({})).members | default([]) | selectattr('role', 'equalto', 'sync_standby') | list | length > 0
-  retries: "{{ ((step_timeout_seconds | default(900) | int) / 5) | int }}"
-  delay: 5
+  retries: "{{ ((step_timeout_seconds | default(900) | int) / 1) | int }}"
+  delay: 1
   changed_when: false
   run_once: true
   delegate_to: "{{ groups['pgsql_primary'][0] }}"
@@ -82,8 +84,10 @@
   register: pgsql_replication_count
   changed_when: false
   until: pgsql_replication_count.stdout | int >= (standby_ips | length)
-  retries: "{{ ((step_timeout_seconds | default(900) | int) / 10) | int }}"
-  delay: 10
+  # Polled at 2s instead of 10s — same ceiling, faster detection once the new
+  # standby's WAL sender connection actually shows up.
+  retries: "{{ ((step_timeout_seconds | default(900) | int) / 2) | int }}"
+  delay: 2
   run_once: true
   delegate_to: "{{ groups['pgsql_primary'][0] }}"
   tags: ["verify_cluster"]

@@ -22,7 +22,7 @@ type Collector struct {
 
 func NewCollector() *Collector {
 	return &Collector{
-		httpClient: &http.Client{Timeout: 15 * time.Second},
+		httpClient: core.NewScrapeClient(),
 	}
 }
 

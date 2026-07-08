@@ -1,5 +1,6 @@
 ---
-postgres_exporter_bin: /usr/local/bin/postgres_exporter
+# postgres_exporter_bin and postgres_exporter_port live in group_vars/all.yml:
+# they're needed by earlier plays too (preflight's binary check, base_config's
+# UFW pass), not just this role.
 postgres_exporter_conf_dir: /etc/postgres_exporter
-postgres_exporter_port: 9187
 postgres_exporter_user: exporter

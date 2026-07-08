@@ -24,7 +24,7 @@ type Collector struct {
 
 func NewCollector() *Collector {
 	return &Collector{
-		httpClient: &http.Client{Timeout: 15 * time.Second},
+		httpClient: core.NewScrapeClient(),
 	}
 }
 
@@ -44,10 +44,15 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 	nodePort := resolvePort(req.NodeExporterPort, 9100)
 
 	// Discover the actual current primary via Patroni /leader — survives failover.
+	// Done exactly once per request and shared with every category collector;
+	// re-probing in each collector multiplied the cost when nodes were down.
 	// Falls back to nodeIPs[0] when Patroni is unreachable (single-node, non-Patroni setup).
+	leaderIP := ""
+	leaderErr := fmt.Errorf("node_ips required for cluster/failover metrics")
 	primaryIP := ""
 	if len(req.NodeIPs) > 0 {
-		if leaderIP, err := c.discoverLeader(ctx, req); err == nil {
+		leaderIP, leaderErr = c.discoverLeader(ctx, req)
+		if leaderErr == nil {
 			primaryIP = leaderIP
 		} else {
 			primaryIP = req.NodeIPs[0]
@@ -121,15 +126,15 @@ func (c *Collector) Collect(ctx context.Context, req MetricRequest) MetricRespon
 			var err error
 			switch cat {
 			case MetricCategoryCluster:
-				data, err = c.collectCluster(ctx, req)
+				data, err = c.collectCluster(ctx, req, leaderIP, leaderErr)
 			case MetricCategoryFailover:
-				data, err = c.collectFailover(ctx, req)
+				data, err = c.collectFailover(ctx, req, leaderIP, leaderErr)
 			case MetricCategoryUptime:
 				data, err = collectUptime(pgMetrics, primaryNodeUptimeSec)
 			case MetricCategoryConnections:
 				data, err = collectConnections(pgMetrics)
 			case MetricCategoryReplication:
-				data, err = c.collectReplication(ctx, pgMetrics, req)
+				data, err = c.collectReplication(ctx, pgMetrics, req, leaderIP, leaderErr)
 			case MetricCategoryPerformance:
 				data, err = collectPerformance(pgMetrics)
 			case MetricCategoryQuery:
@@ -469,7 +474,7 @@ func collectConnections(f core.MetricFamily) (*ConnectionMetric, error) {
 // replication — pg_stat_replication_* + pg_replication_slots_*
 // =============================================================================
 
-func (c *Collector) collectReplication(ctx context.Context, f core.MetricFamily, req MetricRequest) (*ReplicationMetric, error) {
+func (c *Collector) collectReplication(ctx context.Context, f core.MetricFamily, req MetricRequest, leaderIP string, leaderErr error) (*ReplicationMetric, error) {
 	m := &ReplicationMetric{
 		Members: []ReplicationMember{},
 		Slots:   []ReplicationSlot{},
@@ -505,7 +510,7 @@ func (c *Collector) collectReplication(ctx context.Context, f core.MetricFamily,
 	// Primary: Patroni /cluster is the authoritative source for all members.
 	// It includes standbys that may not appear in pg_stat_replication when
 	// the connection is lagging or in startup/catchup state.
-	if patroniMembers, err := c.patroniClusterMembers(ctx, req); err == nil && len(patroniMembers) > 0 {
+	if patroniMembers, err := c.patroniClusterMembers(ctx, req, leaderIP, leaderErr); err == nil && len(patroniMembers) > 0 {
 		zero := float64(0)
 		zeroBytes := int64(0)
 		for _, pm := range patroniMembers {
@@ -624,11 +629,11 @@ type patroniClusterMember struct {
 }
 
 // patroniClusterMembers fetches /cluster from the current Patroni leader and returns
-// all members with their host IPs, roles, states, and WAL lag.
-func (c *Collector) patroniClusterMembers(ctx context.Context, req MetricRequest) ([]patroniClusterMember, error) {
-	leaderIP, err := c.discoverLeader(ctx, req)
-	if err != nil {
-		return nil, err
+// all members with their host IPs, roles, states, and WAL lag. The leader is
+// discovered once per Collect and passed in.
+func (c *Collector) patroniClusterMembers(ctx context.Context, req MetricRequest, leaderIP string, leaderErr error) ([]patroniClusterMember, error) {
+	if leaderErr != nil {
+		return nil, leaderErr
 	}
 	patroniPort := resolvePort(req.PatroniPort, 8008)
 	clusterState, err := c.patroniGET(ctx, fmt.Sprintf("http://%s:%d/cluster", leaderIP, patroniPort))
@@ -1102,10 +1107,9 @@ func collectMaintenance(f core.MetricFamily) (*MaintenanceMetric, error) {
 
 const patroniBodyLimit = 1 << 20
 
-func (c *Collector) collectCluster(ctx context.Context, req MetricRequest) (*ClusterMetric, error) {
-	leaderIP, err := c.discoverLeader(ctx, req)
-	if err != nil {
-		return nil, err
+func (c *Collector) collectCluster(ctx context.Context, req MetricRequest, leaderIP string, leaderErr error) (*ClusterMetric, error) {
+	if leaderErr != nil {
+		return nil, leaderErr
 	}
 	patroniPort := resolvePort(req.PatroniPort, 8008)
 	base := fmt.Sprintf("http://%s:%d", leaderIP, patroniPort)
@@ -1171,10 +1175,9 @@ func (c *Collector) collectCluster(ctx context.Context, req MetricRequest) (*Clu
 	return m, nil
 }
 
-func (c *Collector) collectFailover(ctx context.Context, req MetricRequest) (*FailoverMetric, error) {
-	leaderIP, err := c.discoverLeader(ctx, req)
-	if err != nil {
-		return nil, err
+func (c *Collector) collectFailover(ctx context.Context, req MetricRequest, leaderIP string, leaderErr error) (*FailoverMetric, error) {
+	if leaderErr != nil {
+		return nil, leaderErr
 	}
 	patroniPort := resolvePort(req.PatroniPort, 8008)
 	base := fmt.Sprintf("http://%s:%d", leaderIP, patroniPort)
@@ -1234,26 +1237,46 @@ func (c *Collector) discoverLeader(ctx context.Context, req MetricRequest) (stri
 	if len(req.NodeIPs) == 0 {
 		return "", fmt.Errorf("node_ips required for cluster/failover metrics")
 	}
+	// Probe every node in parallel: exactly one node (the leader) answers
+	// /leader with 200, replicas answer 503. During failover the dead old
+	// primary is often first in node_ips — probing sequentially made every
+	// metric request wait out its full connect timeout before reaching the
+	// new leader.
+	probeCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	found := make(chan string, len(req.NodeIPs))
+	var wg sync.WaitGroup
 	for _, ip := range req.NodeIPs {
 		ip = strings.TrimSpace(ip)
 		if ip == "" {
 			continue
 		}
-		url := fmt.Sprintf("http://%s:%d/leader", ip, patroniPort)
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			continue
-		}
-		resp, err := c.httpClient.Do(httpReq)
-		if err != nil {
-			continue
-		}
-		status := resp.StatusCode
-		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		if status == http.StatusOK {
-			return ip, nil
-		}
+		wg.Add(1)
+		go func(ip string) {
+			defer wg.Done()
+			url := fmt.Sprintf("http://%s:%d/leader", ip, patroniPort)
+			httpReq, err := http.NewRequestWithContext(probeCtx, http.MethodGet, url, nil)
+			if err != nil {
+				return
+			}
+			resp, err := c.httpClient.Do(httpReq)
+			if err != nil {
+				return
+			}
+			status := resp.StatusCode
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if status == http.StatusOK {
+				found <- ip
+			}
+		}(ip)
+	}
+	go func() {
+		wg.Wait()
+		close(found)
+	}()
+	if ip, ok := <-found; ok {
+		return ip, nil
 	}
 	return "", fmt.Errorf("no Patroni leader found among node_ips %v", req.NodeIPs)
 }

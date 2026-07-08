@@ -6,10 +6,28 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// NewScrapeClient returns an http.Client tuned for scraping cluster nodes.
+// The 3s dial timeout makes probes of dead hosts (e.g. the old primary right
+// after a failover, or a destroyed VM) fail fast instead of holding the whole
+// metric collection for the full 15s request timeout — collectors join on the
+// slowest node, so one black-holed host otherwise delays every response.
+func NewScrapeClient() *http.Client {
+	return &http.Client{
+		Timeout: 15 * time.Second,
+		Transport: &http.Transport{
+			DialContext:         (&net.Dialer{Timeout: 3 * time.Second}).DialContext,
+			MaxIdleConnsPerHost: 4,
+			IdleConnTimeout:     90 * time.Second,
+		},
+	}
+}
 
 // Sample is one data point from a Prometheus text-format metric.
 type Sample struct {

@@ -37,6 +37,30 @@ type AnsibleSpec struct {
 }
 
 /**
+ * FailedStep builds a StepResult for a step that failed before Ansible was
+ * even invoked (e.g. host-key pinning). It mirrors the shape AnsibleRun
+ * produces on failure so callers can return it interchangeably.
+ *
+ * Params:
+ *   name string - recorded as StepResult.Name
+ *   err error - the reason the step failed
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
+func FailedStep(name string, err error) StepResult {
+	now := time.Now().UTC()
+	return StepResult{
+		Name:      name,
+		Status:    JobStatusFailed,
+		StartedAt: now,
+		EndedAt:   now,
+		ExitCode:  -1,
+		Message:   err.Error(),
+	}
+}
+
+/**
  * AnsibleRun executes one ansible-playbook invocation and maps its outcome to a
  * StepResult. Secrets travel via an on-disk vars.json (0600) passed with
  * `--extra-vars @file` — never on the command line or through a shell — so they

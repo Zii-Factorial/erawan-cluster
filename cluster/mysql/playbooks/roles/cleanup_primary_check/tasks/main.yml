@@ -1,28 +1,28 @@
 ---
 # ---------------------------------------------------------------------------
-# Router cleanup — runs on all nodes
+# Primary-check endpoint cleanup — runs on all nodes
 # ---------------------------------------------------------------------------
-- name: Stop and disable mysqlrouter service
+- name: Stop and disable MySQL primary-check service
   ansible.builtin.systemd:
-    name: "{{ router_service_name }}"
+    name: erawan-mysql-primary-check.service
     state: stopped
     enabled: false
   failed_when: false
   tags: ["rollback"]
 
-- name: Remove mysqlrouter systemd service file
+- name: Remove MySQL primary-check systemd service file
   ansible.builtin.file:
-    path: "/etc/systemd/system/{{ router_service_name }}.service"
+    path: /etc/systemd/system/erawan-mysql-primary-check.service
     state: absent
   notify: reload systemd
   tags: ["rollback"]
 
-- name: Remove mysqlrouter config directory
+- name: Remove MySQL primary-check script
   ansible.builtin.file:
-    path: "/etc/mysqlrouter/{{ cluster_name }}"
+    path: /usr/local/bin/erawan-mysql-primary-check
     state: absent
   tags: ["rollback"]
 
-- name: Flush handlers to reload systemd after router removal
+- name: Flush handlers to reload systemd after primary-check removal
   ansible.builtin.meta: flush_handlers
   tags: ["rollback"]

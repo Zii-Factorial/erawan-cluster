@@ -49,26 +49,33 @@ func TestValidatePort(t *testing.T) {
 	}
 }
 
-func TestBuildMySQLConfigFailoverFriendlyTCP(t *testing.T) {
-	cfg := haproxy.BuildMySQLConfig(25010, []string{"10.10.255.102", "10.10.146.139"}, 6446)
+func TestBuildMySQLConfigUsesPrimaryCheckHTTPChk(t *testing.T) {
+	cfg := haproxy.BuildMySQLConfig(25010, []string{"10.10.255.102", "10.10.146.139"}, 3306, 9200)
 	for _, want := range []string{
 		"listen node_25010",
 		"balance first",
 		"option clitcpka",
 		"option srvtcpka",
-		"option tcp-check",
+		"option httpchk GET /",
+		"http-check expect status 200",
 		"option redispatch 1",
-		"server db1 10.10.255.102:6446 check",
-		"server db2 10.10.146.139:6446 check backup",
+		"check port 9200",
+		"server db1 10.10.255.102:3306 check",
+		"server db2 10.10.146.139:3306 check backup",
 	} {
 		if !strings.Contains(cfg, want) {
 			t.Fatalf("expected MySQL config to contain %q\n%s", want, cfg)
 		}
 	}
-	for _, bad := range []string{"option httpchk", "option mysql-check"} {
-		if strings.Contains(cfg, bad) {
-			t.Fatalf("MySQL config must not contain %q", bad)
-		}
+	if strings.Contains(cfg, "option mysql-check") {
+		t.Fatalf("MySQL config must not contain %q", "option mysql-check")
+	}
+}
+
+func TestBuildMySQLConfigCustomPrimaryCheckPort(t *testing.T) {
+	cfg := haproxy.BuildMySQLConfig(25010, []string{"10.0.0.1"}, 3306, 9201)
+	if !strings.Contains(cfg, "check port 9201") {
+		t.Fatalf("expected custom primary-check port in config\n%s", cfg)
 	}
 }
 

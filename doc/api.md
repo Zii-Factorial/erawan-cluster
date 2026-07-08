@@ -40,7 +40,9 @@ Returns API status and version.
 
 ### `POST /haproxy/config/mysql`
 
-Create a new HAProxy frontend+backend for a MySQL cluster.
+Create a new HAProxy frontend+backend for a MySQL InnoDB Cluster. Includes a
+primary-check health-check backend (this deployment does not use MySQL
+Router — see [doc/mysql.md](mysql.md#primary-check-endpoint)).
 
 **Request:**
 | Field | Type | Required | Description |
@@ -48,18 +50,20 @@ Create a new HAProxy frontend+backend for a MySQL cluster.
 | `port` | int | yes | HAProxy frontend listen port (e.g. `25041`) |
 | `node_ips` | string[] or string | yes | DB node IPs to add as backends |
 | `db_port` | int | yes | MySQL port on the DB nodes (default `3306`) |
+| `primary_check_port` | int | no | Primary-check HTTP port for health checks (default `9200`) |
 
 ```json
 {
   "port": 25041,
   "node_ips": ["10.0.0.1", "10.0.0.2"],
-  "db_port": 3306
+  "db_port": 3306,
+  "primary_check_port": 9200
 }
 ```
 
 **Response `data`:**
 ```json
-{ "port": 25041, "node_ips": ["10.0.0.1", "10.0.0.2"], "db_port": 3306 }
+{ "port": 25041, "node_ips": ["10.0.0.1", "10.0.0.2"], "db_port": 3306, "primary_check_port": 9200 }
 ```
 
 ---
@@ -166,7 +170,7 @@ Deploy a MySQL InnoDB Cluster. Returns immediately with a job ID; the deployment
 | `new_user_superuser` | bool | no | `true` = grant `ALL PRIVILEGES ON *.*` + all dynamic privileges (full server-level superuser). `false` = `ALL PRIVILEGES ON new_db.*` only. Default `true` |
 | `new_db` | string | no | Application database to create |
 | `assume_prepared` | bool | no | Skip node preparation steps if already prepared (default `false`) |
-| `bootstrap_router` | bool | no | Bootstrap MySQL Router on each node (default `true`) |
+| `reset_host_keys` | bool | no | Forget any previously pinned SSH host key for `primary_ip`/`standby_ips` and trust their current key. Use when a node was rebuilt/reimaged and its host key changed; otherwise the deploy fails with a host-key verification error (default `false`) |
 | `ssh_port` | int | no | SSH port for Ansible (default `22`) |
 | `mysql_port` | int | no | MySQL port on DB nodes (default `3306`) |
 | `mysql_version` | int | no | Major version: `8` = 8.x, `9` = 9.x (default `8`) |
@@ -183,7 +187,6 @@ Deploy a MySQL InnoDB Cluster. Returns immediately with a job ID; the deployment
   "new_user_password": "AppUser#2026",
   "new_user_superuser": true,
   "new_db": "appdb",
-  "bootstrap_router": true,
   "mysql_version": 8,
   "step_timeout_seconds": 900
 }
@@ -266,6 +269,7 @@ Resume a failed MySQL deploy job from the last completed step.
 |-------|------|-------------|
 | `admin_password` | string | Cluster admin password |
 | `new_user_password` | string | Application user password (if applicable) |
+| `reset_host_keys` | bool | Forget any previously pinned SSH host key for this cluster's nodes and trust their current key (default `false`) |
 
 ```json
 {
@@ -292,12 +296,15 @@ Roll back a MySQL cluster deployment (removes cluster config, unjoins nodes).
 
 Add one or more secondary nodes to an existing MySQL InnoDB Cluster.
 
+Only one add/remove-member operation may run at a time per cluster (`job_id`), and the deploy job must not itself be running (mid-deploy or mid-resume). Two concurrent member operations both mutate Group Replication membership and can transiently break quorum on the primary — the API rejects the second call immediately with an error instead of racing inside Ansible. Wait for the current operation to finish (poll **Get Job**) before starting another.
+
 **Request:**
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `job_id` | string | yes | Source deploy job ID (provides cluster config) |
 | `member_ips` | string[] | yes | IPs of the new nodes to join |
 | `assume_prepared` | bool | no | Skip node preparation if already done |
+| `reset_host_keys` | bool | no | Forget any previously pinned SSH host key for the new node(s) and trust their current key (default `false`) |
 
 ```json
 {
@@ -310,7 +317,7 @@ Add one or more secondary nodes to an existing MySQL InnoDB Cluster.
 
 ### `DELETE /cluster/mysql/members`
 
-Remove a secondary node from the MySQL InnoDB Cluster.
+Remove a secondary node from the MySQL InnoDB Cluster. Subject to the same one-at-a-time member-operation rule as **Add Member** above.
 
 **Request:**
 | Field | Type | Required | Description |
@@ -519,6 +526,7 @@ Deploy a PostgreSQL Patroni cluster. Returns immediately with a job ID.
 | `new_user_ssl_required` | bool | no | Require SSL for the application user via `pg_hba.conf` (`hostssl`/`hostnossl` rules). Default `true` |
 | `new_user_superuser` | bool | no | `true` = `LOGIN SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS` (full superuser). `false` = `LOGIN NOSUPERUSER NOINHERIT NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`. Default `true` |
 | `new_db` | string | no | Application database to create |
+| `reset_host_keys` | bool | no | Forget any previously pinned SSH host key for `primary_ip`/`standby_ips` and trust their current key. Use when a node was rebuilt/reimaged and its host key changed; otherwise the deploy fails with a host-key verification error (default `false`) |
 | `ssh_port` | int | no | SSH port for Ansible (default `22`) |
 | `postgres_port` | int | no | PostgreSQL port on DB nodes (default `5432`) |
 | `postgres_version` | int | no | Major version: `14`, `15`, `16`, `17`, `18` (default `16`) |
@@ -580,6 +588,7 @@ Resume a failed PostgreSQL deploy job.
 | `replicator_password` | string | Replication user password |
 | `admin_password` | string | Admin user password |
 | `new_user_password` | string | Application user password (if applicable) |
+| `reset_host_keys` | bool | Forget any previously pinned SSH host key for this cluster's nodes and trust their current key (default `false`) |
 
 ---
 
@@ -587,17 +596,22 @@ Resume a failed PostgreSQL deploy job.
 
 Add one or more standby nodes to an existing Patroni cluster.
 
+Only one add/remove-member operation may run at a time per cluster (`job_id`), and the deploy job must not itself be running (mid-deploy or mid-resume). Two concurrent member operations both mutate etcd/Patroni membership and can transiently break quorum on the primary — the API rejects the second call immediately with an error instead of racing inside Ansible. Wait for the current operation to finish (poll **Get Job**) before starting another.
+
+Before registering the new member, the operation cleans up stale etcd registrations left behind by nodes that were destroyed without going through **Remove Member** (their dead voters otherwise wedge etcd with `unhealthy cluster` / `context deadline exceeded`). If those stale voters have already cost the primary its quorum, the operation recovers the primary's etcd automatically via `force-new-cluster` — but only when every other registered voter is stale and unreachable; otherwise it fails with an explanation rather than risk splitting a live cluster.
+
 **Request:**
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `job_id` | string | yes | Source deploy job ID |
 | `member_ips` | string[] | yes | IPs of new nodes to join |
+| `reset_host_keys` | bool | no | Forget any previously pinned SSH host key for the new node(s) and trust their current key (default `false`) |
 
 ---
 
 ### `DELETE /cluster/pgsql/members`
 
-Remove a standby node from the Patroni cluster.
+Remove a standby node from the Patroni cluster. Subject to the same one-at-a-time member-operation rule as **Add Member** above.
 
 **Request:**
 | Field | Type | Required | Description |
