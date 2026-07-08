@@ -467,6 +467,59 @@ func (s *Service) executeRecovery(ctx context.Context, recoveryJob *Job, deployJ
 }
 
 /**
+ * claimMemberOpLock atomically marks deployJobID as owned by memberJobID for
+ * the duration of a member operation. Two add/remove-member calls racing
+ * against the same cluster both mutate etcd/Patroni membership (e.g.
+ * overlapping learner promotions), which can transiently break quorum on the
+ * primary — see core.Job.ActiveMemberJobID. Rejecting the second caller up
+ * front surfaces a clear error immediately instead of letting it fail deep
+ * inside Ansible a minute later.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   deployJobID string - the deploy job whose cluster is being claimed
+ *   memberJobID string - the member job claiming it
+ *
+ * Returns:
+ *   error - non-nil if the deploy job is still running or another member
+ *     operation already holds the claim
+ */
+func (s *Service) claimMemberOpLock(deployJobID, memberJobID string) error {
+	return s.store.Update(deployJobID, func(j *Job) error {
+		if j.Status == JobStatusRunning {
+			return fmt.Errorf("deploy job %s is still running; wait for it to finish before starting a member operation", deployJobID)
+		}
+		if j.ActiveMemberJobID != "" {
+			return fmt.Errorf("another member operation (%s) is already running against job %s; wait for it to finish first", j.ActiveMemberJobID, deployJobID)
+		}
+		j.ActiveMemberJobID = memberJobID
+		return nil
+	})
+}
+
+/**
+ * releaseMemberOpLock clears deployJobID's claim if it is still held by
+ * memberJobID. Safe to call multiple times or after a failed claim.
+ *
+ * Receiver:
+ *   s *Service - pointer receiver; the method may mutate this Service instance
+ *
+ * Params:
+ *   deployJobID string - the deploy job to release
+ *   memberJobID string - the member job releasing it
+ */
+func (s *Service) releaseMemberOpLock(deployJobID, memberJobID string) {
+	_ = s.store.Update(deployJobID, func(j *Job) error {
+		if j.ActiveMemberJobID == memberJobID {
+			j.ActiveMemberJobID = ""
+		}
+		return nil
+	})
+}
+
+/**
  * AddMember.
  *
  * Receiver:
@@ -508,8 +561,13 @@ func (s *Service) AddMember(ctx context.Context, req AddMemberRequest) (*Job, er
 		return nil, fmt.Errorf("load job secret %q: %w", req.JobID, err)
 	}
 
+	memberJobID := newJobID()
+	if err := s.claimMemberOpLock(req.JobID, memberJobID); err != nil {
+		return nil, err
+	}
+
 	memberJob := &Job{
-		ID:                newJobID(),
+		ID:                memberJobID,
 		Status:            JobStatusRunning,
 		CreatedAt:         time.Now().UTC(),
 		UpdatedAt:         time.Now().UTC(),
@@ -524,19 +582,23 @@ func (s *Service) AddMember(ctx context.Context, req AddMemberRequest) (*Job, er
 	}
 	s.updateJobProgress(memberJob)
 	if err := s.store.Save(memberJob); err != nil {
+		s.releaseMemberOpLock(req.JobID, memberJobID)
 		return nil, err
 	}
 
 	bgMemberJob, err := s.store.Load(memberJob.ID)
 	if err != nil {
+		s.releaseMemberOpLock(req.JobID, memberJobID)
 		return nil, err
 	}
 	bgDeployJob, err := s.store.Load(req.JobID)
 	if err != nil {
+		s.releaseMemberOpLock(req.JobID, memberJobID)
 		return nil, err
 	}
 	resetHostKeys := req.ResetHostKeys
 	s.start(func() {
+		defer s.releaseMemberOpLock(req.JobID, memberJobID)
 		s.executeMemberAdd(s.ctx, bgMemberJob, bgDeployJob, resetHostKeys)
 	})
 	return memberJob, nil
@@ -587,8 +649,13 @@ func (s *Service) RemoveMember(ctx context.Context, req RemoveMemberRequest) (*J
 		return nil, fmt.Errorf("load job secret %q: %w", req.JobID, err)
 	}
 
+	memberJobID := newJobID()
+	if err := s.claimMemberOpLock(req.JobID, memberJobID); err != nil {
+		return nil, err
+	}
+
 	memberJob := &Job{
-		ID:                newJobID(),
+		ID:                memberJobID,
 		Status:            JobStatusRunning,
 		CreatedAt:         time.Now().UTC(),
 		UpdatedAt:         time.Now().UTC(),
@@ -603,19 +670,23 @@ func (s *Service) RemoveMember(ctx context.Context, req RemoveMemberRequest) (*J
 	}
 	s.updateJobProgress(memberJob)
 	if err := s.store.Save(memberJob); err != nil {
+		s.releaseMemberOpLock(req.JobID, memberJobID)
 		return nil, err
 	}
 
 	bgMemberJob, err := s.store.Load(memberJob.ID)
 	if err != nil {
+		s.releaseMemberOpLock(req.JobID, memberJobID)
 		return nil, err
 	}
 	bgDeployJob, err := s.store.Load(req.JobID)
 	if err != nil {
+		s.releaseMemberOpLock(req.JobID, memberJobID)
 		return nil, err
 	}
 	force := req.Force
 	s.start(func() {
+		defer s.releaseMemberOpLock(req.JobID, memberJobID)
 		s.executeMemberRemove(s.ctx, bgMemberJob, bgDeployJob, force)
 	})
 	return memberJob, nil

@@ -296,6 +296,8 @@ Roll back a MySQL cluster deployment (removes cluster config, unjoins nodes).
 
 Add one or more secondary nodes to an existing MySQL InnoDB Cluster.
 
+Only one add/remove-member operation may run at a time per cluster (`job_id`), and the deploy job must not itself be running (mid-deploy or mid-resume). Two concurrent member operations both mutate Group Replication membership and can transiently break quorum on the primary — the API rejects the second call immediately with an error instead of racing inside Ansible. Wait for the current operation to finish (poll **Get Job**) before starting another.
+
 **Request:**
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -315,7 +317,7 @@ Add one or more secondary nodes to an existing MySQL InnoDB Cluster.
 
 ### `DELETE /cluster/mysql/members`
 
-Remove a secondary node from the MySQL InnoDB Cluster.
+Remove a secondary node from the MySQL InnoDB Cluster. Subject to the same one-at-a-time member-operation rule as **Add Member** above.
 
 **Request:**
 | Field | Type | Required | Description |
@@ -594,6 +596,8 @@ Resume a failed PostgreSQL deploy job.
 
 Add one or more standby nodes to an existing Patroni cluster.
 
+Only one add/remove-member operation may run at a time per cluster (`job_id`), and the deploy job must not itself be running (mid-deploy or mid-resume). Two concurrent member operations both mutate etcd/Patroni membership and can transiently break quorum on the primary — the API rejects the second call immediately with an error instead of racing inside Ansible. Wait for the current operation to finish (poll **Get Job**) before starting another.
+
 **Request:**
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -605,7 +609,7 @@ Add one or more standby nodes to an existing Patroni cluster.
 
 ### `DELETE /cluster/pgsql/members`
 
-Remove a standby node from the Patroni cluster.
+Remove a standby node from the Patroni cluster. Subject to the same one-at-a-time member-operation rule as **Add Member** above.
 
 **Request:**
 | Field | Type | Required | Description |
