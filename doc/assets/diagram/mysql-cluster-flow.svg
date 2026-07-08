@@ -121,7 +121,7 @@
 
   <rect x="1040" y="210" width="440" height="56" rx="7" fill="#0f1826" stroke="#60a5fa" stroke-width="1.3"/>
   <text x="1054" y="230" font-size="12.5" font-weight="600" fill="#f5f5f9">2 · Install recovery script + systemd unit</text>
-  <text x="1054" y="248" font-size="10.5" fill="#9db8e3">erawan-mysql-boot-recovery.service (Type=oneshot)</text>
+  <text x="1054" y="248" font-size="10.5" fill="#9db8e3">unit enabled for future host reboots only (Type=oneshot)</text>
 
   <rect x="1040" y="280" width="440" height="56" rx="7" fill="#122036" stroke="#f59e0b" stroke-width="1.5"/>
   <text x="1054" y="300" font-size="12.5" font-weight="600" fill="#f5f5f9">3 · systemctl start mysql (all nodes)</text>
@@ -130,17 +130,17 @@
   <text x="1405" y="297" text-anchor="middle" font-size="9.5" font-weight="700" fill="#1a1206">FIXED</text>
 
   <rect x="1040" y="350" width="440" height="190" rx="7" fill="#122036" stroke="#f59e0b" stroke-width="1.5"/>
-  <text x="1054" y="370" font-size="12.5" font-weight="600" fill="#f5f5f9">4 · Run recovery service synchronously</text>
+  <text x="1054" y="370" font-size="12.5" font-weight="600" fill="#f5f5f9">4 · Run recovery once, from the primary</text>
   <rect x="1382" y="354" width="46" height="18" rx="9" fill="#f59e0b"/>
   <text x="1405" y="367" text-anchor="middle" font-size="9.5" font-weight="700" fill="#1a1206">FIXED</text>
-  <text x="1054" y="390" font-size="10.5" fill="#9db8e3">state: started now blocks until the oneshot unit exits</text>
-  <text x="1054" y="406" font-size="10.5" fill="#9db8e3">(was: only "enabled" — armed for next real reboot only)</text>
+  <text x="1054" y="390" font-size="10.5" fill="#9db8e3">script runs directly with delay 0 — no per-node race;</text>
+  <text x="1054" y="406" font-size="10.5" fill="#9db8e3">the staggered 30/60/90s systemd units are boot-time only</text>
   <text x="1054" y="426" font-size="10.5" fill="#cdd6e0">· wait ≤120s for local mysqld to accept connections</text>
-  <text x="1054" y="444" font-size="10.5" fill="#cdd6e0">· staggered delay 30/60/90s by node index</text>
-  <text x="1054" y="462" font-size="10.5" fill="#cdd6e0">· if another member already ONLINE → rejoin_instance()</text>
-  <text x="1054" y="480" font-size="10.5" fill="#cdd6e0">· else → dba.reboot_cluster_from_complete_outage()</text>
-  <text x="1054" y="498" font-size="10.5" fill="#ffd48a">· mysqlsh call now wrapped in timeout 300s (FIXED)</text>
-  <text x="1054" y="516" font-size="10.5" fill="#ffd48a">· real mysqlsh failures now exit non-zero (FIXED —</text>
+  <text x="1054" y="444" font-size="10.5" fill="#cdd6e0">· already ONLINE? → exit now (~2s no-op on deploy)</text>
+  <text x="1054" y="462" font-size="10.5" fill="#cdd6e0">· else → dba.reboot_cluster_from_complete_outage()</text>
+  <text x="1054" y="480" font-size="10.5" fill="#cdd6e0">  which rejoins every reachable member itself</text>
+  <text x="1054" y="498" font-size="10.5" fill="#ffd48a">· mysqlsh call wrapped in timeout 300s (FIXED)</text>
+  <text x="1054" y="516" font-size="10.5" fill="#ffd48a">· real mysqlsh failures exit non-zero (FIXED —</text>
   <text x="1054" y="532" font-size="10.5" fill="#ffd48a">  previously always exited 0, hiding genuine failures)</text>
 
   <rect x="1040" y="560" width="440" height="110" rx="7" fill="#122036" stroke="#f59e0b" stroke-width="1.5"/>

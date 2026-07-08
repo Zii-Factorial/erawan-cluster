@@ -43,13 +43,26 @@
     state: started
   tags: ["boot_recovery"]
 
-# Type=oneshot: "state: started" blocks until the script exits, so this also
-# runs recovery immediately (needed for on-demand /start and /recover — the
-# unit's WantedBy=multi-user.target only fires it on a real host reboot).
-- name: Enable and run boot recovery service on all nodes
+# Enabled only — the staggered per-node systemd race (30/60/90s delays) is
+# for unattended host reboots. Starting the unit on every node here made all
+# three race each other: secondaries hit benign rejoin errors and failed the
+# play, and deploys blocked through the full stagger delay for nothing.
+- name: Enable boot recovery service for future reboots
   ansible.builtin.systemd:
     name: erawan-mysql-boot-recovery.service
     daemon_reload: true
     enabled: true
-    state: started
+  tags: ["boot_recovery"]
+
+# On-demand recovery (deploy / start / recover): run the script once, from
+# the primary, with no stagger delay. reboot_cluster_from_complete_outage()
+# rejoins every reachable member itself; verify_cluster and the GR watchdog
+# pick up any straggler. If the cluster is already online the script exits
+# immediately, so on a fresh deploy this is a ~2s no-op.
+- name: Run cluster recovery from the primary
+  ansible.builtin.command: /usr/local/bin/erawan-mysql-boot-recovery
+  environment:
+    BOOT_RECOVERY_DELAY_SECONDS: "0"
+  when: inventory_hostname in groups['mysql_primary']
+  changed_when: true
   tags: ["boot_recovery"]

@@ -236,7 +236,12 @@ Verify: `sudo cat /etc/erawan-cluster/mysql-recovery.json`
 
 ### `/usr/local/bin/erawan-mysql-boot-recovery` (permissions: 0755)
 
-Runs after MySQL and the network are ready — either at boot (via `WantedBy=multi-user.target` on the systemd service below) or synchronously on demand: `POST /cluster/mysql/start` (or `/recover`) explicitly runs `systemctl start mysql` on every node and then triggers this service with `state: started`, which blocks until the script exits. On a complete outage, the first node to run calls `dba.reboot_cluster_from_complete_outage()`; the others detect the cluster is already active and call `cluster.rejoinInstance()` to join it. The `mysqlsh` call itself is wrapped in `timeout 300` (`boot_recovery_mysqlsh_timeout_seconds`), and a genuine failure now propagates as a real exit code — previously the script always exited 0, so a failed recovery could be silently reported as a success.
+Runs in two different ways:
+
+- **At boot** (unattended): the systemd service below fires on every node with staggered delays (30/60/90s). The first node to wake calls `dba.reboot_cluster_from_complete_outage()`; the others detect the cluster is already active and call `cluster.rejoinInstance()` to join it.
+- **On demand**: `POST /cluster/mysql/start` (or `/recover`) runs `systemctl start mysql` on every node, then runs this script **once, on the primary only, with `BOOT_RECOVERY_DELAY_SECONDS=0`**. `reboot_cluster_from_complete_outage()` rejoins every reachable member itself, so no per-node race is needed; `verify_cluster` (with retries) then confirms all members reached ONLINE, and the GR watchdog picks up any straggler. If the cluster is already online, the script exits immediately — on a fresh deploy this step is a ~2-second no-op.
+
+The `mysqlsh` call is wrapped in `timeout 300` (`boot_recovery_mysqlsh_timeout_seconds`), and a genuine failure propagates as a real exit code — previously the script always exited 0, so a failed recovery could be silently reported as a success.
 
 **Same script on all nodes.** The staggered delay comes from `BOOT_RECOVERY_DELAY_SECONDS` in the service unit.
 
