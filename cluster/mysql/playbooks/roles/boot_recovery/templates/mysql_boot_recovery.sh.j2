@@ -119,5 +119,12 @@ PY
 if mysqlsh --no-wizard --py --file "$_tmp"; then
   logger -t erawan-boot-recovery "boot recovery succeeded"
 else
-  logger -t erawan-boot-recovery "boot recovery failed — GR watchdog will retry"
+  rc=$?
+  # A benign "rejoin failed, watchdog will retry" outcome never raises in the
+  # Python block above, so mysqlsh still exits 0 for it — only a genuine
+  # unhandled exception (e.g. reboot_cluster_from_complete_outage itself
+  # failing) lands here. Propagate it so the caller (systemd, then Ansible,
+  # then the job status) sees the real failure instead of a false success.
+  logger -t erawan-boot-recovery "boot recovery failed (mysqlsh exit $rc) — see this log for the mysqlsh traceback"
+  exit "$rc"
 fi
