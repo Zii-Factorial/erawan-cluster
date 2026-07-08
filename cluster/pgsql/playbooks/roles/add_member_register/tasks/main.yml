@@ -31,31 +31,29 @@
   when: _etcd_quick_health.rc != 0
   tags: ["add_member_register"]
   block:
-    # Serializable member list is served from the local server's raft state and
-    # works without quorum, unlike `etcdctl member list` (linearizable).
-    - name: Fetch etcd member list without quorum (serializable local read)
-      ansible.builtin.uri:
-        url: "http://127.0.0.1:{{ etcd_client_port }}/v3/cluster/member/list"
-        method: POST
-        body_format: json
-        body: {}
-        return_content: true
-        timeout: 5
-      register: _etcd_local_members
-
     # force-new-cluster resets membership to just the local node, so it is only
     # safe when every other registered voter is stale (not in the control
     # plane's node list) and demonstrably dead. Otherwise fail with guidance.
+    # The member list is fetched serializable (linearizable=false) straight
+    # from the local etcd JSON gateway: that read is served from local raft
+    # state and works without quorum, unlike `etcdctl member list`.
     - name: Evaluate whether quorum loss is auto-recoverable
       ansible.builtin.shell: |
         set -euo pipefail
         python3 - <<'PYEOF'
         import json, os, sys, urllib.request
 
-        members = json.loads(os.environ['ETCD_MEMBERS_JSON']).get('members', [])
         expected = set(filter(None, os.environ['EXPECTED_IPS'].split(',')))
         primary_ip = os.environ['PRIMARY_IP']
         client_port = os.environ['ETCD_CLIENT_PORT']
+
+        list_req = urllib.request.Request(
+            'http://127.0.0.1:%s/v3/cluster/member/list' % client_port,
+            data=b'{}',
+            headers={'Content-Type': 'application/json'},
+        )
+        with urllib.request.urlopen(list_req, timeout=5) as resp:
+            members = json.load(resp).get('members', [])
 
         def peer_ips(member):
             return {u.split('//', 1)[-1].rsplit(':', 1)[0] for u in member.get('peerURLs', [])}
@@ -89,7 +87,6 @@
       args:
         executable: /bin/bash
       environment:
-        ETCD_MEMBERS_JSON: "{{ _etcd_local_members.content }}"
         EXPECTED_IPS: "{{ _etcd_expected_ips | join(',') }}"
         PRIMARY_IP: "{{ primary_ip }}"
         ETCD_CLIENT_PORT: "{{ etcd_client_port | string }}"
