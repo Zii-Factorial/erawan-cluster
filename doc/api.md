@@ -598,6 +598,8 @@ Add one or more standby nodes to an existing Patroni cluster.
 
 Only one add/remove-member operation may run at a time per cluster (`job_id`), and the deploy job must not itself be running (mid-deploy or mid-resume). Two concurrent member operations both mutate etcd/Patroni membership and can transiently break quorum on the primary — the API rejects the second call immediately with an error instead of racing inside Ansible. Wait for the current operation to finish (poll **Get Job**) before starting another.
 
+Before registering the new member, the operation cleans up stale etcd registrations left behind by nodes that were destroyed without going through **Remove Member** (their dead voters otherwise wedge etcd with `unhealthy cluster` / `context deadline exceeded`). If those stale voters have already cost the primary its quorum, the operation recovers the primary's etcd automatically via `force-new-cluster` — but only when every other registered voter is stale and unreachable; otherwise it fails with an explanation rather than risk splitting a live cluster.
+
 **Request:**
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
