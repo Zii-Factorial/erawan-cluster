@@ -6,8 +6,14 @@
 #      so no standby restarts ahead of WAL it never received.
 #   2. Stop Patroni on the primary — Patroni performs a clean (fast) PostgreSQL
 #      shutdown, checkpointing and flushing WAL to disk.
-#   3. Stop etcd on all nodes — only after every Patroni is down, so no member
-#      loses its DCS session mid-shutdown and triggers a spurious failover.
+#   3. Force-stop any PostgreSQL cluster still running on any node. Belt and
+#      suspenders: Patroni's own shutdown handling of PostgreSQL isn't always
+#      reliable (e.g. systemd's TimeoutSec expiring mid-checkpoint can kill
+#      only the Patroni process and leave postgres running, unsupervised).
+#      This step guarantees postgres is actually down, not just Patroni.
+#   4. Stop etcd on all nodes — only after every Patroni/postgres is down, so
+#      no member loses its DCS session mid-shutdown and triggers a spurious
+#      failover.
 #
 # Data directories (PostgreSQL, etcd) are never touched. Services stay
 # `enabled`, but a stopped cluster should be started with the start/recover
@@ -43,7 +49,28 @@
         state: stopped
 
 # ---------------------------------------------------------------------------
-# PLAY 3 — Stop etcd everywhere once all Patroni instances are down
+# PLAY 3 — Force-stop any lingering PostgreSQL cluster on every node
+# ---------------------------------------------------------------------------
+- name: Force-stop any lingering PostgreSQL cluster
+  hosts: all
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Stop any PostgreSQL cluster still running (fast shutdown)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        pg_lsclusters -h | awk '{print $1, $2, $3}' | while read -r ver name status; do
+          if [ "$status" != "down" ]; then
+            pg_ctlcluster "$ver" "$name" stop -m fast || true
+          fi
+        done
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+# ---------------------------------------------------------------------------
+# PLAY 4 — Stop etcd everywhere once all Patroni/postgres instances are down
 # ---------------------------------------------------------------------------
 - name: Stop etcd on all nodes
   hosts: all

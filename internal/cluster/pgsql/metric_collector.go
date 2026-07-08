@@ -557,17 +557,25 @@ func (c *Collector) collectReplication(ctx context.Context, f core.MetricFamily,
 		})
 		m.StandbyCount = len(m.Members) - 1
 	} else {
-		// Fallback: build from pg_stat_replication only.
+		// Fallback: build from pg_stat_replication only. postgres_exporter runs
+		// independently of postgres, so a reachable exporter doesn't imply a
+		// reachable postgres: confirm via pg_postmaster_start_time_seconds (same
+		// signal collectUptime uses) before reporting the primary as online.
 		zero := float64(0)
 		zeroBytes := int64(0)
-		m.Members = append(m.Members, ReplicationMember{
-			Role:             "primary",
-			Host:             req.PrimaryIP,
-			State:            "online",
-			WriteLagSeconds:  &zero,
-			ReplayLagSeconds: &zero,
-			ReplayLagBytes:   &zeroBytes,
-		})
+		primaryMember := ReplicationMember{
+			Role: "primary",
+			Host: req.PrimaryIP,
+		}
+		if f.First("pg_postmaster_start_time_seconds", 0) > 0 {
+			primaryMember.State = "online"
+			primaryMember.WriteLagSeconds = &zero
+			primaryMember.ReplayLagSeconds = &zero
+			primaryMember.ReplayLagBytes = &zeroBytes
+		} else {
+			primaryMember.State = "offline"
+		}
+		m.Members = append(m.Members, primaryMember)
 		for addr, lag := range lagByAddr {
 			wl, fl, rl := lag.writeSec, lag.flushSec, lag.replaySec
 			rb := lag.replayBytes
