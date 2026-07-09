@@ -78,10 +78,14 @@ func (p SSHPolicy) AnsibleEnv() []string {
  *   string - the resulting string
  */
 func (p SSHPolicy) SSHCommonArgs() string {
+	// Keepalives bound how long a hung session can stall a step: a node that
+	// freezes mid-task (e.g. OOM-starved, can't schedule sshd) kills the
+	// connection after ~60s instead of eating the entire step timeout.
+	const keepalive = " -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
 	if !p.VerifyHostKeys {
-		return "-o IdentitiesOnly=yes -o StrictHostKeyChecking=no"
+		return "-o IdentitiesOnly=yes -o StrictHostKeyChecking=no" + keepalive
 	}
-	args := "-o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+	args := "-o IdentitiesOnly=yes -o StrictHostKeyChecking=yes" + keepalive
 	if p.KnownHostsFile != "" {
 		args += fmt.Sprintf(" -o UserKnownHostsFile=%s", p.KnownHostsFile)
 	}

@@ -13,6 +13,20 @@
   failed_when: mysqlsh_check.rc != 0
   tags: ["preflight"]
 
+# The start/recover path calls dba.reboot_cluster_from_complete_outage with
+# the "force" option, which MySQL Shell only understands from 8.0.30 onward.
+# Catch an older shell here at deploy time instead of failing the first
+# post-outage recovery.
+- name: Enforce minimum MySQL Shell version
+  ansible.builtin.assert:
+    that:
+      - (mysqlsh_check.stdout | regex_search('[0-9]+\.[0-9]+\.[0-9]+')) is version('8.0.30', '>=')
+    fail_msg: >-
+      MySQL Shell {{ mysqlsh_check.stdout | regex_search('[0-9]+\.[0-9]+\.[0-9]+') }}
+      is too old: cluster start/recovery requires mysqlsh >= 8.0.30
+      (reboot_cluster_from_complete_outage force option).
+  tags: ["preflight"]
+
 - name: Verify MySQL root connectivity
   ansible.builtin.shell: |
     set -euo pipefail

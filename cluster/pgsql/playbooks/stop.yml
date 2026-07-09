@@ -60,7 +60,7 @@
     - name: Stop any PostgreSQL cluster still running (fast shutdown)
       ansible.builtin.shell: |
         set -euo pipefail
-        pg_lsclusters -h | awk '{print $1, $2, $3}' | while read -r ver name status; do
+        pg_lsclusters -h | awk '{print $1, $2, $4}' | while read -r ver name status; do
           if [ "$status" != "down" ]; then
             pg_ctlcluster "$ver" "$name" stop -m fast || true
           fi

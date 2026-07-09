@@ -1,4 +1,8 @@
 ---
 mysqlsh_verify_timeout_seconds: 180
-verify_cluster_retries: 6
-verify_cluster_retry_delay_seconds: 20
+# Polled at 2s instead of 20s so the retry ceiling stays roughly the same
+# (each attempt also spends a few seconds inside mysqlsh) but a cluster that
+# has already converged is detected within seconds — this keeps the start
+# (recover) API inside its latency budget.
+verify_cluster_retries: 30
+verify_cluster_retry_delay_seconds: 2
