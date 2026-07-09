@@ -2,6 +2,10 @@
 # Auto-heals a stuck GR applier channel and rejoins the cluster.
 # Runs as a systemd timer every {{ gr_watchdog_interval_seconds }}s. Safe to run repeatedly.
 
+# A deliberately stopped cluster (stop API) leaves mysql down on purpose —
+# nothing to heal, so don't spawn mysqlsh every timer tick against it.
+systemctl is-active --quiet mysql || exit 0
+
 STATE=$(mysql -uroot -Nse \
   "SELECT member_state FROM performance_schema.replication_group_members \
    WHERE member_host = @@report_host LIMIT 1" 2>/dev/null)

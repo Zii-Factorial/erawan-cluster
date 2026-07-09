@@ -134,7 +134,13 @@ func AnsibleRun(ctx context.Context, spec AnsibleSpec) (result StepResult) {
 	}
 
 	cmd := exec.CommandContext(stepCtx, spec.Bin, args...)
-	cmd.Env = append(os.Environ(), spec.Env...)
+	// Pipelining collapses each module run from ~5 SSH round-trips (mkdir tmp,
+	// sftp upload, chmod, execute, cleanup) into one, so a node whose sshd is
+	// slow (e.g. under clone/recovery IO load) delays a task by seconds, not
+	// minutes. Safe here: nodes are Debian/Ubuntu, whose sudoers never sets
+	// requiretty. Listed before spec.Env so callers can still override it.
+	cmd.Env = append(os.Environ(), "ANSIBLE_PIPELINING=True")
+	cmd.Env = append(cmd.Env, spec.Env...)
 
 	var stdout, stderr cappedBuffer
 	stdout.limit = spec.MaxOutputChars
@@ -171,10 +177,14 @@ func AnsibleRun(ctx context.Context, spec AnsibleSpec) (result StepResult) {
 	return
 }
 
-// cappedBuffer is a write-capped bytes.Buffer. Writes beyond limit are dropped
-// and a truncation marker is appended to String(). limit=0 means unlimited.
+// cappedBuffer is a write-capped buffer that preserves both ends of the
+// stream: the first half of the limit verbatim, plus a ring of the most
+// recent output. Ansible prints failures and the play recap last, so keeping
+// only the head (as a plain capped buffer would) hides exactly the part of a
+// long -vvv log that explains why a step failed. limit=0 means unlimited.
 type cappedBuffer struct {
-	buf     bytes.Buffer
+	head    bytes.Buffer
+	tail    []byte
 	limit   int
 	dropped bool
 }
@@ -193,19 +203,31 @@ type cappedBuffer struct {
  *   error - error value; non-nil when the operation fails
  */
 func (b *cappedBuffer) Write(p []byte) (int, error) {
-	if b.limit > 0 {
-		avail := b.limit - b.buf.Len()
-		if avail <= 0 {
-			b.dropped = true
-			return len(p), nil
-		}
-		if len(p) > avail {
-			_, _ = b.buf.Write(p[:avail])
-			b.dropped = true
-			return len(p), nil
-		}
+	if b.limit <= 0 {
+		return b.head.Write(p)
 	}
-	return b.buf.Write(p)
+	n := len(p)
+	if avail := b.limit/2 - b.head.Len(); avail > 0 {
+		if len(p) <= avail {
+			_, _ = b.head.Write(p)
+			return n, nil
+		}
+		_, _ = b.head.Write(p[:avail])
+		p = p[avail:]
+	}
+	tailMax := b.limit - b.limit/2
+	switch {
+	case len(p) >= tailMax:
+		b.tail = append(b.tail[:0], p[len(p)-tailMax:]...)
+		b.dropped = true
+	case len(b.tail)+len(p) <= tailMax:
+		b.tail = append(b.tail, p...)
+	default:
+		over := len(b.tail) + len(p) - tailMax
+		b.tail = append(b.tail[:copy(b.tail, b.tail[over:])], p...)
+		b.dropped = true
+	}
+	return n, nil
 }
 
 /**
@@ -218,9 +240,12 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
  *   string - the resulting string
  */
 func (b *cappedBuffer) String() string {
-	s := strings.TrimSpace(b.buf.String())
-	if b.dropped {
-		s += "\n...truncated..."
+	s := b.head.String()
+	if len(b.tail) > 0 {
+		if b.dropped {
+			s += "\n...truncated; most recent output follows...\n"
+		}
+		s += string(b.tail)
 	}
-	return s
+	return strings.TrimSpace(s)
 }

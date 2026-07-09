@@ -54,15 +54,39 @@
     enabled: true
   tags: ["boot_recovery"]
 
-# On-demand recovery (deploy / start / recover): run the script once, from
-# the primary, with no stagger delay. reboot_cluster_from_complete_outage()
-# rejoins every reachable member itself; verify_cluster and the GR watchdog
-# pick up any straggler. If the cluster is already online the script exits
-# immediately, so on a fresh deploy this is a ~2s no-op.
-- name: Run cluster recovery from the primary
-  ansible.builtin.command: /usr/local/bin/erawan-mysql-boot-recovery
-  environment:
-    BOOT_RECOVERY_DELAY_SECONDS: "0"
-  when: inventory_hostname in groups['mysql_primary']
-  changed_when: true
+# The watchdog fires every 60s on every node and does STOP GROUP_REPLICATION
+# + rejoinInstance when its node isn't ONLINE — exactly the state every node
+# is in during a cluster start. Left running, it races the primary's
+# rebootClusterFromCompleteOutage for cluster metadata locks (observed: starts
+# stalling to the 300s mysqlsh timeout). Pause it for the duration and always
+# resume, even on failure, so a half-recovered cluster can still self-heal.
+- name: Pause GR watchdog during recovery
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+  loop:
+    - erawan-gr-watchdog.timer
+    - erawan-gr-watchdog.service
+  failed_when: false
   tags: ["boot_recovery"]
+
+- name: Run recovery with the watchdog paused
+  tags: ["boot_recovery"]
+  block:
+    # On-demand recovery (deploy / start / recover): run the script once, from
+    # the primary, with no stagger delay. reboot_cluster_from_complete_outage()
+    # rejoins every reachable member itself; verify_cluster and the GR watchdog
+    # pick up any straggler. If the cluster is already online the script exits
+    # immediately, so on a fresh deploy this is a ~2s no-op.
+    - name: Run cluster recovery from the primary
+      ansible.builtin.command: /usr/local/bin/erawan-mysql-boot-recovery
+      environment:
+        BOOT_RECOVERY_DELAY_SECONDS: "0"
+      when: inventory_hostname in groups['mysql_primary']
+      changed_when: true
+  always:
+    - name: Resume GR watchdog
+      ansible.builtin.systemd:
+        name: erawan-gr-watchdog.timer
+        state: started
+      failed_when: false

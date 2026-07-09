@@ -12,7 +12,37 @@
 # member with the most complete GTID set is chosen as the new primary.
 
 # ---------------------------------------------------------------------------
-# PLAY 1 — Stop MySQL on secondary nodes
+# PLAY 1 — Disable Group Replication autostart on all nodes
+#
+# A graceful stop is a planned complete outage. With start_on_boot=ON (set by
+# auto_rejoin), every mysqld restarted by the start API would spend ~a minute
+# trying to join a group that no longer exists, and that half-started GR state
+# blocks rebootClusterFromCompleteOutage. Turning it OFF here makes the next
+# start boot clean; the boot-recovery script re-enables it after the cluster
+# is back ONLINE, so unplanned-outage protection is not lost.
+# ---------------------------------------------------------------------------
+- name: Disable Group Replication autostart before shutdown
+  hosts: all
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Turn off group_replication_start_on_boot (start/recover re-enables it)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sock=""
+        for s in /var/run/mysqld/mysqld.sock /run/mysqld/mysqld.sock /var/lib/mysql/mysql.sock; do
+          if [ -S "$s" ]; then sock="$s"; break; fi
+        done
+        [ -n "$sock" ] || exit 0
+        mysql -uroot --socket="$sock" -e \
+          "SET GLOBAL group_replication_start_on_boot = OFF; SET PERSIST group_replication_start_on_boot = OFF"
+      args:
+        executable: /bin/bash
+      changed_when: true
+      failed_when: false
+
+# ---------------------------------------------------------------------------
+# PLAY 2 — Stop MySQL on secondary nodes
 # ---------------------------------------------------------------------------
 - name: Stop MySQL on secondary nodes
   hosts: mysql_standby
@@ -26,7 +56,7 @@
         state: stopped
 
 # ---------------------------------------------------------------------------
-# PLAY 2 — Stop MySQL on the primary
+# PLAY 3 — Stop MySQL on the primary
 # ---------------------------------------------------------------------------
 - name: Stop MySQL on primary node
   hosts: mysql_primary

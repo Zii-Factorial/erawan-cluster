@@ -420,6 +420,10 @@ func buildAddMemberInventoryYAML(spec StoredSpec, newMemberIP, sshCommonArgs str
 		b.WriteString("      ansible_become_flags: " + strconv.Quote("-n") + "\n")
 		b.WriteString("      ansible_ssh_private_key_file: " + strconv.Quote(spec.SSHPrivateKeyPath) + "\n")
 		b.WriteString("      ansible_ssh_common_args: " + strconv.Quote(sshCommonArgs) + "\n")
+		// Pinned so every step skips interpreter discovery (several SSH
+		// round-trips per host per step). Nodes are Debian/Ubuntu, where
+		// /usr/bin/python3 always exists.
+		b.WriteString("      ansible_python_interpreter: /usr/bin/python3\n")
 	}
 
 	writeHost("primary", spec.PrimaryIP)
@@ -472,6 +476,10 @@ func buildRemoveMemberInventoryYAML(spec StoredSpec, removedIP, sshCommonArgs st
 		b.WriteString("      ansible_become_flags: " + strconv.Quote("-n") + "\n")
 		b.WriteString("      ansible_ssh_private_key_file: " + strconv.Quote(spec.SSHPrivateKeyPath) + "\n")
 		b.WriteString("      ansible_ssh_common_args: " + strconv.Quote(sshCommonArgs) + "\n")
+		// Pinned so every step skips interpreter discovery (several SSH
+		// round-trips per host per step). Nodes are Debian/Ubuntu, where
+		// /usr/bin/python3 always exists.
+		b.WriteString("      ansible_python_interpreter: /usr/bin/python3\n")
 	}
 
 	writeHost("primary", spec.PrimaryIP)
@@ -524,6 +532,10 @@ func buildInventoryYAML(spec StoredSpec, sshCommonArgs string) string {
 		b.WriteString("      ansible_become_flags: " + strconv.Quote("-n") + "\n")
 		b.WriteString("      ansible_ssh_private_key_file: " + strconv.Quote(spec.SSHPrivateKeyPath) + "\n")
 		b.WriteString("      ansible_ssh_common_args: " + strconv.Quote(sshCommonArgs) + "\n")
+		// Pinned so every step skips interpreter discovery (several SSH
+		// round-trips per host per step). Nodes are Debian/Ubuntu, where
+		// /usr/bin/python3 always exists.
+		b.WriteString("      ansible_python_interpreter: /usr/bin/python3\n")
 	}
 
 	writeHost("primary", spec.PrimaryIP)
