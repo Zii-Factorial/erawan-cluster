@@ -21,6 +21,70 @@
   when: not erawan_etcd_reset_marker_stat.stat.exists
   tags: ["cluster_bootstrap"]
 
+# A full cluster stop/start (or a node that froze and got power-cycled) can
+# leave an orphaned etcd process holding the bbolt file lock on
+# /var/lib/etcd/member/snap/db without systemd knowing about it — systemd's
+# own restart loop then keeps launching a new etcd that immediately exits 1
+# ("cannot lock data directory"). Clearing any etcd not owned by the current
+# unit before (re)starting makes this self-healing instead of a permanent
+# crash loop.
+- name: Kill any etcd process not tracked by systemd
+  ansible.builtin.shell: |
+    set -uo pipefail
+    unit_pid=$(systemctl show -p MainPID --value etcd 2>/dev/null || echo 0)
+    for pid in $(pgrep -f -- '--config-file={{ etcd_config_path }}'); do
+      [ "$pid" = "$unit_pid" ] && continue
+      kill -9 "$pid" 2>/dev/null || true
+    done
+    exit 0
+  args:
+    executable: /bin/bash
+  changed_when: false
+  failed_when: false
+  tags: ["cluster_bootstrap"]
+
+# A node's etcd.conf is rendered ONCE, at the moment it (or the file itself)
+# was last written by base_config — at deploy time for original nodes, at
+# add_member time for a joined node. Neither ever touches the OTHER members'
+# files. etcd re-validates the local `initial-cluster` peer list against the
+# cluster's actual current membership on every start where
+# initial-cluster-state: existing — comparing peer COUNTS, not identity — so
+# any node whose file predates a later add/remove-member fails immediately
+# with "member count is unequal", even on an otherwise-healthy restart or a
+# freshly re-provisioned node rejoining. Rewriting the line unconditionally,
+# every run, to the control plane's own view of the current cluster (the
+# Go-built inventory passed into this playbook, always accurate) keeps it in
+# sync regardless of how many add/remove-member operations happened between
+# writes — exactly the same formula base_config/templates/etcd.conf.j2 uses.
+- name: Refresh initial-cluster peer list to the current cluster membership
+  ansible.builtin.lineinfile:
+    path: "{{ etcd_config_path }}"
+    regexp: '^initial-cluster:'
+    line: >-
+      initial-cluster: "{% for host_name in groups['all'] %}{{ 'etcd' ~ ((groups['all'] | list).index(host_name) + 1) }}=http://{{ hostvars[host_name].ansible_host }}:{{ etcd_peer_port }}{% if not loop.last %},{% endif %}{% endfor %}"
+  tags: ["cluster_bootstrap"]
+
+# A data directory that is already initialized (member/ exists) ignores
+# initial-cluster and initial-cluster-state entirely once past that count
+# check, so once the peer list above is correct, forcing state=new here is a
+# safe, idempotent way to skip the check on every subsequent restart of a
+# node that has already joined — it only matters for a brand-new node's very
+# first start (left as "existing" so peer discovery still runs for it, and
+# for any node whose directory was freshly reset by the wipe above).
+- name: Check whether this node's etcd data directory is already initialized
+  ansible.builtin.stat:
+    path: /var/lib/etcd/member
+  register: erawan_etcd_member_dir_stat
+  tags: ["cluster_bootstrap"]
+
+- name: Skip stale initial-cluster-state validation on already-initialized nodes
+  ansible.builtin.lineinfile:
+    path: "{{ etcd_config_path }}"
+    regexp: '^initial-cluster-state:'
+    line: "initial-cluster-state: new"
+  when: erawan_etcd_member_dir_stat.stat.exists
+  tags: ["cluster_bootstrap"]
+
 - name: Start etcd on all nodes
   ansible.builtin.systemd:
     name: etcd
@@ -28,24 +92,43 @@
     state: started
   tags: ["cluster_bootstrap"]
 
-- name: Wait for local etcd client port
-  ansible.builtin.wait_for:
-    host: "{{ ansible_host }}"
-    port: "{{ etcd_client_port }}"
-    state: started
-    timeout: 90
+# block/rescue mirrors the Patroni pattern below: capture the journal whether
+# the port-open wait or the health poll times out, so a crash-looping etcd
+# (exit 1 in a restart-on-failure loop) reports its real error instead of a
+# bare timeout that requires manual SSH to diagnose.
+- name: Wait for etcd to accept connections and report healthy
   tags: ["cluster_bootstrap"]
+  block:
+    - name: Wait for local etcd client port
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ etcd_client_port }}"
+        state: started
+        timeout: 90
 
-- name: Wait for etcd to become healthy on each node
-  ansible.builtin.uri:
-    url: "http://{{ ansible_host }}:{{ etcd_client_port }}/health"
-    return_content: true
-  register: etcd_health
-  until: etcd_health.status == 200 and ('true' in (etcd_health.content | lower))
-  retries: 60
-  delay: 1
-  changed_when: false
-  tags: ["cluster_bootstrap"]
+    - name: Wait for etcd to become healthy on each node
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:{{ etcd_client_port }}/health"
+        return_content: true
+      register: etcd_health
+      until: etcd_health.status == 200 and ('true' in (etcd_health.content | lower))
+      retries: 60
+      delay: 1
+      changed_when: false
+  rescue:
+    - name: Collect etcd journal on bootstrap failure
+      ansible.builtin.command:
+        argv: [journalctl, -u, etcd, --no-pager, -n, 80]
+      register: _etcd_journal
+      changed_when: false
+      failed_when: false
+
+    - name: Fail with etcd log context
+      ansible.builtin.fail:
+        msg: |
+          etcd failed to become healthy on {{ inventory_hostname }}.
+          Last 80 etcd journal lines:
+          {{ _etcd_journal.stdout | default('(no journal output)') }}
 
 - name: Start Patroni on the requested primary node
   ansible.builtin.systemd:

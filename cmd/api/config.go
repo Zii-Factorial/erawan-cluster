@@ -126,6 +126,7 @@ type clusterEngineConfig struct {
 	deployPlaybook       string
 	addMemberPlaybook    string
 	removeMemberPlaybook string
+	stopPlaybook         string
 	rollbackPlaybook     string
 	ansible              ansibleConfig
 }
@@ -265,6 +266,7 @@ func loadClusterEngineConfig(name, baseDir, sharedStateDir, ansibleBin string) c
 		deployPlaybook:       env.GetString(prefix+"_DEPLOY_PLAYBOOK", filepath.Join(playbookDir, "deploy.yml")),
 		addMemberPlaybook:    env.GetString(prefix+"_ADD_MEMBER_PLAYBOOK", filepath.Join(playbookDir, "add_member.yml")),
 		removeMemberPlaybook: env.GetString(prefix+"_REMOVE_MEMBER_PLAYBOOK", filepath.Join(playbookDir, "remove_member.yml")),
+		stopPlaybook:         env.GetString(prefix+"_STOP_PLAYBOOK", filepath.Join(playbookDir, "stop.yml")),
 		ansible:              loadAnsibleConfig(prefix, ansibleBin),
 	}
 }

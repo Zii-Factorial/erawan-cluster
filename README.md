@@ -24,12 +24,25 @@
 
 ## Features
 
-- **MySQL cluster lifecycle** — deploy, resume, rollback, add/remove members, user and database management
-- **PostgreSQL cluster lifecycle** — deploy, resume, add/remove members, user and database management
+- **MySQL cluster lifecycle** — deploy, resume, rollback, stop/start (data-preserving), post-outage recovery, add/remove members, user and database management
+- **PostgreSQL cluster lifecycle** — deploy, resume, stop/start (data-preserving), post-outage recovery, add/remove members, user and database management
 - **Live metrics** — 8 MySQL categories and 9 PostgreSQL categories collected via Prometheus exporters (mysqld_exporter, postgres_exporter, node_exporter)
 - **HAProxy management** — tenant config generation, member addition, hot reload (no restart)
 - **Job-based async execution** — all cluster operations run as tracked background jobs with step-level progress
 - **Encryption** — optional AES-256-GCM request/response body encryption
+
+### Cluster lifecycle endpoints (per engine: `mysql` / `pgsql`)
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /cluster/{engine}/deploy` | Deploy a new cluster |
+| `POST /cluster/{engine}/jobs/{id}/resume` | Resume a failed deploy from the last completed step |
+| `POST /cluster/{engine}/stop` | Graceful, data-preserving shutdown (secondaries/standbys first, primary last); body: `{"job_id"}` |
+| `POST /cluster/{engine}/start` | Start a stopped cluster from existing data (alias: `/jobs/{id}/recover`); body: `{"job_id"}` |
+| `POST /cluster/mysql/jobs/{id}/rollback` | Dissolve a MySQL cluster (MySQL only) |
+| `POST /cluster/{engine}/members` | Add members (joined one at a time) |
+| `DELETE /cluster/{engine}/members` | Remove a member |
+| `POST /cluster/{engine}/metrics` | Live metrics via Prometheus exporters |
 
 See [doc/api.md](doc/api.md) for the full API reference.  
 See [doc/proxy-architecture.md](doc/proxy-architecture.md) for the system design.  
@@ -180,6 +193,8 @@ Both should succeed (`clusterops`, then `root`).
 | `PGSQL_DEPLOY_PLAYBOOK` | `<project>/cluster/pgsql/playbooks/deploy.yml` | PostgreSQL deploy playbook |
 | `PGSQL_ADD_MEMBER_PLAYBOOK` | `<project>/cluster/pgsql/playbooks/add_member.yml` | PostgreSQL add-member playbook |
 | `PGSQL_REMOVE_MEMBER_PLAYBOOK` | `<project>/cluster/pgsql/playbooks/remove_member.yml` | PostgreSQL remove-member playbook |
+| `MYSQL_STOP_PLAYBOOK` | `<project>/cluster/mysql/playbooks/stop.yml` | MySQL cluster stop playbook |
+| `PGSQL_STOP_PLAYBOOK` | `<project>/cluster/pgsql/playbooks/stop.yml` | PostgreSQL cluster stop playbook |
 | `MYSQL_ANSIBLE_DEBUG` | `false` | Stream live Ansible logs to journal |
 | `MYSQL_ANSIBLE_VERBOSITY` | `0` | Ansible verbosity level (1–4) |
 | `PGSQL_ANSIBLE_DEBUG` | `false` | Stream live PostgreSQL Ansible logs to journal |

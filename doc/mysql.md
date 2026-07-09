@@ -3,7 +3,9 @@
 This document covers what gets deployed on each VM, what the tech stack is, how the config files look, and how the cluster workflow operates.
 
 See [doc/api.md](api.md) for the full API payload reference.  
-**Diagrams (draw.io):** [diagrams/mysql-cluster.drawio](diagrams/mysql-cluster.drawio)
+**Diagram source (draw.io):** [diagrams/mysql-cluster.drawio](diagrams/mysql-cluster.drawio)
+
+![MySQL InnoDB Cluster — process flow for deploy, stop, and start/recover](assets/diagram/mysql-cluster-flow.svg)
 
 ---
 
@@ -234,7 +236,12 @@ Verify: `sudo cat /etc/erawan-cluster/mysql-recovery.json`
 
 ### `/usr/local/bin/erawan-mysql-boot-recovery` (permissions: 0755)
 
-Runs once at boot (via the systemd service below) after MySQL and the network are ready. On a complete 3-node outage, the first node to wake calls `dba.reboot_cluster_from_complete_outage()`; the others detect the cluster is already active and call `cluster.rejoinInstance()` to join it.
+Runs in two different ways:
+
+- **At boot** (unattended): the systemd service below fires on every node with staggered delays (30/60/90s). The first node to wake calls `dba.reboot_cluster_from_complete_outage()`; the others detect the cluster is already active and call `cluster.rejoinInstance()` to join it.
+- **On demand**: `POST /cluster/mysql/start` (or `/recover`) runs `systemctl start mysql` on every node, then runs this script **once, on the primary only, with `BOOT_RECOVERY_DELAY_SECONDS=0`**. `reboot_cluster_from_complete_outage()` rejoins every reachable member itself, so no per-node race is needed; `verify_cluster` (with retries) then confirms all members reached ONLINE, and the GR watchdog picks up any straggler. If the cluster is already online, the script exits immediately — on a fresh deploy this step is a ~2-second no-op.
+
+The `mysqlsh` call is wrapped in `timeout 300` (`boot_recovery_mysqlsh_timeout_seconds`), and a genuine failure propagates as a real exit code — previously the script always exited 0, so a failed recovery could be silently reported as a success.
 
 **Same script on all nodes.** The staggered delay comes from `BOOT_RECOVERY_DELAY_SECONDS` in the service unit.
 
@@ -488,6 +495,34 @@ POST /cluster/mysql/metrics
 
 ---
 
+## Stop / Start
+
+Stop and start the whole cluster without losing data (planned maintenance,
+VM resizing, etc.).
+
+```
+POST /cluster/mysql/jobs/{jobID}/stop
+  1. systemctl stop mysql on all secondaries  (primary keeps serving)
+  2. systemctl stop mysql on the primary      (clean InnoDB shutdown,
+                                               redo log flushed)
+
+POST /cluster/mysql/jobs/{jobID}/start        (alias: /recover)
+  1. Start MySQL and run dba.rebootClusterFromCompleteOutage()
+  2. The member with the most complete GTID set becomes primary
+  3. Remaining members rejoin the group
+  4. Verify all members reached ONLINE (job fails if they don't within
+     the retry window)
+```
+
+See [assets/diagram/mysql-cluster-flow.svg](assets/diagram/mysql-cluster-flow.svg) for the full step-by-step flow including deploy.
+
+Data directories are never touched by either operation. Stop is rejected
+while a deploy or member operation is running on the same cluster. The
+same VMs/disks must come back for start — start does not rebuild
+destroyed nodes (use add-member for that).
+
+---
+
 ## Rollback
 
 `POST /cluster/mysql/jobs/{jobID}/rollback` runs the rollback playbook, which:
@@ -504,4 +539,6 @@ POST /cluster/mysql/metrics
 - `assume_prepared: true` — skips preflight and `dba.configureInstance()`. Use when nodes were already prepared in a prior run.
 - Single-node clusters support rollback but not automatic failover.
 - A 3-node cluster survives loss of 1 node and keeps quorum. A 2-node cluster cannot tolerate any node loss (no quorum majority).
+- Multiple `member_ips` in one add-member request join sequentially, never in parallel; each successful node is recorded before the next join starts, and the job stops at the first failure.
+- Stop/start (and recover) never touch data directories; a stopped cluster restarts from its existing on-disk state via `dba.rebootClusterFromCompleteOutage()`.
 - The boot-recovery service on each node automatically recovers a complete 3-node outage. Node 1 bootstraps the cluster (`dba.reboot_cluster_from_complete_outage`); nodes 2 and 3 detect the cluster is already active and rejoin via `cluster.rejoinInstance()`. The GR watchdog (every 60s) is a second-chance safety net.

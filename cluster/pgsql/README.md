@@ -16,6 +16,14 @@ Implemented workflow:
 - Retry-safe bootstrap resets data only once per deployment job
 - Cluster verification through systemd state, Patroni REST API, and replication checks
 - Optional application database/user bootstrap
+- Add member: etcd learner registration → join → promote to voter → Patroni
+  standby bootstrap (one node at a time); stale etcd registrations from
+  destroyed nodes are cleaned up first, with guarded `force-new-cluster`
+  recovery when they have cost the primary its quorum
+- Remove member: graceful Patroni + etcd removal of a standby
+- Stop: data-preserving ordered shutdown (standbys → primary → etcd)
+- Start / recover: restart a stopped or outage-hit cluster from existing data
+  (`cluster_bootstrap` + `verify_cluster`; data directories untouched)
 
 Architecture overview:
 
@@ -42,6 +50,9 @@ Architecture overview:
    +------------------+
 ```
 
-Entry point:
+Entry points:
 
 - `cluster/pgsql/playbooks/deploy.yml`
+- `cluster/pgsql/playbooks/add_member.yml`
+- `cluster/pgsql/playbooks/remove_member.yml`
+- `cluster/pgsql/playbooks/stop.yml`

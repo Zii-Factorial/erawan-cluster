@@ -1,2 +1,3 @@
 ---
 boot_recovery_delay_step_seconds: 30
+boot_recovery_mysqlsh_timeout_seconds: 300

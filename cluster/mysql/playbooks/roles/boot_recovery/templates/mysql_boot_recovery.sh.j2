@@ -38,6 +38,7 @@ trap 'rm -f "$_tmp"' EXIT
 _tmp=$(mktemp /tmp/erawan-boot-XXXXXX.py)
 cat >"$_tmp" <<'PY'
 import json
+import time
 
 shell.options["useWizards"] = False
 
@@ -58,19 +59,75 @@ connect_local()
 this_ip = shell.get_session().run_sql("SELECT @@report_host").fetch_one()[0]
 print(f"this_node_ip: {this_ip}")
 
+def connect_node(ip):
+    shell.connect({
+        "user":     cfg["admin_user"],
+        "password": cfg["admin_pass"],
+        "host":     ip,
+        "port":     cfg["mysql_port"],
+        "scheme":   "mysql",
+    })
+    return shell.get_session()
+
+def stop_gr_with_retry(s, ip):
+    """STOP GROUP_REPLICATION, retrying while another START/STOP is already
+    executing (MySQL error 3663). That state is normal here: a node whose
+    peers went away mid-flight runs the GR auto-rejoin process, and both our
+    STOP and mysqlsh's own cancellation race it for a few seconds."""
+    deadline = time.time() + 60
+    while True:
+        try:
+            s.run_sql("STOP GROUP_REPLICATION")
+            return True
+        except Exception as e:
+            if "3663" not in str(e) or time.time() >= deadline:
+                print(f"stop GR on {ip}: {e}")
+                return False
+            time.sleep(5)
+
+def stop_half_started_gr():
+    """A member that booted with start_on_boot=ON into a complete outage sits
+    with GR half-started (RECOVERING/ERROR, no group to join), which blocks
+    reboot_cluster_from_complete_outage until it gives up. Stop GR on any such
+    node — but never on a node that can see an ONLINE member, since that means
+    a live group exists and the rejoin path below is the right tool."""
+    for ip in cfg.get("node_ips", []):
+        try:
+            s = connect_node(ip)
+            online = s.run_sql(
+                "SELECT COUNT(*) FROM performance_schema.replication_group_members "
+                "WHERE member_state = 'ONLINE'").fetch_one()[0]
+            row = s.run_sql(
+                "SELECT member_state FROM performance_schema.replication_group_members "
+                "WHERE member_id = @@server_uuid").fetch_one()
+            state = row[0] if row else ""
+            if int(online) == 0 and state not in ("", "OFFLINE"):
+                if stop_gr_with_retry(s, ip):
+                    print(f"stopped half-started GR on {ip} (was {state})")
+        except Exception as e:
+            print(f"gr pre-stop {ip}: {e}")
+
+def reenable_gr_autostart():
+    """The stop playbook turns start_on_boot OFF so a planned start boots
+    clean; restore it once the cluster is back so an unplanned node reboot
+    still auto-rejoins."""
+    for ip in cfg.get("node_ips", []):
+        try:
+            s = connect_node(ip)
+            s.run_sql("SET GLOBAL group_replication_start_on_boot = ON")
+            s.run_sql("SET PERSIST group_replication_start_on_boot = ON")
+        except Exception as e:
+            print(f"re-enable start_on_boot {ip}: {e}")
+
+stop_half_started_gr()
+
 def rejoin_this_node():
     """Connect to each peer node and call cluster.rejoinInstance for this node."""
     for seed_ip in cfg.get("node_ips", []):
         if seed_ip == this_ip:
             continue
         try:
-            shell.connect({
-                "user":     cfg["admin_user"],
-                "password": cfg["admin_pass"],
-                "host":     seed_ip,
-                "port":     cfg["mysql_port"],
-                "scheme":   "mysql",
-            })
+            connect_node(seed_ip)
             cluster = dba.get_cluster(cfg["cluster_name"])
             cluster.rejoin_instance(
                 f"{cfg['admin_user']}@{this_ip}:{cfg['mysql_port']}",
@@ -86,12 +143,31 @@ def rejoin_this_node():
             print(f"rejoin via {seed_ip}: {e}")
     return False
 
+def reboot_with_retry(options):
+    """reboot_cluster_from_complete_outage, retrying while any member still
+    has a START/STOP GROUP_REPLICATION in flight (MySQL error 3663): the
+    reboot cancels GR auto-rejoin on members, and that cancellation races the
+    rejoin attempt for a few seconds."""
+    deadline = time.time() + 90
+    while True:
+        connect_local()
+        try:
+            if options is None:
+                dba.reboot_cluster_from_complete_outage(cfg["cluster_name"])
+            else:
+                dba.reboot_cluster_from_complete_outage(cfg["cluster_name"], options)
+            return
+        except Exception as e:
+            if "3663" in str(e) and time.time() < deadline:
+                time.sleep(5)
+                continue
+            raise
+
 is_already_active = False
 try:
-    connect_local()
     # mysqlsh picks the node with the highest GTID as primary, preserving the
     # most recent transactions.
-    dba.reboot_cluster_from_complete_outage(cfg["cluster_name"])
+    reboot_with_retry(None)
     print("cluster rebooted (quorum-safe)")
 except Exception as first_err:
     first_msg = str(first_err).lower()
@@ -100,8 +176,7 @@ except Exception as first_err:
     else:
         # Force reboot from this node (e.g. not all members reachable yet).
         try:
-            connect_local()
-            dba.reboot_cluster_from_complete_outage(cfg["cluster_name"], {"force": True})
+            reboot_with_retry({"force": True})
             print("cluster rebooted (forced)")
         except Exception as force_err:
             force_msg = str(force_err).lower()
@@ -114,10 +189,19 @@ if is_already_active:
     print("cluster is already active — attempting rejoin of this node")
     if not rejoin_this_node():
         print("all rejoin attempts failed — GR watchdog will retry within 60s")
+
+reenable_gr_autostart()
 PY
 
-if mysqlsh --no-wizard --py --file "$_tmp"; then
+if timeout {{ boot_recovery_mysqlsh_timeout_seconds | int }} mysqlsh --no-wizard --py --file "$_tmp"; then
   logger -t erawan-boot-recovery "boot recovery succeeded"
 else
-  logger -t erawan-boot-recovery "boot recovery failed — GR watchdog will retry"
+  rc=$?
+  # A benign "rejoin failed, watchdog will retry" outcome never raises in the
+  # Python block above, so mysqlsh still exits 0 for it — only a genuine
+  # unhandled exception (e.g. reboot_cluster_from_complete_outage itself
+  # failing) lands here. Propagate it so the caller (systemd, then Ansible,
+  # then the job status) sees the real failure instead of a false success.
+  logger -t erawan-boot-recovery "boot recovery failed (mysqlsh exit $rc) — see this log for the mysqlsh traceback"
+  exit "$rc"
 fi

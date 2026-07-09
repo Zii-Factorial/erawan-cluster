@@ -22,6 +22,7 @@ type Runner struct {
 	deployPlaybook       string
 	addMemberPlaybook    string
 	removeMemberPlaybook string
+	stopPlaybook         string
 	ansibleVerbosity     int
 	streamLogs           bool
 	maxOutputChars       int
@@ -72,6 +73,17 @@ func (r *Runner) SetAddMemberPlaybook(path string) { r.addMemberPlaybook = path 
  *   path string - the path string
  */
 func (r *Runner) SetRemoveMemberPlaybook(path string) { r.removeMemberPlaybook = path }
+
+/**
+ * SetStopPlaybook.
+ *
+ * Receiver:
+ *   r *Runner - pointer receiver; the method may mutate this Runner instance
+ *
+ * Params:
+ *   path string - the path string
+ */
+func (r *Runner) SetStopPlaybook(path string) { r.stopPlaybook = path }
 
 /**
  * SetSSHPolicy configures how Ansible verifies node SSH host keys.
@@ -174,6 +186,50 @@ func (r *Runner) RunAddMember(ctx context.Context, cfg memberRunConfig) StepResu
  */
 func (r *Runner) RunRemoveMember(ctx context.Context, cfg memberRunConfig) StepResult {
 	return r.runMember(ctx, cfg, r.removeMemberPlaybook, "remove_member")
+}
+
+/**
+ * RunStop executes the stop playbook, which shuts Patroni down on standbys
+ * first, then the primary, then stops etcd on every node. No secrets are
+ * required: stopping is a pure systemd operation.
+ *
+ * Receiver:
+ *   r *Runner - pointer receiver; the method may mutate this Runner instance
+ *
+ * Params:
+ *   ctx context.Context - context carrying cancellation signals and deadlines
+ *   cfg runConfig - the cfg (runConfig); only jobID, spec and timeout are used
+ *
+ * Returns:
+ *   StepResult - the resulting StepResult
+ */
+func (r *Runner) RunStop(ctx context.Context, cfg runConfig) StepResult {
+	if strings.TrimSpace(r.stopPlaybook) == "" {
+		return core.FailedStep(cfg.step.Name, fmt.Errorf("stop playbook is not configured"))
+	}
+	hosts := append([]string{cfg.spec.PrimaryIP}, cfg.spec.StandbyIPs...)
+	if err := r.sshPolicy.EnsureKnownHosts(ctx, hosts, cfg.spec.SSHPort, false); err != nil {
+		return core.FailedStep(cfg.step.Name, err)
+	}
+	extraVars := map[string]any{
+		"deployment_job_id": cfg.jobID,
+		"cluster_name":      cfg.spec.ClusterName,
+		"primary_ip":        cfg.spec.PrimaryIP,
+		"standby_ips":       cfg.spec.StandbyIPs,
+	}
+	return core.AnsibleRun(ctx, core.AnsibleSpec{
+		Bin:             r.ansibleBin,
+		Playbook:        r.stopPlaybook,
+		Inventory:       buildInventoryYAML(cfg.spec, r.sshPolicy.SSHCommonArgs()),
+		ExtraVars:       extraVars,
+		Verbosity:       r.ansibleVerbosity,
+		StreamLogs:      r.streamLogs,
+		MaxOutputChars:  r.maxOutputChars,
+		Timeout:         cfg.timeout,
+		StepName:        cfg.step.Name,
+		WorkspacePrefix: "pgsql-cluster-stop-",
+		Env:             r.sshPolicy.AnsibleEnv(),
+	})
 }
 
 /**
@@ -364,6 +420,10 @@ func buildAddMemberInventoryYAML(spec StoredSpec, newMemberIP, sshCommonArgs str
 		b.WriteString("      ansible_become_flags: " + strconv.Quote("-n") + "\n")
 		b.WriteString("      ansible_ssh_private_key_file: " + strconv.Quote(spec.SSHPrivateKeyPath) + "\n")
 		b.WriteString("      ansible_ssh_common_args: " + strconv.Quote(sshCommonArgs) + "\n")
+		// Pinned so every step skips interpreter discovery (several SSH
+		// round-trips per host per step). Nodes are Debian/Ubuntu, where
+		// /usr/bin/python3 always exists.
+		b.WriteString("      ansible_python_interpreter: /usr/bin/python3\n")
 	}
 
 	writeHost("primary", spec.PrimaryIP)
@@ -416,6 +476,10 @@ func buildRemoveMemberInventoryYAML(spec StoredSpec, removedIP, sshCommonArgs st
 		b.WriteString("      ansible_become_flags: " + strconv.Quote("-n") + "\n")
 		b.WriteString("      ansible_ssh_private_key_file: " + strconv.Quote(spec.SSHPrivateKeyPath) + "\n")
 		b.WriteString("      ansible_ssh_common_args: " + strconv.Quote(sshCommonArgs) + "\n")
+		// Pinned so every step skips interpreter discovery (several SSH
+		// round-trips per host per step). Nodes are Debian/Ubuntu, where
+		// /usr/bin/python3 always exists.
+		b.WriteString("      ansible_python_interpreter: /usr/bin/python3\n")
 	}
 
 	writeHost("primary", spec.PrimaryIP)
@@ -468,6 +532,10 @@ func buildInventoryYAML(spec StoredSpec, sshCommonArgs string) string {
 		b.WriteString("      ansible_become_flags: " + strconv.Quote("-n") + "\n")
 		b.WriteString("      ansible_ssh_private_key_file: " + strconv.Quote(spec.SSHPrivateKeyPath) + "\n")
 		b.WriteString("      ansible_ssh_common_args: " + strconv.Quote(sshCommonArgs) + "\n")
+		// Pinned so every step skips interpreter discovery (several SSH
+		// round-trips per host per step). Nodes are Debian/Ubuntu, where
+		// /usr/bin/python3 always exists.
+		b.WriteString("      ansible_python_interpreter: /usr/bin/python3\n")
 	}
 
 	writeHost("primary", spec.PrimaryIP)

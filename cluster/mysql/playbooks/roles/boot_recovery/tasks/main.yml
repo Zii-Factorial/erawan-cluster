@@ -37,9 +37,75 @@
     boot_recovery_delay_seconds: "{{ ((groups['all'] | list).index(inventory_hostname) + 1) * (boot_recovery_delay_step_seconds | int) }}"
   tags: ["boot_recovery"]
 
-- name: Enable boot recovery service on all nodes
+- name: Ensure MySQL service is running
+  ansible.builtin.systemd:
+    name: mysql
+    state: started
+  tags: ["boot_recovery"]
+
+# Enabled only — the staggered per-node systemd race (30/60/90s delays) is
+# for unattended host reboots. Starting the unit on every node here made all
+# three race each other: secondaries hit benign rejoin errors and failed the
+# play, and deploys blocked through the full stagger delay for nothing.
+- name: Enable boot recovery service for future reboots
   ansible.builtin.systemd:
     name: erawan-mysql-boot-recovery.service
     daemon_reload: true
     enabled: true
   tags: ["boot_recovery"]
+
+# The watchdog fires every 60s on every node and does STOP GROUP_REPLICATION
+# + rejoinInstance when its node isn't ONLINE — exactly the state every node
+# is in during a cluster start. Left running, it races the primary's
+# rebootClusterFromCompleteOutage for cluster metadata locks (observed: starts
+# stalling to the 300s mysqlsh timeout). Pause it for the duration and always
+# resume, even on failure, so a half-recovered cluster can still self-heal.
+- name: Pause GR watchdog during recovery
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+  loop:
+    - erawan-gr-watchdog.timer
+    - erawan-gr-watchdog.service
+  failed_when: false
+  tags: ["boot_recovery"]
+
+- name: Run recovery with the watchdog paused
+  tags: ["boot_recovery"]
+  block:
+    # On-demand recovery (deploy / start / recover): run the script once, from
+    # the primary, with no stagger delay. reboot_cluster_from_complete_outage()
+    # rejoins every reachable member itself; verify_cluster and the GR watchdog
+    # pick up any straggler. If the cluster is already online the script exits
+    # immediately, so on a fresh deploy this is a ~2s no-op.
+    - name: Run cluster recovery from the primary
+      ansible.builtin.command: /usr/local/bin/erawan-mysql-boot-recovery
+      environment:
+        BOOT_RECOVERY_DELAY_SECONDS: "0"
+      when: inventory_hostname in groups['mysql_primary']
+      changed_when: true
+  always:
+    - name: Resume GR watchdog
+      ansible.builtin.systemd:
+        name: erawan-gr-watchdog.timer
+        state: started
+      failed_when: false
+
+    # The mysqld exporter ships in the VM image with its unit tied to
+    # mysql.service, so stopping the cluster kills it and nothing restarts it
+    # — every metrics call then reports "mysqld_exporter unreachable on all
+    # nodes". The unit name varies by image, so probe the common ones.
+    - name: Ensure mysqld exporter is running
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for unit in mysqld_exporter mysql_exporter prometheus-mysqld-exporter; do
+          if systemctl list-unit-files --no-legend "${unit}.service" 2>/dev/null | grep -q .; then
+            systemctl start "${unit}.service"
+            exit 0
+          fi
+        done
+        echo "no mysqld exporter unit found" >&2
+      args:
+        executable: /bin/bash
+      changed_when: false
+      failed_when: false
