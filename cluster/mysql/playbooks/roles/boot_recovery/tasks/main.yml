@@ -90,3 +90,22 @@
         name: erawan-gr-watchdog.timer
         state: started
       failed_when: false
+
+    # The mysqld exporter ships in the VM image with its unit tied to
+    # mysql.service, so stopping the cluster kills it and nothing restarts it
+    # — every metrics call then reports "mysqld_exporter unreachable on all
+    # nodes". The unit name varies by image, so probe the common ones.
+    - name: Ensure mysqld exporter is running
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for unit in mysqld_exporter mysql_exporter prometheus-mysqld-exporter; do
+          if systemctl list-unit-files --no-legend "${unit}.service" 2>/dev/null | grep -q .; then
+            systemctl start "${unit}.service"
+            exit 0
+          fi
+        done
+        echo "no mysqld exporter unit found" >&2
+      args:
+        executable: /bin/bash
+      changed_when: false
+      failed_when: false
