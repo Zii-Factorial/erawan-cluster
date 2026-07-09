@@ -13,7 +13,7 @@ See [doc/api.md](api.md) for the full API payload reference.
 
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
-| Database engine | MySQL 8.x | Data storage and SQL interface |
+| Database engine | MySQL 8 or 9 | Data storage and SQL interface |
 | Cluster layer | MySQL InnoDB Cluster (Group Replication) | HA, automatic failover, distributed writes |
 | Cluster management | MySQL Shell (`mysqlsh`) | Configure instances, create cluster, add/remove members |
 | Connection routing | HAProxy + primary-check endpoint | HAProxy routes writes to whichever node's primary-check reports PRIMARY |
@@ -502,16 +502,31 @@ VM resizing, etc.).
 
 ```
 POST /cluster/mysql/jobs/{jobID}/stop
-  1. systemctl stop mysql on all secondaries  (primary keeps serving)
-  2. systemctl stop mysql on the primary      (clean InnoDB shutdown,
-                                               redo log flushed)
+  1. Disable GR autostart on all nodes         (group_replication_start_on_boot
+                                                = OFF, so the next start boots
+                                                clean instead of racing a half
+                                                -formed rejoin)
+  2. systemctl stop mysql on all secondaries   (primary keeps serving)
+  3. systemctl stop mysql on the primary       (clean InnoDB shutdown,
+                                                redo log flushed)
 
 POST /cluster/mysql/jobs/{jobID}/start        (alias: /recover)
-  1. Start MySQL and run dba.rebootClusterFromCompleteOutage()
-  2. The member with the most complete GTID set becomes primary
-  3. Remaining members rejoin the group
-  4. Verify all members reached ONLINE (job fails if they don't within
-     the retry window)
+  1. systemctl start mysql on all nodes
+  2. Pause the GR watchdog on all nodes         (it would otherwise fight the
+                                                reboot for GR state — both try
+                                                to STOP/START GROUP_REPLICATION
+                                                on the same node at once)
+  3. Stop any half-started GR (nodes booted with autostart still ON from
+     before this fix) — retried while MySQL error 3663 ("another
+     START/STOP GROUP_REPLICATION is executing") clears, up to 60s
+  4. dba.rebootClusterFromCompleteOutage() once, on the primary — the
+     member with the most complete GTID set becomes primary; retried on
+     3663 the same way, up to 90s
+  5. Resume the GR watchdog and restart mysqld_exporter on all nodes —
+     runs even if step 3/4 failed, so the cluster can still self-heal and
+     metrics don't silently go dark
+  6. Verify all members reached ONLINE — polled every 2s, job fails if
+     they don't converge within the retry window
 ```
 
 See [assets/diagram/mysql-cluster-flow.svg](assets/diagram/mysql-cluster-flow.svg) for the full step-by-step flow including deploy.
@@ -520,6 +535,12 @@ Data directories are never touched by either operation. Stop is rejected
 while a deploy or member operation is running on the same cluster. The
 same VMs/disks must come back for start — start does not rebuild
 destroyed nodes (use add-member for that).
+
+**Requires MySQL Shell ≥ 8.0.30** — checked at deploy-time preflight. Start's
+forced-reboot path (`reboot_cluster_from_complete_outage(..., {"force": true})`)
+uses the `force` option, which older shells don't support; catching this at
+deploy avoids a working deploy that then fails on its first post-outage
+recovery.
 
 ---
 
@@ -541,4 +562,6 @@ destroyed nodes (use add-member for that).
 - A 3-node cluster survives loss of 1 node and keeps quorum. A 2-node cluster cannot tolerate any node loss (no quorum majority).
 - Multiple `member_ips` in one add-member request join sequentially, never in parallel; each successful node is recorded before the next join starts, and the job stops at the first failure.
 - Stop/start (and recover) never touch data directories; a stopped cluster restarts from its existing on-disk state via `dba.rebootClusterFromCompleteOutage()`.
-- The boot-recovery service on each node automatically recovers a complete 3-node outage. Node 1 bootstraps the cluster (`dba.reboot_cluster_from_complete_outage`); nodes 2 and 3 detect the cluster is already active and rejoin via `cluster.rejoinInstance()`. The GR watchdog (every 60s) is a second-chance safety net.
+- The boot-recovery service on each node automatically recovers a complete 3-node outage. Node 1 bootstraps the cluster (`dba.reboot_cluster_from_complete_outage`); nodes 2 and 3 detect the cluster is already active and rejoin via `cluster.rejoinInstance()`. The GR watchdog (every 60s) is a second-chance safety net — but is paused for the duration of a `start`/`recover` job so it doesn't race the reboot.
+- `mysqld_exporter` is restarted at the end of every `start`/`recover` job. It isn't tied to the `mysql` systemd unit, so a `stop` silences it along with the database; without this it would keep reporting "unreachable" after the next start even though MySQL itself is healthy again.
+- Ansible connections use pipelining and a pinned Python interpreter, so a step no longer pays interpreter-discovery and per-module SSH round-trips on every host — this matters most when a node's sshd is slow under load (e.g. mid-clone).

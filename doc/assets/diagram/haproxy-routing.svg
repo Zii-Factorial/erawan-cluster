@@ -1,11 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 660" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 720" font-family="Segoe UI, Helvetica, Arial, sans-serif">
   <defs>
     <marker id="h-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8891a0"/></marker>
     <marker id="h-am" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#f59e0b"/></marker>
   </defs>
-  <rect x="0" y="0" width="1300" height="660" fill="#0d1117"/>
+  <rect x="0" y="0" width="1300" height="720" fill="#0d1117"/>
   <text x="650" y="38" text-anchor="middle" font-size="21" font-weight="600" fill="#f5f5f9">HAProxy — Tenant Routing</text>
-  <text x="650" y="60" text-anchor="middle" font-size="11" fill="#7c8a9e">solid = SQL to the active node · dashed = health checks · one healthy writer at a time</text>
 
   <!-- Clients -->
   <ellipse cx="120" cy="260" rx="80" ry="42" fill="#1c1f26" stroke="#d7dce2" stroke-width="1.5"/>
@@ -91,5 +90,14 @@
   <line x1="490" y1="588" x2="530" y2="588" stroke="#8891a0" stroke-width="1.5" marker-end="url(#h-a)"/>
   <line x1="730" y1="588" x2="770" y2="588" stroke="#8891a0" stroke-width="1.5" marker-end="url(#h-a)"/>
   <line x1="970" y1="588" x2="1010" y2="588" stroke="#8891a0" stroke-width="1.5" marker-end="url(#h-a)"/>
-  <text x="630" y="640" text-anchor="middle" font-size="10" fill="#f5b8b8">any failure → .bak restored immediately</text>
+  <text x="630" y="632" text-anchor="middle" font-size="10" fill="#f5b8b8">any failure → .bak restored immediately</text>
+
+  <!-- legend table -->
+  <rect x="40" y="656" width="1220" height="46" rx="6" fill="#11151c" stroke="#2a303c" stroke-width="1"/>
+  <line x1="60" y1="679" x2="86" y2="679" stroke="#f59e0b" stroke-width="2"/>
+  <text x="96" y="683" font-size="11" fill="#c7cdd6">SQL to the active node (solid, amber)</text>
+  <line x1="420" y1="679" x2="446" y2="679" stroke="#5b6473" stroke-width="1.5" stroke-dasharray="4 4"/>
+  <text x="456" y="683" font-size="11" fill="#c7cdd6">httpchk health probe (dashed, gray)</text>
+  <rect x="800" y="672" width="18" height="14" rx="3" fill="#34d399" opacity="0.85"/>
+  <text x="826" y="683" font-size="11" fill="#c7cdd6">one healthy writer selected at a time</text>
 </svg>

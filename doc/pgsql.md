@@ -335,9 +335,28 @@ POST /cluster/pgsql/jobs/{jobID}/stop
   4. systemctl stop etcd on all nodes         (after every Patroni/postgres is down)
 
 POST /cluster/pgsql/jobs/{jobID}/start        (alias: /recover)
-  1. cluster_bootstrap (re-run, idempotent): start etcd then patroni on
-     every node; Patroni starts postgres itself via pg_ctl against the
-     existing data directory and each node re-registers/rejoins via the DCS
+  1. cluster_bootstrap (re-run, idempotent) on every node, before etcd starts:
+     a. Kill any etcd process not tracked by systemd — a node that froze
+        or was power-cycled can leave an orphaned etcd holding the data
+        directory's file lock, which makes systemd's own restart loop
+        crash-loop forever ("cannot lock data directory")
+     b. Refresh the `initial-cluster` peer list in etcd.conf to the
+        cluster's current membership. A node's config is only written once
+        (deploy, or add-member for a joined node) and never touched again
+        when membership later changes elsewhere — so a stale peer count
+        makes etcd reject startup with "member count is unequal" the next
+        time that node restarts. Rewritten unconditionally every run from
+        the same live inventory Ansible was given, independent of how many
+        add/remove-member operations happened in between
+     c. Force `initial-cluster-state: new` on nodes whose data directory is
+        already initialized — skips a remote-peer validation that only
+        matters for a brand-new node's first join
+     d. Start etcd, then Patroni (primary first, then standbys) — Patroni
+        starts postgres itself via pg_ctl against the existing data
+        directory and each node re-registers/rejoins via the DCS. An etcd
+        or Patroni bootstrap failure automatically captures the last 80
+        journal lines for that service so the real error is visible in the
+        job's step output, not just a bare timeout
   2. verify_cluster: poll Patroni cluster status until it reports healthy
      and every expected node is online (retries with backoff) — the job
      fails if the cluster doesn't converge, instead of a false success
@@ -391,3 +410,6 @@ POST /cluster/pgsql/metrics
 - Multiple `member_ips` in one add-member request join sequentially, never in parallel — parallel joins race on etcd learner registration and can remove each other's in-progress registration.
 - Removing a node from the cluster must go through the remove-member API. Destroying a VM without it leaves a dead voter registered in etcd; enough dead voters cost the primary its quorum and wedge etcd (`unhealthy cluster` / `context deadline exceeded`). The next add-member run auto-recovers this when provably safe, but remove-member first is always the cleaner path.
 - Stop/start (and recover) never touch data directories; a stopped cluster restarts from its existing PostgreSQL and etcd data.
+- Every node's `etcd.conf` peer list is re-synced to the cluster's actual current membership on every `start`/`recover`, not just the node that most recently joined via add-member — this is what makes stop/start safe to run any number of add/remove-member operations after the original deploy.
+- An etcd or Patroni failure during `start`/`recover` captures that service's last 80 journal lines directly into the failed job's step output — check `GET /jobs/{jobID}` before reaching for SSH.
+- Ansible connections use pipelining and a pinned Python interpreter, cutting per-module SSH round-trips on every host and step.

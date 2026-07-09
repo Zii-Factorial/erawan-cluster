@@ -284,7 +284,7 @@ Resume a failed MySQL deploy job from the last completed step.
 
 ### `POST /cluster/mysql/stop`
 
-Gracefully stop the whole MySQL InnoDB Cluster **without touching any data**. MySQL is stopped on secondaries first, then on the primary (a clean InnoDB shutdown that flushes the redo log), so the primary always holds the complete transaction set. Data directories are preserved; restart the cluster later with **Start** below.
+Gracefully stop the whole MySQL InnoDB Cluster **without touching any data**. Group Replication autostart is disabled on every node first (so the next start boots clean instead of racing a half-formed rejoin), then MySQL is stopped on secondaries, then on the primary (a clean InnoDB shutdown that flushes the redo log), so the primary always holds the complete transaction set. Data directories are preserved; restart the cluster later with **Start** below.
 
 **Request:**
 | Field | Type | Required | Description |
@@ -303,7 +303,9 @@ Rejected while the deploy job is running, while another member/stop operation ho
 
 ### `POST /cluster/mysql/start`
 
-Start a stopped cluster (or one that went through a full outage). Executes `dba.rebootClusterFromCompleteOutage()`, which restores the InnoDB Cluster from its on-disk state — the member with the most complete GTID set becomes the primary — without touching data. Uses stored credentials.
+Start a stopped cluster (or one that went through a full outage). The GR watchdog is paused on all nodes for the duration (it would otherwise race the reboot for Group Replication state), any half-started GR from a node that booted with autostart still on is stopped first, then `dba.rebootClusterFromCompleteOutage()` restores the InnoDB Cluster from its on-disk state — the member with the most complete GTID set becomes the primary — without touching data. The watchdog is resumed and `mysqld_exporter` restarted on every node afterward, even if an earlier step failed. Uses stored credentials.
+
+Requires MySQL Shell ≥ 8.0.30 on every node (checked at deploy-time preflight) — the forced-reboot path needs the `force` option, which older shells don't support.
 
 **Request:**
 | Field | Type | Required | Description |
@@ -654,7 +656,7 @@ Rejected while the deploy job is running, while another member/stop operation ho
 
 ### `POST /cluster/pgsql/start`
 
-Start a stopped cluster (or one that went through a full outage). Runs `cluster_bootstrap` and `verify_cluster`: etcd is started on all nodes, the cluster is re-registered in the DCS, and Patroni is started on the primary first, then the standbys. Data directories are never touched — the etcd data-dir reset inside `cluster_bootstrap` is marker-guarded per deploy job and is skipped on start/recover. Uses stored credentials.
+Start a stopped cluster (or one that went through a full outage). Runs `cluster_bootstrap` and `verify_cluster`: before etcd starts on each node, any etcd process not tracked by systemd is killed (clears a stale data-directory lock left by a node that froze or was power-cycled), and that node's `initial-cluster` peer list is refreshed to the cluster's current membership — a node's etcd config is otherwise only written once (at deploy or add-member time) and drifts stale after any later membership change, which would make etcd reject startup with "member count is unequal". Already-initialized nodes also skip a remote-peer validation that only matters for a brand-new node's first join. etcd and Patroni are then started (primary first, then standbys) and the cluster re-registers in the DCS; an etcd or Patroni bootstrap failure automatically captures that service's journal into the failed step's output. Data directories are never touched — the etcd data-dir reset inside `cluster_bootstrap` is marker-guarded per deploy job and is skipped on start/recover. Uses stored credentials.
 
 **Request:**
 | Field | Type | Required | Description |
