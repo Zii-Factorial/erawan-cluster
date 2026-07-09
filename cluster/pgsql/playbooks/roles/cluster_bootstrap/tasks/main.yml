@@ -21,6 +21,28 @@
   when: not erawan_etcd_reset_marker_stat.stat.exists
   tags: ["cluster_bootstrap"]
 
+# A full cluster stop/start (or a node that froze and got power-cycled) can
+# leave an orphaned etcd process holding the bbolt file lock on
+# /var/lib/etcd/member/snap/db without systemd knowing about it — systemd's
+# own restart loop then keeps launching a new etcd that immediately exits 1
+# ("cannot lock data directory"). Clearing any etcd not owned by the current
+# unit before (re)starting makes this self-healing instead of a permanent
+# crash loop.
+- name: Kill any etcd process not tracked by systemd
+  ansible.builtin.shell: |
+    set -uo pipefail
+    unit_pid=$(systemctl show -p MainPID --value etcd 2>/dev/null || echo 0)
+    for pid in $(pgrep -f -- '--config-file={{ etcd_config_path }}'); do
+      [ "$pid" = "$unit_pid" ] && continue
+      kill -9 "$pid" 2>/dev/null || true
+    done
+    exit 0
+  args:
+    executable: /bin/bash
+  changed_when: false
+  failed_when: false
+  tags: ["cluster_bootstrap"]
+
 - name: Start etcd on all nodes
   ansible.builtin.systemd:
     name: etcd
@@ -28,24 +50,43 @@
     state: started
   tags: ["cluster_bootstrap"]
 
-- name: Wait for local etcd client port
-  ansible.builtin.wait_for:
-    host: "{{ ansible_host }}"
-    port: "{{ etcd_client_port }}"
-    state: started
-    timeout: 90
+# block/rescue mirrors the Patroni pattern below: capture the journal whether
+# the port-open wait or the health poll times out, so a crash-looping etcd
+# (exit 1 in a restart-on-failure loop) reports its real error instead of a
+# bare timeout that requires manual SSH to diagnose.
+- name: Wait for etcd to accept connections and report healthy
   tags: ["cluster_bootstrap"]
+  block:
+    - name: Wait for local etcd client port
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ etcd_client_port }}"
+        state: started
+        timeout: 90
 
-- name: Wait for etcd to become healthy on each node
-  ansible.builtin.uri:
-    url: "http://{{ ansible_host }}:{{ etcd_client_port }}/health"
-    return_content: true
-  register: etcd_health
-  until: etcd_health.status == 200 and ('true' in (etcd_health.content | lower))
-  retries: 60
-  delay: 1
-  changed_when: false
-  tags: ["cluster_bootstrap"]
+    - name: Wait for etcd to become healthy on each node
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:{{ etcd_client_port }}/health"
+        return_content: true
+      register: etcd_health
+      until: etcd_health.status == 200 and ('true' in (etcd_health.content | lower))
+      retries: 60
+      delay: 1
+      changed_when: false
+  rescue:
+    - name: Collect etcd journal on bootstrap failure
+      ansible.builtin.command:
+        argv: [journalctl, -u, etcd, --no-pager, -n, 80]
+      register: _etcd_journal
+      changed_when: false
+      failed_when: false
+
+    - name: Fail with etcd log context
+      ansible.builtin.fail:
+        msg: |
+          etcd failed to become healthy on {{ inventory_hostname }}.
+          Last 80 etcd journal lines:
+          {{ _etcd_journal.stdout | default('(no journal output)') }}
 
 - name: Start Patroni on the requested primary node
   ansible.builtin.systemd:
