@@ -43,6 +43,32 @@
   failed_when: false
   tags: ["cluster_bootstrap"]
 
+# A member added via add_member gets its etcd.conf rendered once with
+# initial-cluster-state: existing and an initial-cluster peer list frozen at
+# that moment (base_config only re-templates the NEW node's file, never the
+# other members'). etcd re-validates that peer list against the cluster's
+# actual (current) membership on every subsequent start when state=existing
+# — so this node fails with "member count is unequal" the first time it
+# restarts after a LATER add/remove-member changed the cluster size, even
+# though its own data directory is fine. That validation only runs for
+# state=existing; a data directory that is already initialized (member/
+# exists) ignores initial-cluster and initial-cluster-state entirely once
+# past it, so flipping to "new" here is a safe, idempotent way to skip a
+# check that only matters for a brand-new node's very first start.
+- name: Check whether this node's etcd data directory is already initialized
+  ansible.builtin.stat:
+    path: /var/lib/etcd/member
+  register: erawan_etcd_member_dir_stat
+  tags: ["cluster_bootstrap"]
+
+- name: Skip stale initial-cluster validation on already-initialized nodes
+  ansible.builtin.lineinfile:
+    path: "{{ etcd_config_path }}"
+    regexp: '^initial-cluster-state:'
+    line: "initial-cluster-state: new"
+  when: erawan_etcd_member_dir_stat.stat.exists
+  tags: ["cluster_bootstrap"]
+
 - name: Start etcd on all nodes
   ansible.builtin.systemd:
     name: etcd
