@@ -135,13 +135,27 @@ group never opened 80/443.
    sudo certbot certonly --standalone --http-01-port 8888 -d api.yourdomain.com
    ```
 
-4. Combine cert + key into the single PEM HAProxy expects:
+4. Combine cert + key into the single PEM HAProxy expects. **Don't lock this down
+   to `600`/root-only** — the erawan-cluster API (running as the unprivileged
+   `erawan` user) re-validates the *entire* tenants directory with its own
+   `haproxy -c` subprocess on every future `/haproxy/config/*` call, including
+   ones for completely unrelated DB clusters, and that subprocess needs to open
+   this file too. `600`/root-only causes every subsequent HAProxy config creation
+   to fail with a confusing `cannot open the file '.../erawan-api.pem'` error —
+   the *live* HAProxy daemon (root, via systemd) can still read it fine, so
+   manual `sudo haproxy -c` / `sudo systemctl reload` checks won't reveal the
+   problem; it only surfaces the next time the API itself validates a change:
    ```bash
    sudo mkdir -p /etc/haproxy/certs
+   sudo chgrp erawan /etc/haproxy/certs
+   sudo chmod 750 /etc/haproxy/certs
    cat /etc/letsencrypt/live/api.yourdomain.com/fullchain.pem \
        /etc/letsencrypt/live/api.yourdomain.com/privkey.pem \
        | sudo tee /etc/haproxy/certs/erawan-api.pem
-   sudo chmod 600 /etc/haproxy/certs/erawan-api.pem
+   sudo chgrp erawan /etc/haproxy/certs/erawan-api.pem
+   sudo chmod 640 /etc/haproxy/certs/erawan-api.pem
+   # confirm the API's service user can actually read it before moving on
+   sudo -u erawan cat /etc/haproxy/certs/erawan-api.pem > /dev/null && echo "OK: erawan can read it"
    ```
 
 5. Now append the HTTPS frontend + backend to the same tenants file from step 2:
@@ -176,12 +190,16 @@ group never opened 80/443.
    cat /etc/letsencrypt/live/api.yourdomain.com/fullchain.pem \
        /etc/letsencrypt/live/api.yourdomain.com/privkey.pem \
        > /etc/haproxy/certs/erawan-api.pem
-   chmod 600 /etc/haproxy/certs/erawan-api.pem
+   chgrp erawan /etc/haproxy/certs/erawan-api.pem
+   chmod 640 /etc/haproxy/certs/erawan-api.pem
    systemctl reload haproxy
    EOF
    sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/haproxy-reload.sh
    sudo certbot renew --dry-run
    ```
+   Keep `chgrp erawan` + `chmod 640` in this hook, not `chmod 600` — otherwise every
+   renewal quietly resets the permission fix from step 4 and the next
+   `/haproxy/config/*` call fails again.
 
 8. **Close the plaintext port — don't rely on `API_HOST=127.0.0.1` alone.** Confirm
    the app really is loopback-only, then firewall `:8080` as a second layer so a
@@ -208,6 +226,9 @@ than one internal client must trust the cert long-term) or a self-signed cert fo
 test environments:
 
 ```bash
+sudo mkdir -p /etc/haproxy/certs
+sudo chgrp erawan /etc/haproxy/certs
+sudo chmod 750 /etc/haproxy/certs
 openssl req -x509 -nodes -newkey rsa:2048 -days 825 \
   -keyout /etc/haproxy/certs/erawan-api.key \
   -out /etc/haproxy/certs/erawan-api.crt \
@@ -215,8 +236,13 @@ openssl req -x509 -nodes -newkey rsa:2048 -days 825 \
   -addext "subjectAltName=IP:<internal-ip>"
 cat /etc/haproxy/certs/erawan-api.crt /etc/haproxy/certs/erawan-api.key \
   | sudo tee /etc/haproxy/certs/erawan-api.pem
-sudo chmod 600 /etc/haproxy/certs/erawan-api.pem
+sudo chgrp erawan /etc/haproxy/certs/erawan-api.pem
+sudo chmod 640 /etc/haproxy/certs/erawan-api.pem
+sudo -u erawan cat /etc/haproxy/certs/erawan-api.pem > /dev/null && echo "OK: erawan can read it"
 ```
+Same reasoning as the public-domain path: `600`/root-only breaks the API's own
+config-validation subprocess (runs as `erawan`), not the live HAProxy daemon — see
+step 4 above for the full explanation.
 
 Add the same HTTPS frontend/backend block as step 5 above (skip the ACME/`:80`
 pieces — they're only for Let's Encrypt). Distribute `erawan-api.crt` to internal
