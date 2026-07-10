@@ -225,6 +225,24 @@ make check      # full quality gate: fmtcheck + vet + staticcheck + vulncheck + 
 make vulncheck  # scan for known Go CVEs (govulncheck)
 ```
 
+### Database migrations
+
+`make migration` requires `DB_CONNECTION` to be set (a PostgreSQL URL, e.g.
+`postgres://user:pass@127.0.0.1:5432/erawan?sslmode=disable`). It's read via
+`-include .envrc` / `-include /etc/erawan-cluster/.env` at the top of the
+Makefile — export it in one of those, or inline it. This applies to every
+subcommand below, including `TABLE=` scaffolding, which never touches the DB
+but is still gated by the same check in `scripts/migrate.sh`.
+
+```bash
+make migration                  # apply all pending migrations
+make migration TABLE=<name>     # scaffold a new NNN_<name>.up.sql / .down.sql pair
+make migration ROLLBACK=<name>  # run the matching .down.sql
+```
+
+Applied versions are tracked in the `erawan_schema_migrations` table, created
+automatically on first run.
+
 ---
 
 ## Code Structure
