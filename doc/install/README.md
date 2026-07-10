@@ -58,17 +58,52 @@ HAProxy is already installed by these guides, terminate TLS there rather than ad
 a second HTTP daemon (leaner footprint, no extra process to patch on a host that
 already runs Ansible jobs and DB TCP-proxying).
 
+### Before you start
+
+- **Make sure nothing else owns port 80/443.** Some base images ship a default
+  nginx. Check first:
+  ```bash
+  sudo ss -tlnp | grep -E ':80 |:443 '
+  ```
+  If nginx (or anything else) shows up and isn't serving something you need, remove
+  it — it silently wins the bind and every step below will fail in confusing ways
+  (certbot times out, HAProxy reload errors) otherwise:
+  ```bash
+  sudo systemctl stop nginx
+  sudo systemctl disable nginx
+  sudo apt purge -y nginx nginx-common nginx-core nginx-full 2>/dev/null
+  sudo apt autoremove -y
+  sudo rm -rf /etc/nginx /var/log/nginx
+  ```
+
+- **Know where to put HAProxy config so it actually loads.** The installer's
+  systemd override starts HAProxy with exactly:
+  ```
+  haproxy -Ws -f /etc/haproxy/haproxy.cfg -f /var/lib/erawan-cluster/haproxy/tenants ...
+  ```
+  Only those two `-f` targets are read. A file dropped anywhere else under
+  `/etc/haproxy/` (e.g. `/etc/haproxy/erawan-cluster.cfg`) is silently ignored. Put
+  your config **inside the tenants directory** instead — it's already wired up and
+  needs no systemd changes:
+  ```bash
+  sudo nano /var/lib/erawan-cluster/haproxy/tenants/00-erawan-cluster.cfg
+  ```
+  No `global`/`defaults` section is needed in that file — `haproxy.cfg` already
+  defines those and they carry over to blocks declared in files loaded after it.
+
 ### Public domain (Let's Encrypt via certbot)
 
 Requires a DNS A-record pointing a domain at this host's public IP with ports 80/443
-reachable from the internet.
+reachable from the internet — verify with the cloud firewall/security group, not
+just locally; a host can be listening and still be unreachable if the security
+group never opened 80/443.
 
 1. `sudo apt install -y certbot`
-2. Issue the cert without taking HAProxy's `:80` away: run certbot standalone on an
-   alternate port and route only the ACME challenge path to it from HAProxy.
-   ```bash
-   sudo certbot certonly --standalone --http-01-port 8888 -d api.yourdomain.com
-   ```
+
+2. Add the ACME-challenge routing first (the `:443` block needs a cert that doesn't
+   exist yet, so it comes later — adding it now will fail HAProxy's config check).
+   Write the **complete** file in one go; a partial paste (frontend without its
+   backend) fails with `unable to find required default_backend`:
    ```
    frontend erawan_http
        bind *:80
@@ -79,14 +114,37 @@ reachable from the internet.
    backend acme_challenge
        server certbot 127.0.0.1:8888
    ```
-3. Combine cert + key into the single PEM HAProxy expects:
+   Validate and reload:
    ```bash
+   sudo haproxy -c -f /etc/haproxy/haproxy.cfg -f /var/lib/erawan-cluster/haproxy/tenants
+   sudo systemctl reload haproxy
+   sudo ss -tlnp | grep ':80 '   # must show haproxy, not nginx or anything else
+   ```
+   Confirm external reachability before spending a certbot attempt (run from
+   somewhere off this host):
+   ```bash
+   curl -I http://api.yourdomain.com/.well-known/acme-challenge/test
+   ```
+   Any HTTP response (404 included) is fine — a timeout means the cloud firewall is
+   still blocking inbound 80, fix that before continuing.
+
+3. Issue the cert. `--http-01-port` only controls where *certbot's own* temporary
+   server listens locally — Let's Encrypt itself always connects to port 80
+   externally, which is why step 2's HAProxy routing has to be live first:
+   ```bash
+   sudo certbot certonly --standalone --http-01-port 8888 -d api.yourdomain.com
+   ```
+
+4. Combine cert + key into the single PEM HAProxy expects:
+   ```bash
+   sudo mkdir -p /etc/haproxy/certs
    cat /etc/letsencrypt/live/api.yourdomain.com/fullchain.pem \
        /etc/letsencrypt/live/api.yourdomain.com/privkey.pem \
        | sudo tee /etc/haproxy/certs/erawan-api.pem
    sudo chmod 600 /etc/haproxy/certs/erawan-api.pem
    ```
-4. Add the HTTPS frontend, pointed at the API's loopback listener:
+
+5. Now append the HTTPS frontend + backend to the same tenants file from step 2:
    ```
    frontend erawan_api_https
        bind *:443 ssl crt /etc/haproxy/certs/erawan-api.pem
@@ -94,14 +152,22 @@ reachable from the internet.
        default_backend erawan_api
 
    backend erawan_api
+       option forwardfor
        server api1 127.0.0.1:8080 check
    ```
-5. Validate and reload:
+   `option forwardfor` matters: without it, HAProxy doesn't set `X-Forwarded-For`,
+   so `middleware.RealIP` in the app logs every request as `127.0.0.1` instead of
+   the real client IP.
+
+6. Validate, reload, confirm:
    ```bash
-   sudo haproxy -c -f /etc/haproxy/haproxy.cfg -f <tenants_dir>
+   sudo haproxy -c -f /etc/haproxy/haproxy.cfg -f /var/lib/erawan-cluster/haproxy/tenants
    sudo systemctl reload haproxy
+   sudo ss -tlnp | grep -E ':443 '
+   curl -v https://api.yourdomain.com/health
    ```
-6. Automate renewal — certbot's package already installs a systemd timer
+
+7. Automate renewal — certbot's package already installs a systemd timer
    (`systemctl list-timers | grep certbot`). Add a deploy-hook so the combined PEM
    and HAProxy reload happen automatically on every renewal:
    ```bash
@@ -114,7 +180,26 @@ reachable from the internet.
    systemctl reload haproxy
    EOF
    sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/haproxy-reload.sh
+   sudo certbot renew --dry-run
    ```
+
+8. **Close the plaintext port — don't rely on `API_HOST=127.0.0.1` alone.** Confirm
+   the app really is loopback-only, then firewall `:8080` as a second layer so a
+   future config slip can't silently re-expose it:
+   ```bash
+   sudo ss -tlnp | grep :8080          # must show 127.0.0.1:8080, never 0.0.0.0:8080
+   curl -m 5 http://<public-ip>:8080/health   # from off-host; must time out
+   sudo ufw deny 8080/tcp
+   ```
+   Also check the cloud security group has no rule forwarding public `:8080` to
+   this instance — only `80`/`443` should be open. Mass internet scanners probe
+   exposed ports within minutes (a real example seen in testing: a bot hit
+   `/SDK/webLanguage`, a known IoT-exploit scan signature, moments after the port
+   was briefly open), so verify this rather than assume it.
+
+9. Update every client's endpoint config from the old plaintext
+   `http://<ip>:8080` to `https://api.yourdomain.com` (no port needed — HTTPS
+   defaults to 443) once step 8 confirms 8080 is no longer reachable.
 
 ### Private/internal only (no public domain)
 
@@ -133,9 +218,10 @@ cat /etc/haproxy/certs/erawan-api.crt /etc/haproxy/certs/erawan-api.key \
 sudo chmod 600 /etc/haproxy/certs/erawan-api.pem
 ```
 
-Add the same HTTPS frontend/backend block as step 4 above. Distribute
-`erawan-api.crt` to internal clients that need to trust it; otherwise they must skip
-certificate verification, which weakens MITM protection on the private network —
-document that tradeoff if you accept it. No Let's-Encrypt-style renewal automation
-applies here; track the cert's expiry manually (or shorten `-days` and put a reminder
-on the calendar).
+Add the same HTTPS frontend/backend block as step 5 above (skip the ACME/`:80`
+pieces — they're only for Let's Encrypt). Distribute `erawan-api.crt` to internal
+clients that need to trust it; otherwise they must skip certificate verification,
+which weakens MITM protection on the private network — document that tradeoff if
+you accept it. No Let's-Encrypt-style renewal automation applies here; track the
+cert's expiry manually (or shorten `-days` and put a reminder on the calendar).
+Steps 8–9 above (firewall `:8080`, update client endpoints) still apply.
