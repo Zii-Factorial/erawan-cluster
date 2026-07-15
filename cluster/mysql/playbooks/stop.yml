@@ -26,7 +26,14 @@
   gather_facts: false
   become: true
   tasks:
-    - name: Turn off group_replication_start_on_boot (start/recover re-enables it)
+    # STOP GROUP_REPLICATION runs last so the SETs always apply even when GR
+    # is not running. Leaving the group here matters for speed: a mysqld shut
+    # down while still a GR member can block on
+    # group_replication_components_stop_timeout (300s default) inside the
+    # systemd stop; with GR already stopped, the stop below is a plain fast
+    # InnoDB shutdown. The whole task is timeout-wrapped and non-fatal so a
+    # wedged node cannot stall the play — the systemd stop still bounds it.
+    - name: Turn off group_replication_start_on_boot and leave the group
       ansible.builtin.shell: |
         set -euo pipefail
         sock=""
@@ -34,8 +41,8 @@
           if [ -S "$s" ]; then sock="$s"; break; fi
         done
         [ -n "$sock" ] || exit 0
-        mysql -uroot --socket="$sock" -e \
-          "SET GLOBAL group_replication_start_on_boot = OFF; SET PERSIST group_replication_start_on_boot = OFF"
+        timeout 90 mysql -uroot --socket="$sock" -e \
+          "SET GLOBAL group_replication_start_on_boot = OFF; SET PERSIST group_replication_start_on_boot = OFF; STOP GROUP_REPLICATION"
       args:
         executable: /bin/bash
       changed_when: true

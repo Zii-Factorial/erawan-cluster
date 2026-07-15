@@ -8,6 +8,15 @@ Type=simple
 User=postgres
 Group=postgres
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
+# /run/postgresql lives on tmpfs and vanishes on every reboot (including a
+# stop/resize/start vertical scale). Without it Postgres dies at startup
+# creating its socket lock, so Patroni crash-loops and start/add-member hang
+# waiting for the port. Let systemd own the directory: recreated on every
+# Patroni start, preserved across restarts (KillMode=process leaves postgres
+# running through a Patroni restart, so the socket dir must survive it too).
+RuntimeDirectory=postgresql
+RuntimeDirectoryMode=2775
+RuntimeDirectoryPreserve=yes
 ExecStart={{ erawan_patroni_bin_path }} {{ patroni_config_path }}
 ExecReload=/bin/kill -s HUP $MAINPID
 KillMode=process

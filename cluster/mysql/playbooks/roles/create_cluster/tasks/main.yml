@@ -113,7 +113,13 @@
           continue
         raise
 
-    _create_opts = {"multiPrimary": False, "communicationStack": "MYSQL"}
+    # gtidSetIsComplete: every node this control plane hands to the cluster is
+    # fully prepared by configure_instances, which ends by clearing the
+    # binary-log/GTID history of the node -- so an empty GTID set on a joiner
+    # really means nothing to reconcile. This lets add_instance pick fast
+    # incremental recovery (seconds, no restart) instead of failing into a
+    # full clone (dataset copy + server restart, the dominant add-member cost).
+    _create_opts = {"multiPrimary": False, "communicationStack": "MYSQL", "gtidSetIsComplete": True}
 
     try:
       dba.get_cluster(cluster_name)

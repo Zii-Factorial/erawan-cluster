@@ -4,6 +4,20 @@
     name: runtime_facts
   tags: ["cluster_bootstrap"]
 
+# /var/run/postgresql lives on tmpfs, so a host reboot wipes it. base_config
+# creates it at deploy time, but start/recover only runs this role — without
+# it Postgres dies instantly at every Patroni start attempt (cannot create
+# its socket lock file) and the "wait for port" below times out. Recreating
+# it here makes start-after-reboot self-healing.
+- name: Ensure PostgreSQL runtime socket directory exists
+  ansible.builtin.file:
+    path: /var/run/postgresql
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "2775"
+  tags: ["cluster_bootstrap"]
+
 - name: Check whether etcd data reset already ran for this job
   ansible.builtin.stat:
     path: "{{ erawan_etcd_reset_marker }}"
@@ -175,14 +189,33 @@
           Last 80 Patroni journal lines:
           {{ _patroni_journal.stdout | default('(no journal output)') }}
 
-- name: Wait for PostgreSQL to listen on primary
-  ansible.builtin.wait_for:
-    host: "{{ ansible_host }}"
-    port: "{{ postgres_port }}"
-    state: started
-    timeout: 180
+# block/rescue mirrors the leader-election pattern above: if Postgres never
+# opens its port (e.g. it is crash-looping at startup), surface the Patroni
+# journal — which captures Postgres stdout/stderr — instead of a bare timeout.
+- name: Wait for PostgreSQL to accept connections on primary
   when: inventory_hostname in groups['pgsql_primary']
   tags: ["cluster_bootstrap"]
+  block:
+    - name: Wait for PostgreSQL to listen on primary
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ postgres_port }}"
+        state: started
+        timeout: 180
+  rescue:
+    - name: Collect Patroni journal on primary PostgreSQL startup failure
+      ansible.builtin.command:
+        argv: [journalctl, -u, patroni, --no-pager, -n, 80]
+      register: _pg_primary_journal
+      changed_when: false
+      failed_when: false
+
+    - name: Fail with PostgreSQL startup log context
+      ansible.builtin.fail:
+        msg: |
+          PostgreSQL did not open port {{ postgres_port }} on {{ inventory_hostname }}.
+          Last 80 Patroni journal lines:
+          {{ _pg_primary_journal.stdout | default('(no journal output)') }}
 
 # Enforce synchronous_mode via the Patroni REST API so this takes effect on
 # both fresh clusters (redundant with bootstrap.dcs but harmless) and on
@@ -248,11 +281,28 @@
           Last 80 Patroni journal lines:
           {{ _patroni_standby_journal.stdout | default('(no journal output)') }}
 
-- name: Wait for PostgreSQL to listen on standbys
-  ansible.builtin.wait_for:
-    host: "{{ ansible_host }}"
-    port: "{{ postgres_port }}"
-    state: started
-    timeout: 180
+# Same journal-on-failure pattern as the primary wait above.
+- name: Wait for PostgreSQL to accept connections on standbys
   when: inventory_hostname in groups['pgsql_standby']
   tags: ["cluster_bootstrap"]
+  block:
+    - name: Wait for PostgreSQL to listen on standbys
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ postgres_port }}"
+        state: started
+        timeout: 180
+  rescue:
+    - name: Collect Patroni journal on standby PostgreSQL startup failure
+      ansible.builtin.command:
+        argv: [journalctl, -u, patroni, --no-pager, -n, 80]
+      register: _pg_standby_journal
+      changed_when: false
+      failed_when: false
+
+    - name: Fail with PostgreSQL startup log context on standbys
+      ansible.builtin.fail:
+        msg: |
+          PostgreSQL did not open port {{ postgres_port }} on {{ inventory_hostname }}.
+          Last 80 Patroni journal lines:
+          {{ _pg_standby_journal.stdout | default('(no journal output)') }}

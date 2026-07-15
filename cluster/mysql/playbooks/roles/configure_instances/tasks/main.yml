@@ -280,3 +280,31 @@
     executable: /bin/bash
   changed_when: true
   tags: ["configure_instances", "configure_instances_mysqlsh"]
+
+# The prep SQL above (admin user creation, grants) is binlogged under this
+# node's local server_uuid — GTIDs the cluster has never seen. mysqlsh treats
+# those as errant and refuses fast incremental recovery, forcing every join
+# into a full clone (dataset copy + server restart), which dominates deploy
+# and add-member time. This role fully owns the node's state on this path
+# (GR state reset, metadata dropped), so its GTID history is ours to discard:
+# an empty GTID set joins via incremental recovery in seconds because the
+# cluster is created with gtidSetIsComplete. Data files are not touched.
+# Nodes carrying pre-existing data that must be reconciled should use
+# assume_prepared, which skips this and keeps the clone path.
+- name: Clear binary log history so the node can join via incremental recovery
+  ansible.builtin.shell: |
+    set -euo pipefail
+    sock=""
+    for s in /var/run/mysqld/mysqld.sock /run/mysqld/mysqld.sock /var/lib/mysql/mysql.sock; do
+      if [ -S "$s" ]; then sock="$s"; break; fi
+    done
+    [ -n "$sock" ] || { echo "no MySQL socket found" >&2; exit 1; }
+    # RESET MASTER was removed in MySQL 9; try the new statement first.
+    if ! mysql -uroot --socket="$sock" -e "RESET BINARY LOGS AND GTIDS" 2>/dev/null; then
+      mysql -uroot --socket="$sock" -e "RESET MASTER"
+    fi
+  args:
+    executable: /bin/bash
+  when: not _assume_prepared
+  changed_when: true
+  tags: ["configure_instances", "configure_mysql"]
