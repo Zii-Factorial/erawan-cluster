@@ -341,6 +341,8 @@ Roll back a MySQL cluster deployment (removes cluster config, unjoins nodes).
 
 Add one or more secondary nodes to an existing MySQL InnoDB Cluster. When several `member_ips` are given they are joined **one at a time, in order**; each successful node is recorded in the cluster's standby list before the next join starts, and the job stops at the first failure (already-joined nodes stay in the cluster).
 
+Recovery method is `auto`: a GTID-compatible node (the normal case for a freshly provisioned VM) joins via fast incremental recovery — seconds, no server restart — and only a node that genuinely needs provisioning (errant GTIDs, reused data directory) falls back to a full clone.
+
 Only one add/remove-member operation may run at a time per cluster (`job_id`), and the deploy job must not itself be running (mid-deploy or mid-resume). Two concurrent member operations both mutate Group Replication membership and can transiently break quorum on the primary — the API rejects the second call immediately with an error instead of racing inside Ansible. Wait for the current operation to finish (poll **Get Job**) before starting another.
 
 **Request:**
@@ -562,8 +564,8 @@ Deploy a PostgreSQL Patroni cluster. Returns immediately with a job ID.
 | `cluster_name` | string | yes | Patroni scope name |
 | `primary_ip` | string | yes | IP of the primary node |
 | `standby_ips` | string[] | yes | IPs of standby nodes; empty `[]` for single-node |
-| `postgres_password` | string | yes | Password for the `postgres` superuser |
-| `replicator_password` | string | yes | Password for the `replicator` streaming replication user |
+| `postgres_password` | string | no | Password for the `postgres` superuser (auto-generated if empty; returned in the deploy response `secret` block) |
+| `replicator_password` | string | no | Password for the `replicator` streaming replication user (auto-generated if empty; returned in the `secret` block) |
 | `admin_username` | string | yes | Application admin user to create |
 | `admin_password` | string | yes | Password for the admin user |
 | `new_user` | string | no | Application user to create |
