@@ -90,21 +90,45 @@
     enabled: true
     state: started
 
-- name: Wait for Patroni REST port to open
-  ansible.builtin.wait_for:
-    host: "{{ ansible_host }}"
-    port: "{{ patroni_rest_port }}"
-    state: started
-    timeout: 300
+# block/rescue mirrors cluster_bootstrap: when the join fails (basebackup
+# auth error, primary unreachable, timeout on a large dataset), surface the
+# Patroni journal — which contains the pg_basebackup error — instead of a
+# bare 503 from the /replica probe.
+- name: Join cluster as replica and verify streaming state
+  block:
+    - name: Wait for Patroni REST port to open
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ patroni_rest_port }}"
+        state: started
+        timeout: 300
 
-- name: Wait for node to reach replica state
-  ansible.builtin.uri:
-    url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/replica"
-    return_content: true
-  register: _patroni_replica
-  until: _patroni_replica.status == 200
-  # Same 300s ceiling as cluster_bootstrap's patroni_replica_retries/delay,
-  # polled at the same 2s granularity for consistency.
-  retries: 150
-  delay: 2
-  changed_when: false
+    - name: Wait for node to reach replica state
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/replica"
+        return_content: true
+      register: _patroni_replica
+      until: _patroni_replica.status == 200
+      # Replica creation is a full pg_basebackup from the leader, so the time
+      # this needs scales with data size. Bound it by step_timeout_seconds
+      # (like verify_cluster's waits) instead of a hardcoded 300s that a
+      # multi-GB dataset can legitimately exceed; 2s polling keeps the happy
+      # path fast.
+      retries: "{{ ((step_timeout_seconds | default(900) | int) / 2) | int }}"
+      delay: 2
+      changed_when: false
+  rescue:
+    - name: Collect Patroni journal on replica join failure
+      ansible.builtin.command:
+        argv: [journalctl, -u, patroni, --no-pager, -n, 100]
+      register: _join_journal
+      changed_when: false
+      failed_when: false
+
+    - name: Fail with replica join log context
+      ansible.builtin.fail:
+        msg: |
+          New member {{ ansible_host }} did not reach replica state
+          (last Patroni state: {{ (_patroni_replica.json | default({})).state | default('unknown') }}).
+          Last 100 Patroni journal lines:
+          {{ _join_journal.stdout | default('(no journal output)') }}
