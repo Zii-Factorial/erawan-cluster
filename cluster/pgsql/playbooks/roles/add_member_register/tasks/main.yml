@@ -153,6 +153,44 @@
   failed_when: _etcd_health_check.rc != 0
   tags: ["add_member_register"]
 
+# The etcd gate above proves the DCS is healthy, but a replica can only be
+# created from a running Patroni LEADER — and after a primary reboot (e.g. a
+# vertical scale) etcd auto-recovers while Postgres may not, leaving the
+# cluster leaderless with perfectly healthy etcd. Without this gate the join
+# proceeds and then burns the entire replica-wait ceiling polling a
+# basebackup that has no source (node stuck oscillating "creating replica").
+# Fail fast with the reason instead, before touching etcd membership.
+- name: Verify the cluster has a Patroni leader before adding a member
+  tags: ["add_member_register"]
+  block:
+    - name: Wait for Patroni leader on primary
+      ansible.builtin.uri:
+        url: "http://{{ primary_ip }}:{{ patroni_rest_port }}/leader"
+        return_content: true
+      register: _leader_gate
+      until: _leader_gate.status == 200
+      retries: 30
+      delay: 2
+      changed_when: false
+  rescue:
+    - name: Collect Patroni journal on missing leader
+      ansible.builtin.command:
+        argv: [journalctl, -u, patroni, --no-pager, -n, 60]
+      register: _leader_journal
+      changed_when: false
+      failed_when: false
+
+    - name: Fail fast because the cluster has no leader to clone from
+      ansible.builtin.fail:
+        msg: |
+          Cannot add a member: the cluster has no Patroni leader (checked
+          http://{{ primary_ip }}:{{ patroni_rest_port }}/leader for 60s).
+          PostgreSQL on the primary is most likely down (common after a node
+          reboot/vertical scale) — run the start/recover API for this cluster
+          first, then retry add-member.
+          Last 60 Patroni journal lines on the primary:
+          {{ _leader_journal.stdout | default('(no journal output)') }}
+
 # Stale members (destroyed nodes that never went through the remove-member
 # API) and unstarted members (name == "") from prior failed attempts cause
 # "etcdserver: unhealthy cluster" on the next member add. Remove them before
