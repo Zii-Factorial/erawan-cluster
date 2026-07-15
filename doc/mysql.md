@@ -143,13 +143,14 @@ After a successful deploy, every node has the following files and services insta
 
 ### `/etc/mysql/mysql.conf.d/99-erawan-cluster.cnf`
 
-Group Replication configuration. Written by the `configure_instances` role. `report_host` and `server_id` are unique per node.
+Group Replication configuration. Written by the `configure_instances` role. `report_host` and `server_id` are unique per node. When the deploy request sets `connection_limit`, a `max_connections = <connection_limit>` line is added (the `auto_rejoin` role also applies it live via `SET PERSIST`, so it takes effect even on `assume_prepared` deploys that skip this file).
 
 **Node 1 (primary)**
 ```ini
 [mysqld]
 bind-address = 0.0.0.0
 report_host = 10.0.0.1
+max_connections = 500
 mysqlx = OFF
 loose-group_replication_start_on_boot = OFF
 loose-group_replication_autorejoin_tries = 10

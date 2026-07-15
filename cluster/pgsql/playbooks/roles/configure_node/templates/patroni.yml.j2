@@ -24,6 +24,9 @@ bootstrap:
       use_pg_rewind: true
       use_slots: true
       parameters:
+{% if (postgres_max_connections | default(0) | int) > 0 %}
+        max_connections: {{ postgres_max_connections | int }}
+{% endif %}
         wal_level: replica
         hot_standby: "on"
         max_wal_senders: 10

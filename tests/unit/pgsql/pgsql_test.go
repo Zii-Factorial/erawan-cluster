@@ -46,13 +46,23 @@ func TestValidateDeployRequestAppliesDefaults(t *testing.T) {
 	if req.AdminUsername != "admin" || req.ClusterName != "postgres-cluster" {
 		t.Fatalf("unexpected name defaults: admin=%q cluster=%q", req.AdminUsername, req.ClusterName)
 	}
+	if req.ConnectionLimit != 0 {
+		t.Fatalf("expected connection_limit to default to 0 (engine default), got %d", req.ConnectionLimit)
+	}
+
+	withLimit := pgsql.DeployRequest{PrimaryIP: "10.0.0.1", ConnectionLimit: 500}
+	if err := pgsql.ValidateDeployRequest(&withLimit); err != nil {
+		t.Fatalf("expected connection_limit 500 to be valid, got %v", err)
+	}
 }
 
 func TestValidateDeployRequestRejectsBadInput(t *testing.T) {
 	cases := map[string]pgsql.DeployRequest{
-		"bad primary ip":         {PrimaryIP: "not-an-ip"},
-		"bad standby ip":         {PrimaryIP: "10.0.0.1", StandbyIPs: []string{"x"}},
-		"unsupported pg version": {PrimaryIP: "10.0.0.1", PostgresVersion: 99},
+		"bad primary ip":            {PrimaryIP: "not-an-ip"},
+		"bad standby ip":            {PrimaryIP: "10.0.0.1", StandbyIPs: []string{"x"}},
+		"unsupported pg version":    {PrimaryIP: "10.0.0.1", PostgresVersion: 99},
+		"connection limit too low":  {PrimaryIP: "10.0.0.1", ConnectionLimit: 5},
+		"connection limit too high": {PrimaryIP: "10.0.0.1", ConnectionLimit: 100001},
 	}
 	for name, req := range cases {
 		req := req

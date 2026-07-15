@@ -18,6 +18,10 @@
     SET PERSIST group_replication_unreachable_majority_timeout = {{ mysql_gr_unreachable_majority_timeout }};
     SET GLOBAL  group_replication_exit_state_action            = '{{ mysql_gr_exit_state_action }}';
     SET PERSIST group_replication_exit_state_action            = '{{ mysql_gr_exit_state_action }}';
+    {% if (mysql_max_connections | default(0) | int) > 0 %}
+    SET GLOBAL  max_connections                                = {{ mysql_max_connections | int }};
+    SET PERSIST max_connections                                = {{ mysql_max_connections | int }};
+    {% endif %}
     SQL
   args:
     executable: /bin/bash

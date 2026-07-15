@@ -187,14 +187,18 @@
 # Enforce synchronous_mode via the Patroni REST API so this takes effect on
 # both fresh clusters (redundant with bootstrap.dcs but harmless) and on
 # existing clusters whose DCS config pre-dates the synchronous_mode setting.
+# max_connections rides along for the same reason: bootstrap.dcs only applies
+# on a brand-new cluster, while this PATCH also covers DCS state that survived
+# from an earlier bootstrap.
 - name: Set synchronous_mode in Patroni DCS
   ansible.builtin.uri:
     url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/config"
     method: PATCH
     body_format: json
-    body:
-      synchronous_mode: true
-      synchronous_mode_strict: false
+    body: >-
+      {{ {'synchronous_mode': true, 'synchronous_mode_strict': false}
+         | combine({'postgresql': {'parameters': {'max_connections': postgres_max_connections | int}}}
+                   if (postgres_max_connections | default(0) | int) > 0 else {}) }}
     status_code: [200]
   when: inventory_hostname in groups['pgsql_primary']
   tags: ["cluster_bootstrap"]

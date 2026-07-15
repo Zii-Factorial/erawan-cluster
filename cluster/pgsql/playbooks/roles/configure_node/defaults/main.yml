@@ -1,4 +1,8 @@
 ---
+# max_connections written into bootstrap.dcs (cluster-wide via Patroni DCS);
+# 0 keeps the engine default.
+postgres_max_connections: 0
+
 patroni_ssl_cert_file: /etc/patroni/server.crt
 patroni_ssl_key_file: /etc/patroni/server.key
 patroni_remove_data_on_rewind_failure: true

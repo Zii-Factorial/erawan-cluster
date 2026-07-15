@@ -126,6 +126,8 @@ ETCD_INITIAL_CLUSTER_STATE=new
 
 ### `/etc/patroni/patroni.yml`
 
+`max_connections` under `bootstrap.dcs.postgresql.parameters` only appears when the deploy request sets `connection_limit` (it is also PATCHed into the Patroni DCS config during `cluster_bootstrap`, so it applies cluster-wide); omitted, PostgreSQL's default of `100` applies.
+
 ```yaml
 scope: pg-prod
 namespace: /db/

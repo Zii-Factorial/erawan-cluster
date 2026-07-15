@@ -46,13 +46,23 @@ func TestValidateDeployRequestAppliesDefaults(t *testing.T) {
 	if req.AdminUsername != "clusteradmin" {
 		t.Fatalf("expected default admin username, got %q", req.AdminUsername)
 	}
+	if req.ConnectionLimit != 0 {
+		t.Fatalf("expected connection_limit to default to 0 (engine default), got %d", req.ConnectionLimit)
+	}
+
+	withLimit := mysql.DeployRequest{ClusterName: "prodCluster", PrimaryIP: "10.0.0.1", ConnectionLimit: 500}
+	if err := mysql.ValidateDeployRequest(&withLimit); err != nil {
+		t.Fatalf("expected connection_limit 500 to be valid, got %v", err)
+	}
 }
 
 func TestValidateDeployRequestRejectsBadInput(t *testing.T) {
 	cases := map[string]mysql.DeployRequest{
-		"missing cluster name": {PrimaryIP: "10.0.0.1"},
-		"bad primary ip":       {ClusterName: "c", PrimaryIP: "not-an-ip"},
-		"bad standby ip":       {ClusterName: "c", PrimaryIP: "10.0.0.1", StandbyIPs: []string{"x"}},
+		"missing cluster name":      {PrimaryIP: "10.0.0.1"},
+		"bad primary ip":            {ClusterName: "c", PrimaryIP: "not-an-ip"},
+		"bad standby ip":            {ClusterName: "c", PrimaryIP: "10.0.0.1", StandbyIPs: []string{"x"}},
+		"connection limit too low":  {ClusterName: "prodCluster", PrimaryIP: "10.0.0.1", ConnectionLimit: 5},
+		"connection limit too high": {ClusterName: "prodCluster", PrimaryIP: "10.0.0.1", ConnectionLimit: 100001},
 	}
 	for name, req := range cases {
 		req := req

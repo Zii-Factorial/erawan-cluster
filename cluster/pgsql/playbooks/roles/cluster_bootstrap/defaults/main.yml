@@ -1,4 +1,7 @@
 ---
+# max_connections enforced in the DCS config PATCH; 0 keeps the engine default.
+postgres_max_connections: 0
+
 etcd_client_port: 2379
 patroni_rest_port: 8008
 postgres_port: 5432

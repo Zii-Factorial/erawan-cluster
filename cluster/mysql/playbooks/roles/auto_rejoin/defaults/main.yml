@@ -1,4 +1,10 @@
 ---
+# max_connections applied on every node (SET PERSIST, no restart needed);
+# 0 keeps the engine default. Applied here as well as in configure_instances'
+# my.cnf template so assume_prepared deploys (which skip configure_instances)
+# still get the requested limit.
+mysql_max_connections: 0
+
 mysql_gr_autorejoin_tries: 10
 mysql_gr_member_expel_timeout: 5
 mysql_gr_unreachable_majority_timeout: 60

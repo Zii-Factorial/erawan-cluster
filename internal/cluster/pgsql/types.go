@@ -39,6 +39,7 @@ type DeployRequest struct {
 	SSHPort            int      `json:"ssh_port"`
 	PostgresPort       int      `json:"postgres_port"`
 	PostgresVersion    int      `json:"postgres_version"` // major version; default 16
+	ConnectionLimit    int      `json:"connection_limit"` // max_connections on every node; 0 = engine default
 	StepTimeoutSeconds int      `json:"step_timeout_seconds"`
 }
 
@@ -64,6 +65,7 @@ type StoredSpec struct {
 	SSHPort            int      `json:"ssh_port"`
 	PostgresPort       int      `json:"postgres_port"`
 	PostgresVersion    int      `json:"postgres_version"`
+	ConnectionLimit    int      `json:"connection_limit"`
 	StepTimeoutSeconds int      `json:"step_timeout_seconds"`
 }
 

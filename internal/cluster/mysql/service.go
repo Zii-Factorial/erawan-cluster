@@ -183,6 +183,7 @@ func (s *Service) Deploy(ctx context.Context, req DeployRequest) (*Job, error) {
 			SSHPort:            req.SSHPort,
 			MySQLPort:          req.MySQLPort,
 			MySQLVersion:       req.MySQLVersion,
+			ConnectionLimit:    req.ConnectionLimit,
 			StepTimeoutSeconds: req.StepTimeoutSeconds,
 		},
 		Steps: make([]StepResult, 0, len(s.steps)+1),

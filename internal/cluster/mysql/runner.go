@@ -292,6 +292,7 @@ func (r *Runner) run(ctx context.Context, cfg runConfig, playbook string) StepRe
 		"new_db":                     cfg.spec.NewDB,
 		"mysql_port":                 cfg.spec.MySQLPort,
 		"erawan_mysql_major_version": cfg.spec.MySQLVersion,
+		"mysql_max_connections":      cfg.spec.ConnectionLimit,
 		"assume_prepared":            cfg.spec.AssumePrepared,
 		"step_timeout_seconds":       stepTimeout,
 	}
@@ -369,6 +370,7 @@ func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, s
 		"force_remove":               cfg.force,
 		"mysql_port":                 cfg.spec.MySQLPort,
 		"erawan_mysql_major_version": cfg.spec.MySQLVersion,
+		"mysql_max_connections":      cfg.spec.ConnectionLimit,
 		"assume_prepared":            cfg.spec.AssumePrepared,
 		"step_timeout_seconds":       stepTimeout,
 		"expected_cluster_nodes":     len(effectiveStandbys) + 1,

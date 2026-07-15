@@ -103,6 +103,10 @@ func ValidateDeployRequest(req *DeployRequest) error {
 		return fmt.Errorf("mysql_version %d is not supported; valid: 8, 9", req.MySQLVersion)
 	}
 
+	if req.ConnectionLimit != 0 && (req.ConnectionLimit < 10 || req.ConnectionLimit > 100000) {
+		return fmt.Errorf("connection_limit must be between 10 and 100000 (0 = engine default)")
+	}
+
 	if req.StepTimeoutSeconds == 0 {
 		req.StepTimeoutSeconds = 900
 	}

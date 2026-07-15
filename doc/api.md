@@ -174,6 +174,7 @@ Deploy a MySQL InnoDB Cluster. Returns immediately with a job ID; the deployment
 | `ssh_port` | int | no | SSH port for Ansible (default `22`) |
 | `mysql_port` | int | no | MySQL port on DB nodes (default `3306`) |
 | `mysql_version` | int | no | Major version: `8` = 8.x, `9` = 9.x (default `8`) |
+| `connection_limit` | int | no | `max_connections` applied on every node, `10`–`100000`. `0`/omit keeps the engine default (`151`) |
 | `step_timeout_seconds` | int | no | Per-step Ansible timeout (default `900`) |
 
 ```json
@@ -188,6 +189,7 @@ Deploy a MySQL InnoDB Cluster. Returns immediately with a job ID; the deployment
   "new_user_superuser": true,
   "new_db": "appdb",
   "mysql_version": 8,
+  "connection_limit": 500,
   "step_timeout_seconds": 900
 }
 ```
@@ -573,6 +575,7 @@ Deploy a PostgreSQL Patroni cluster. Returns immediately with a job ID.
 | `ssh_port` | int | no | SSH port for Ansible (default `22`) |
 | `postgres_port` | int | no | PostgreSQL port on DB nodes (default `5432`) |
 | `postgres_version` | int | no | Major version: `14`, `15`, `16`, `17`, `18` (default `16`) |
+| `connection_limit` | int | no | `max_connections` applied cluster-wide via Patroni DCS, `10`–`100000`. `0`/omit keeps the engine default (`100`) |
 | `step_timeout_seconds` | int | no | Per-step Ansible timeout (default `900`) |
 
 ```json
@@ -589,6 +592,7 @@ Deploy a PostgreSQL Patroni cluster. Returns immediately with a job ID.
   "new_user_superuser": true,
   "new_db": "appdb",
   "postgres_version": 16,
+  "connection_limit": 500,
   "step_timeout_seconds": 900
 }
 ```

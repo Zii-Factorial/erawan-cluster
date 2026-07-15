@@ -40,7 +40,8 @@ type DeployRequest struct {
 	ResetHostKeys      bool     `json:"reset_host_keys"`
 	SSHPort            int      `json:"ssh_port"`
 	MySQLPort          int      `json:"mysql_port"`
-	MySQLVersion       int      `json:"mysql_version"` // major version: 7=5.7, 8=8.x, 9=9.x; default 8
+	MySQLVersion       int      `json:"mysql_version"`    // major version: 7=5.7, 8=8.x, 9=9.x; default 8
+	ConnectionLimit    int      `json:"connection_limit"` // max_connections on every node; 0 = engine default
 	StepTimeoutSeconds int      `json:"step_timeout_seconds"`
 }
 
@@ -78,6 +79,7 @@ type StoredSpec struct {
 	SSHPort            int      `json:"ssh_port"`
 	MySQLPort          int      `json:"mysql_port"`
 	MySQLVersion       int      `json:"mysql_version"`
+	ConnectionLimit    int      `json:"connection_limit"`
 	StepTimeoutSeconds int      `json:"step_timeout_seconds"`
 }
 

@@ -10,7 +10,6 @@
     host: "{{ erawan_node_ip }}"
     port: "{{ mysql_port }}"
     state: started
-    delay: 2
     timeout: "{{ mysql_start_timeout_seconds }}"
   tags: ["create_cluster"]
 

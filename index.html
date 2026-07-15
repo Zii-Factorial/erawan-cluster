@@ -575,6 +575,7 @@ DELETE /cluster/pgsql/databases</pre>
   "ssh_port": 22,
   "mysql_port": 3306,
   "mysql_version": 8,
+  "connection_limit": 500,
   "step_timeout_seconds": 900
 }</pre>
               <pre id="pgsql-payload" class="payload-panel hidden overflow-x-auto p-6 font-mono text-sm leading-7 text-slate-100">{
@@ -588,6 +589,7 @@ DELETE /cluster/pgsql/databases</pre>
   "ssh_port": 22,
   "postgres_port": 5432,
   "postgres_version": 16,
+  "connection_limit": 500,
   "step_timeout_seconds": 900
 }</pre>
               <pre id="haproxy-payload" class="payload-panel hidden overflow-x-auto p-6 font-mono text-sm leading-7 text-slate-100"><span class="text-slate-400">// POST /haproxy/config/mysql</span>
