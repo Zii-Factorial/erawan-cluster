@@ -27,115 +27,16 @@
     _etcd_expected_ips: "{{ ([primary_ip] + (standby_ips | default([])) + [new_member_ip]) | unique }}"
   tags: ["add_member_register"]
 
+# force-new-cluster resets membership to just the local node, so it is only
+# safe when every other registered voter is stale (not in the control
+# plane's node list) and demonstrably dead. The shared role performs that
+# evaluation (serializable member list, works without quorum) and either
+# recovers or fails with guidance. Also used by cluster_bootstrap on start.
 - name: Recover etcd from quorum lost to stale members
+  ansible.builtin.include_role:
+    name: etcd_recover_quorum
   when: _etcd_quick_health.rc != 0
   tags: ["add_member_register"]
-  block:
-    # force-new-cluster resets membership to just the local node, so it is only
-    # safe when every other registered voter is stale (not in the control
-    # plane's node list) and demonstrably dead. Otherwise fail with guidance.
-    # The member list is fetched serializable (linearizable=false) straight
-    # from the local etcd JSON gateway: that read is served from local raft
-    # state and works without quorum, unlike `etcdctl member list`.
-    - name: Evaluate whether quorum loss is auto-recoverable
-      ansible.builtin.shell: |
-        set -euo pipefail
-        python3 - <<'PYEOF'
-        import json, os, sys, urllib.request
-
-        expected = set(filter(None, os.environ['EXPECTED_IPS'].split(',')))
-        primary_ip = os.environ['PRIMARY_IP']
-        client_port = os.environ['ETCD_CLIENT_PORT']
-
-        list_req = urllib.request.Request(
-            'http://127.0.0.1:%s/v3/cluster/member/list' % client_port,
-            data=b'{}',
-            headers={'Content-Type': 'application/json'},
-        )
-        with urllib.request.urlopen(list_req, timeout=5) as resp:
-            members = json.load(resp).get('members', [])
-
-        def peer_ips(member):
-            return {u.split('//', 1)[-1].rsplit(':', 1)[0] for u in member.get('peerURLs', [])}
-
-        stale, expected_other_voters = [], []
-        for m in members:
-            ips = peer_ips(m)
-            if ips & expected:
-                if primary_ip not in ips and not m.get('isLearner', False):
-                    expected_other_voters.append(sorted(ips))
-            else:
-                stale.append(sorted(ips))
-
-        def verdict(recover, reason=''):
-            print(json.dumps({'recover': recover, 'reason': reason, 'stale': stale}))
-            sys.exit(0)
-
-        if not stale:
-            verdict(False, 'no stale members are registered; the quorum loss is a real outage of current cluster nodes -- recover those nodes instead')
-        if expected_other_voters:
-            verdict(False, 'current standbys %s are also registered as voters; force-new-cluster would orphan them -- repair them or run remove-member first' % expected_other_voters)
-        for ips in stale:
-            for ip in ips:
-                try:
-                    urllib.request.urlopen('http://%s:%s/health' % (ip, client_port), timeout=3)
-                    verdict(False, 'stale member %s still answers on its etcd client port; stop etcd on it before recovery' % ip)
-                except Exception:
-                    pass
-        verdict(True)
-        PYEOF
-      args:
-        executable: /bin/bash
-      environment:
-        EXPECTED_IPS: "{{ _etcd_expected_ips | join(',') }}"
-        PRIMARY_IP: "{{ primary_ip }}"
-        ETCD_CLIENT_PORT: "{{ etcd_client_port | string }}"
-      register: _etcd_recovery_decision
-      changed_when: false
-
-    - name: Abort when quorum loss is not auto-recoverable
-      ansible.builtin.fail:
-        msg: >-
-          etcd on the primary has lost quorum and cannot be auto-recovered:
-          {{ (_etcd_recovery_decision.stdout | from_json).reason }}
-      when: not ((_etcd_recovery_decision.stdout | from_json).recover | bool)
-
-    - name: Enable force-new-cluster in etcd config
-      ansible.builtin.lineinfile:
-        path: "{{ etcd_config_path }}"
-        line: "force-new-cluster: true"
-        state: present
-
-    - name: Restart etcd to drop stale members and restore single-voter quorum
-      ansible.builtin.systemd:
-        name: etcd
-        state: restarted
-
-    - name: Wait for etcd to become healthy after force-new-cluster
-      ansible.builtin.shell: |
-        set -euo pipefail
-        etcdctl --endpoints="http://127.0.0.1:{{ etcd_client_port }}" endpoint health
-      args:
-        executable: /bin/bash
-      register: _etcd_forced_health
-      changed_when: false
-      until: _etcd_forced_health.rc == 0
-      retries: 30
-      delay: 2
-
-    # Leaving force-new-cluster set would re-wipe membership on every etcd
-    # restart, silently kicking out members added later. Remove it and restart
-    # once more so the running process no longer carries the flag.
-    - name: Remove force-new-cluster from etcd config
-      ansible.builtin.lineinfile:
-        path: "{{ etcd_config_path }}"
-        line: "force-new-cluster: true"
-        state: absent
-
-    - name: Restart etcd without force-new-cluster
-      ansible.builtin.systemd:
-        name: etcd
-        state: restarted
 
 - name: Verify etcd is healthy on primary before registering new member
   ansible.builtin.shell: |

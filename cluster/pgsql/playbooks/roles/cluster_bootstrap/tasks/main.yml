@@ -143,6 +143,34 @@
           etcd failed to become healthy on {{ inventory_hostname }}.
           Last 80 etcd journal lines:
           {{ _etcd_journal.stdout | default('(no journal output)') }}
+      when: inventory_hostname not in groups['pgsql_primary']
+
+    # On the primary, an unhealthy etcd after a start is very often quorum
+    # lost to a stale voter: a node registered by a half-finished add-member
+    # and then destroyed without remove-member. The shared role recovers with
+    # force-new-cluster when that is provably safe (all unexpected voters are
+    # dead, no live standby would be orphaned) and fails with guidance
+    # otherwise — instead of a bare health timeout.
+    - name: Build expected cluster node list
+      ansible.builtin.set_fact:
+        _etcd_expected_ips: "{{ ([primary_ip] + (standby_ips | default([]))) | unique }}"
+      when: inventory_hostname in groups['pgsql_primary']
+
+    - name: Attempt stale-voter quorum recovery on the primary
+      ansible.builtin.include_role:
+        name: etcd_recover_quorum
+      when: inventory_hostname in groups['pgsql_primary']
+
+    - name: Re-check etcd health after quorum recovery
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:{{ etcd_client_port }}/health"
+        return_content: true
+      register: _etcd_health_recheck
+      until: _etcd_health_recheck.status == 200 and ('true' in (_etcd_health_recheck.content | lower))
+      retries: 30
+      delay: 1
+      changed_when: false
+      when: inventory_hostname in groups['pgsql_primary']
 
 - name: Start Patroni on the requested primary node
   ansible.builtin.systemd:
