@@ -8,6 +8,17 @@
 # quorum-free) member list and — only when it is provably safe — recover the
 # primary with force-new-cluster before gating on cluster health.
 
+# add_member's first play runs on the primary with no preflight — if the
+# primary itself was just rebooted or recreated (vertical scale), the first
+# SSH used to fail the whole job on a node seconds away from ready. Same
+# bounded manageability wait as preflight; immediate no-op when the node is
+# already up.
+- name: Wait for the primary to become manageable
+  ansible.builtin.wait_for_connection:
+    timeout: "{{ preflight_connect_timeout_seconds | default(300) }}"
+    sleep: 2
+  tags: ["add_member_register"]
+
 - name: Probe etcd health on primary (non-fatal)
   ansible.builtin.shell: |
     set -euo pipefail

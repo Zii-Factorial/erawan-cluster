@@ -1,4 +1,14 @@
 ---
+# add_member's first play runs this role directly against a node that may
+# have been created seconds ago (no preflight play in that flow) — the same
+# manageability wait preflight/boot_recovery use, and an immediate no-op on
+# the deploy path where preflight already ran.
+- name: Wait for the node to become manageable
+  ansible.builtin.wait_for_connection:
+    timeout: "{{ preflight_connect_timeout_seconds | default(300) }}"
+    sleep: 2
+  tags: ["configure_instances", "configure_mysql"]
+
 - name: Gather minimal network facts
   ansible.builtin.setup:
     gather_subset:
