@@ -1,0 +1,59 @@
+---
+# Included once per node role (primary, standby) with heal_listen_group set
+# to the relevant inventory group ("pgsql_primary" or "pgsql_standby").
+#
+# listen_addresses is a postmaster-only parameter: Patroni rewrites
+# postgresql.conf to the value in patroni.yml's postgresql.listen (always
+# "0.0.0.0" per configure_node's template) on every reconciliation, but it
+# will not itself bounce an already-running Postgres to apply a
+# restart-required change, and doesn't reliably surface this specific
+# setting via its pending_restart bookkeeping. A node whose Postgres process
+# started under an older, narrower bind (e.g. a cluster deployed before the
+# template used 0.0.0.0, or one manually tuned with ALTER SYSTEM) silently
+# keeps that bind across every subsequent reboot -- including a vertical
+# CPU/RAM/disk scale -- while Patroni still reports itself healthy
+# ("running"/"primary"), since it never checks what Postgres is actually
+# bound to. Left undetected, this surfaces later as HAProxy/clients unable
+# to reach a node that looks perfectly healthy.
+#
+# Detected directly against the live GUC (psql over the local unix socket,
+# which works regardless of what TCP address Postgres is bound to) rather
+# than trusting Patroni's own state, and self-healed with an explicit
+# restart via Patroni's REST API -- before the port-reachability wait that
+# follows this include has to time out and fail the whole job.
+
+- name: Query live listen_addresses
+  ansible.builtin.command:
+    argv: [psql, -tAc, "SHOW listen_addresses;"]
+  become: true
+  become_user: postgres
+  register: _heal_listen_addresses
+  changed_when: false
+  when: inventory_hostname in groups[heal_listen_group]
+
+- name: Restart PostgreSQL via Patroni when listen_addresses has drifted from 0.0.0.0
+  ansible.builtin.uri:
+    url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/restart"
+    method: POST
+    body_format: json
+    body: {}
+    status_code: [200, 202]
+  register: _heal_listen_restart
+  when:
+    - inventory_hostname in groups[heal_listen_group]
+    - _heal_listen_addresses.stdout | trim != '0.0.0.0'
+
+- name: Wait for Patroni to report running again after listen_addresses restart
+  ansible.builtin.uri:
+    url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/patroni"
+    return_content: true
+  register: _heal_listen_post_restart
+  until: >-
+    _heal_listen_post_restart.status == 200 and
+    (_heal_listen_post_restart.json | default({})).state | default('') == 'running'
+  retries: 60
+  delay: 2
+  changed_when: false
+  when:
+    - inventory_hostname in groups[heal_listen_group]
+    - _heal_listen_restart is changed

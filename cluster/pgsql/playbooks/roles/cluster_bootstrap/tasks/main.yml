@@ -217,6 +217,12 @@
           Last 80 Patroni journal lines:
           {{ _patroni_journal.stdout | default('(no journal output)') }}
 
+- name: Self-heal listen_addresses drift on primary
+  ansible.builtin.include_tasks: heal_listen_addresses.yml
+  vars:
+    heal_listen_group: pgsql_primary
+  tags: ["cluster_bootstrap"]
+
 # block/rescue mirrors the leader-election pattern above: if Postgres never
 # opens its port (e.g. it is crash-looping at startup), surface the Patroni
 # journal — which captures Postgres stdout/stderr — instead of a bare timeout.
@@ -308,6 +314,12 @@
           Patroni failed to reach replica state on {{ inventory_hostname }}.
           Last 80 Patroni journal lines:
           {{ _patroni_standby_journal.stdout | default('(no journal output)') }}
+
+- name: Self-heal listen_addresses drift on standbys
+  ansible.builtin.include_tasks: heal_listen_addresses.yml
+  vars:
+    heal_listen_group: pgsql_standby
+  tags: ["cluster_bootstrap"]
 
 # Same journal-on-failure pattern as the primary wait above.
 - name: Wait for PostgreSQL to accept connections on standbys
