@@ -6,10 +6,35 @@
 # away from ready. Same manageability test as preflight (SSH + sudo + remote
 # Python via the play's become); immediate no-op when nodes are already up.
 - name: Wait for the node to become manageable
-  ansible.builtin.wait_for_connection:
-    timeout: "{{ preflight_connect_timeout_seconds | default(300) }}"
-    sleep: 2
   tags: ["boot_recovery"]
+  block:
+    - name: Wait for SSH connection and privilege escalation
+      ansible.builtin.wait_for_connection:
+        timeout: "{{ preflight_connect_timeout_seconds | default(300) }}"
+        sleep: 2
+  rescue:
+    - name: Probe SSH and sudo layers separately
+      ansible.builtin.raw: whoami && { sudo -n true && echo SUDO_OK || echo SUDO_FAIL; }
+      become: false
+      register: _recovery_conn_probe
+      changed_when: false
+      failed_when: false
+
+    - name: Fail with connection diagnosis
+      ansible.builtin.fail:
+        msg: >-
+          {% if _recovery_conn_probe.rc != 0 -%}
+          Node {{ ansible_host }} is not reachable over SSH as
+          {{ ansible_user | default('the configured user') }}:
+          {{ _recovery_conn_probe.stderr | default('') | trim }}
+          {%- elif 'SUDO_FAIL' in (_recovery_conn_probe.stdout | default('')) -%}
+          SSH to {{ ansible_host }} works but passwordless sudo is not
+          configured for the connecting user — node provisioning
+          (cloud-init) is likely incomplete or misconfigured.
+          {%- else -%}
+          SSH and sudo work on {{ ansible_host }} but the Ansible Python
+          test never succeeded — check that python3 is installed on the node.
+          {%- endif %}
 
 - name: Ensure erawan config directory exists
   ansible.builtin.file:
