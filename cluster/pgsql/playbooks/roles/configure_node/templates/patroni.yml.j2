@@ -68,7 +68,10 @@ bootstrap:
         - createdb
 
 postgresql:
-  listen: 0.0.0.0:{{ postgres_port }}
+  # Explicitly listing localhost alongside 0.0.0.0 so local (unix-socket-less
+  # TCP) tooling on the node itself always has a loopback bind to rely on,
+  # in addition to the private-network address HAProxy/clients connect to.
+  listen: localhost,0.0.0.0:{{ postgres_port }}
   connect_address: {{ ansible_host }}:{{ postgres_port }}
   data_dir: {{ erawan_pg_data_directory }}
   bin_dir: {{ erawan_pg_bindir }}
