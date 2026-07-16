@@ -163,6 +163,21 @@ def reboot_with_retry(options):
                 continue
             raise
 
+def cluster_is_alive():
+    """True when any node reports an ONLINE GR member — i.e. a live group
+    exists, whatever this script's recovery actions did or failed to do."""
+    for ip in cfg.get("node_ips", []):
+        try:
+            s = connect_node(ip)
+            online = s.run_sql(
+                "SELECT COUNT(*) FROM performance_schema.replication_group_members "
+                "WHERE member_state = 'ONLINE'").fetch_one()[0]
+            if int(online) > 0:
+                return True
+        except Exception:
+            pass
+    return False
+
 is_already_active = False
 try:
     # mysqlsh picks the node with the highest GTID as primary, preserving the
@@ -181,6 +196,18 @@ except Exception as first_err:
         except Exception as force_err:
             force_msg = str(force_err).lower()
             if any(t in force_msg for t in ("already active", "online", "is running", "cluster is active")):
+                is_already_active = True
+            # GR auto-rejoin (start_on_boot=ON) races this script: members can
+            # form a live group between our "0 ONLINE members" gate and the
+            # reboot call, which then fails with version-dependent error text
+            # ("not completely offline", ...) that no token list reliably
+            # matches. The job's verdict must follow the cluster's actual
+            # state, not which recovery action happened to win the race —
+            # stragglers are the GR watchdog's job and verify_cluster, which
+            # runs next, is the gate that fails the job if the cluster never
+            # actually converges.
+            elif cluster_is_alive():
+                print(f"reboot failed ({force_err}) but a live group exists — treating as active")
                 is_already_active = True
             else:
                 raise
