@@ -84,6 +84,37 @@
     - _etcd_own_id.stdout | trim != ''
     - _etcd_is_learner.stdout | trim == 'true'
 
+# The register play's leader gate only proves Patroni's REST API (8008) is
+# up on the primary — NOT that PostgreSQL itself (5432) is reachable from
+# this node, which is the path pg_basebackup actually uses. A primary whose
+# live postmaster is bound to localhost (stock-image OS unit won the boot
+# race after a scale recreated the VM) or firewalled passes that gate, and
+# then every clone attempt silently fails: Patroni loops in "creating
+# replica" returning 503 until the full replica-wait ceiling burns down.
+# Probing the real clone path from the real source host fails in seconds
+# with the actual cause instead.
+- name: Verify the leader's PostgreSQL is reachable from this node
+  tags: ["add_member_join"]
+  block:
+    - name: Probe leader PostgreSQL port from the new member
+      ansible.builtin.wait_for:
+        host: "{{ primary_ip }}"
+        port: "{{ postgres_port }}"
+        state: started
+        timeout: 30
+  rescue:
+    - name: Fail fast because the clone source is unreachable
+      ansible.builtin.fail:
+        msg: >-
+          PostgreSQL on the leader ({{ primary_ip }}:{{ postgres_port }}) is
+          not reachable from the new member {{ ansible_host }}, so replica
+          creation (pg_basebackup) cannot work. Patroni's REST API on the
+          leader is up, so the usual cause is the leader's live postmaster
+          listening on localhost only (OS-packaged postgresql unit won the
+          boot race after the node was rebooted/recreated — run the
+          start/recover API for this cluster to re-disarm it) or a firewall
+          blocking {{ postgres_port }} between the nodes.
+
 - name: Start Patroni and join cluster as standby
   ansible.builtin.systemd:
     name: patroni
