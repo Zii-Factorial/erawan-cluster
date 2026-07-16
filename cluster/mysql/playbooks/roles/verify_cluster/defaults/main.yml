@@ -1,8 +1,19 @@
 ---
-mysqlsh_verify_timeout_seconds: 180
-# Polled at 2s instead of 20s so the retry ceiling stays roughly the same
-# (each attempt also spends a few seconds inside mysqlsh) but a cluster that
-# has already converged is detected within seconds — this keeps the start
-# (recover) API inside its latency budget.
-verify_cluster_retries: 30
+# Per-attempt cap on one mysqlsh status call. A healthy call returns in a few
+# seconds; the only thing that runs longer is a metadata-lock stall (see
+# boot_recovery's watchdog note), and retrying a fresh call beats sitting in
+# a stalled one — so this is deliberately much lower than the old 180s.
+mysqlsh_verify_timeout_seconds: 60
+
+# Wall-clock budget for the whole verification loop. Convergence time is
+# dominated by Group Replication distributed recovery, which scales with data
+# size — so the loop is bounded by TIME, not attempt count: attempt-count
+# ceilings are unstable, because a fast-failing attempt (~4s) and a stalled
+# one (mysqlsh timeout) differ by an order of magnitude, making the same
+# retry count either far too short for a legitimate clone or far past the
+# Go-side process deadline (which kills the play mid-loop with no
+# diagnostics). Sized to step_timeout_seconds minus headroom for the rest of
+# the play so the loop always finishes -- with a real error -- before the
+# process-level timeout fires.
+verify_cluster_budget_seconds: "{{ [(step_timeout_seconds | default(900) | int) - 120, 180] | max }}"
 verify_cluster_retry_delay_seconds: 2

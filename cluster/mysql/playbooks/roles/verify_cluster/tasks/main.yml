@@ -5,10 +5,15 @@
   when: erawan_node_ip is not defined
   tags: ["verify_cluster", "status_check"]
 
+# Bounded by wall clock (verify_cluster_budget_seconds), not attempt count:
+# see defaults/main.yml for why. The loop always exits before the Go-side
+# process deadline, so on failure the LAST status output (which members are
+# stuck, in what state) lands in the job JSON via the task below instead of
+# the process being killed mid-attempt with a bare "step execution timed out".
 - name: Verify cluster status
   no_log: true
   ansible.builtin.shell: |
-    set -euo pipefail
+    set -uo pipefail
     _tmp=$(mktemp /tmp/erawan-XXXXXX.py)
     trap 'rm -f "$_tmp"' EXIT
     cat >"$_tmp" <<'PY'
@@ -40,16 +45,41 @@
 
     print(json.dumps(status, indent=2))
     PY
-    timeout {{ mysqlsh_verify_timeout_seconds | int }} \
-      mysqlsh --no-wizard --py --file "$_tmp"
+    deadline=$(( $(date +%s) + {{ verify_cluster_budget_seconds | int }} ))
+    attempt=0
+    while :; do
+      attempt=$(( attempt + 1 ))
+      out=$(timeout {{ mysqlsh_verify_timeout_seconds | int }} \
+          mysqlsh --no-wizard --py --file "$_tmp" 2>&1)
+      rc=$?
+      if [ "$rc" -eq 0 ]; then
+        printf '%s\n' "$out"
+        exit 0
+      fi
+      if [ "$(date +%s)" -ge "$deadline" ]; then
+        printf 'cluster did not converge within {{ verify_cluster_budget_seconds | int }}s (%s attempts)\n' "$attempt" >&2
+        printf 'last attempt (rc=%s):\n%s\n' "$rc" "$out" >&2
+        exit 1
+      fi
+      sleep {{ verify_cluster_retry_delay_seconds | int }}
+    done
   args:
     executable: /bin/bash
   environment:
     CLUSTER_NAME:           "{{ cluster_name }}"
     EXPECTED_CLUSTER_NODES: "{{ (standby_ips | length + 1) | string }}"
   register: verify_cluster_result
-  retries: "{{ verify_cluster_retries }}"
-  delay: "{{ verify_cluster_retry_delay_seconds }}"
-  until: verify_cluster_result.rc == 0
+  failed_when: false
   changed_when: false
+  tags: ["verify_cluster", "status_check"]
+
+# Surfaces the loop's diagnostics despite no_log on the task above (needed
+# there because the rendered script embeds credentials). The status/error
+# output itself contains only member states and mysqlsh errors — no secrets.
+- name: Fail with last cluster status on verification timeout
+  ansible.builtin.fail:
+    msg: |
+      Cluster verification failed on {{ inventory_hostname }}:
+      {{ verify_cluster_result.stderr | default('(no diagnostic output)') }}
+  when: verify_cluster_result.rc != 0
   tags: ["verify_cluster", "status_check"]
