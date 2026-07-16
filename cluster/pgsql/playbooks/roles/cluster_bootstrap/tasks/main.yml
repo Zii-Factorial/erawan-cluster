@@ -18,6 +18,35 @@
     mode: "2775"
   tags: ["cluster_bootstrap"]
 
+# base_config disarms the OS-packaged PostgreSQL (postgresql@16-main et al.)
+# exactly once, at deploy/add-member time — but start/recover only runs this
+# role, on whatever disk the node currently has. On a node rebuilt from a
+# stock image (e.g. a scale operation that recreates the VM instead of
+# resizing it in place), that unit is enabled again and wins the boot race
+# for the shared data directory, binding listen_addresses=localhost from
+# /etc/postgresql/*/main/postgresql.conf. Patroni then ADOPTS that running
+# postmaster instead of replacing it: it reports running/primary and rewrites
+# the data-dir postgresql.conf to 0.0.0.0, but the live process never reads
+# that file — leaving a healthy-looking node that HAProxy cannot reach.
+# Re-disarming here is idempotent (no-op when base_config already did it)
+# and makes start/recover self-healing on fresh disks: stopping the OS unit
+# kills the wrongly-configured postmaster, and Patroni (re)starts Postgres
+# with its own config, bound per patroni.yml.
+- name: Stop OS-managed PostgreSQL service (Patroni owns Postgres)
+  ansible.builtin.systemd:
+    name: "{{ erawan_pg_service_name }}"
+    state: stopped
+    enabled: false
+  failed_when: false
+  tags: ["cluster_bootstrap"]
+
+- name: Mask wrapper PostgreSQL service
+  ansible.builtin.systemd:
+    name: postgresql.service
+    masked: true
+  failed_when: false
+  tags: ["cluster_bootstrap"]
+
 - name: Check whether etcd data reset already ran for this job
   ansible.builtin.stat:
     path: "{{ erawan_etcd_reset_marker }}"
