@@ -389,7 +389,10 @@ func (r *Runner) runMember(ctx context.Context, cfg memberRunConfig, playbook, s
 		Verbosity:       r.ansibleVerbosity,
 		StreamLogs:      r.streamLogs,
 		MaxOutputChars:  r.maxOutputChars,
-		Timeout:         cfg.timeout,
+		// cfg.timeout alone only covers one of this run's several sequential
+		// waits (see memberExecTimeout) -- the extra var above still carries
+		// the unmodified value so Ansible's own retry math is unaffected.
+		Timeout:         memberExecTimeout(stepName, cfg.timeout),
 		StepName:        stepName,
 		WorkspacePrefix: "pgsql-member-job-",
 		Env:             r.sshPolicy.AnsibleEnv(),

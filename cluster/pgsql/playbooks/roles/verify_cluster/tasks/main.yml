@@ -49,9 +49,14 @@
     - patroni_cluster_view.status == 200
     - (patroni_cluster_view.json | default({})).members | default([]) | length >= (standby_ips | length + 1)
     - (patroni_cluster_view.json | default({})).members | default([]) | selectattr('role', 'equalto', 'leader') | list | length == 1
-  # Polled at 1s instead of 5s so the ceiling (step_timeout_seconds) stays the
-  # same but a cluster that's already converged is detected sooner.
-  retries: "{{ ((step_timeout_seconds | default(900) | int) / 1) | int }}"
+  # This is one of three sequential waits in this role that all run inside a
+  # single ansible-playbook process governed by one process-level timeout
+  # (step_timeout_seconds, enforced Go-side). Each used to be ceilinged at the
+  # *full* step_timeout_seconds independently, so their worst cases summed to
+  # 3x the actual budget: the process got killed mid-wait before the later
+  # checks ever ran. Each now gets a 1/3 share so the combined worst case
+  # fits the real budget; polled at 1s for fast detection on the happy path.
+  retries: "{{ ((step_timeout_seconds | default(900) | int) / 3) | int }}"
   delay: 1
   changed_when: false
   run_once: true
@@ -64,7 +69,8 @@
     return_content: true
   register: _sync_check
   until: (_sync_check.json | default({})).members | default([]) | selectattr('role', 'equalto', 'sync_standby') | list | length > 0
-  retries: "{{ ((step_timeout_seconds | default(900) | int) / 1) | int }}"
+  # 1/3 share of the process budget — see the comment on the previous wait.
+  retries: "{{ ((step_timeout_seconds | default(900) | int) / 3) | int }}"
   delay: 1
   changed_when: false
   run_once: true
@@ -84,9 +90,9 @@
   register: pgsql_replication_count
   changed_when: false
   until: pgsql_replication_count.stdout | int >= (standby_ips | length)
-  # Polled at 2s instead of 10s — same ceiling, faster detection once the new
-  # standby's WAL sender connection actually shows up.
-  retries: "{{ ((step_timeout_seconds | default(900) | int) / 2) | int }}"
+  # 1/3 share of the process budget, polled at 2s instead of 10s — see the
+  # comment on the first wait above for why this is no longer a full share.
+  retries: "{{ (((step_timeout_seconds | default(900) | int) / 3) / 2) | int }}"
   delay: 2
   run_once: true
   delegate_to: "{{ groups['pgsql_primary'][0] }}"

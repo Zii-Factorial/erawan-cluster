@@ -33,6 +33,73 @@ type step = core.Step
 // defaultMaxConcurrentJobs bounds concurrent background jobs until configured.
 const defaultMaxConcurrentJobs = 4
 
+// clusterBootstrapMinExecTimeout floors the process-level exec timeout for the
+// cluster_bootstrap step. Its internal waits (etcd health, Patroni leader
+// election, Postgres port open, replica bootstrap) are fixed constants in
+// cluster_bootstrap/tasks/main.yml, independent of StepTimeoutSeconds, and
+// sum to ~1020s worst case -- comfortably exceeding the previous default 900s
+// StepTimeoutSeconds process timeout on a cold/slow boot (e.g. right after a
+// vertical CPU/RAM resize, which reboots the node and can stretch every one
+// of those waits at once).
+const clusterBootstrapMinExecTimeout = 25 * time.Minute
+
+// verifyClusterExecBuffer covers verify_cluster's own fixed-cost tasks
+// (systemctl checks, local /patroni status) on top of the step_timeout_seconds
+// budget its three retry-loops now share (see verify_cluster/tasks/main.yml).
+const verifyClusterExecBuffer = 2 * time.Minute
+
+// execTimeoutForTag returns the process-level exec timeout for a single
+// deploy/recovery step. Most steps run their internal waits within the base
+// StepTimeoutSeconds-derived budget, but cluster_bootstrap and verify_cluster
+// need adjustment: see the constants above.
+func execTimeoutForTag(tag string, base time.Duration) time.Duration {
+	switch tag {
+	case "cluster_bootstrap":
+		if base < clusterBootstrapMinExecTimeout {
+			return clusterBootstrapMinExecTimeout
+		}
+		return base
+	case "verify_cluster":
+		return base + verifyClusterExecBuffer
+	default:
+		return base
+	}
+}
+
+// addMemberFixedOverhead covers add_member.yml's plays that run ahead of the
+// replica clone/verify: preflight's SSH wait, add_member_register's etcd
+// housekeeping, and add_member_join's own etcd/Patroni startup waits. All are
+// fixed costs independent of StepTimeoutSeconds.
+const addMemberFixedOverhead = 15 * time.Minute
+
+// removeMemberExecBuffer covers remove_member.yml's stop/etcd-removal plays,
+// which have no meaningful retry loops of their own -- verify_cluster (see
+// verifyClusterExecBuffer) is the only real budget consumer.
+const removeMemberExecBuffer = 2 * time.Minute
+
+// memberExecTimeout returns the process-level exec timeout for the
+// add_member.yml / remove_member.yml runs. Each bundles several Ansible plays
+// -- including a step_timeout_seconds-bounded replica wait (add_member only)
+// and the now-shared verify_cluster budget -- into a single ansible-playbook
+// process governed by one Go-side timeout. That timeout must cover the sum
+// of what it bundles, not just one wait's nominal ceiling, or the process
+// gets killed (context deadline) mid-run before the later plays -- especially
+// add_member_join's replica clone, which can legitimately run close to the
+// full step_timeout_seconds on a large database -- ever get a chance to
+// finish or report a real error.
+func memberExecTimeout(stepName string, base time.Duration) time.Duration {
+	switch stepName {
+	case "add_member":
+		// base covers add_member_join's replica wait once, plus the
+		// verify_cluster budget it shares the process with once more.
+		return 2*base + addMemberFixedOverhead
+	case "remove_member":
+		return base + removeMemberExecBuffer
+	default:
+		return base
+	}
+}
+
 /**
  * NewService.
  *
@@ -440,7 +507,7 @@ func (s *Service) executeRecovery(ctx context.Context, recoveryJob *Job, deployJ
 			spec:    deployJob.Request,
 			secret:  secret,
 			step:    st,
-			timeout: timeout,
+			timeout: execTimeoutForTag(st.Tag, timeout),
 		})
 		recoveryJob.Steps = append(recoveryJob.Steps, res)
 
@@ -1165,7 +1232,7 @@ func (s *Service) executeFrom(ctx context.Context, job *Job, startIndex int, sec
 			spec:          job.Request,
 			secret:        secret,
 			step:          st,
-			timeout:       timeout,
+			timeout:       execTimeoutForTag(st.Tag, timeout),
 			resetHostKeys: resetHostKeys,
 		})
 		job.Steps = append(job.Steps, res)
