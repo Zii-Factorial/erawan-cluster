@@ -1,4 +1,16 @@
 ---
+# Start/recover is routinely called right after the nodes themselves were
+# rebooted or recreated by a scale operation, and — unlike deploy — nothing
+# ran preflight first: the first task used to SSH straight in and fail the
+# whole job (UNREACHABLE / sudo prompt timeout) on a node that was seconds
+# away from ready. Same manageability test as preflight (SSH + sudo + remote
+# Python via the play's become); immediate no-op when nodes are already up.
+- name: Wait for the node to become manageable
+  ansible.builtin.wait_for_connection:
+    timeout: "{{ preflight_connect_timeout_seconds | default(300) }}"
+    sleep: 2
+  tags: ["cluster_bootstrap"]
+
 - name: Rediscover PostgreSQL runtime facts
   ansible.builtin.import_role:
     name: runtime_facts
