@@ -259,12 +259,15 @@
         state: started
         timeout: "{{ patroni_port_open_timeout }}"
 
-    - name: Wait for Patroni leader API on primary
+    - name: Wait for Patroni API
       ansible.builtin.uri:
-        url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/leader"
+        url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/patroni"
         return_content: true
-      register: _patroni_leader
-      until: _patroni_leader.status == 200
+        status_code: 200
+      register: _patroni
+      until:
+        - _patroni.status == 200
+        - _patroni.json.state == "running"
       retries: "{{ patroni_leader_retries }}"
       delay: "{{ patroni_leader_delay }}"
       changed_when: false
