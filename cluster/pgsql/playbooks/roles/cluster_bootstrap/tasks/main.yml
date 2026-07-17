@@ -387,20 +387,27 @@
       changed_when: _primary_restart.status == 200
       ignore_errors: true
 
-    - name: Verify live max_connections matches the requested limit
+    - name: Verify live PostgreSQL max_connections
       no_log: true
       ansible.builtin.shell: |
         set -euo pipefail
-        psql -h {{ primary_ip }} -p {{ postgres_port }} -U {{ postgres_superuser }} -d postgres -Atqc "SHOW max_connections;"
+        psql \
+          -h {{ primary_ip }} \
+          -p {{ postgres_port }} \
+          -U {{ postgres_superuser }} \
+          -d postgres \
+          -Atqc "SHOW max_connections;"
       args:
         executable: /bin/bash
       environment:
         PGPASSWORD: "{{ postgres_superuser_password }}"
       register: _verify_max_connections
-      until: (_verify_max_connections.stdout | trim | int) == (postgres_max_connections | int)
-      retries: 30
-      delay: 2
+      until:
+        - (_verify_max_connections.stdout | trim | int) == (postgres_max_connections | int)
+      retries: 60
+      delay: 5
       changed_when: false
+
   rescue:
     - name: Fail with connection-limit diagnosis
       ansible.builtin.fail:
