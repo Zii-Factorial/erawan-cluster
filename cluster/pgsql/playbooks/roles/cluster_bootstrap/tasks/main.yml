@@ -489,3 +489,88 @@
           PostgreSQL did not open port {{ postgres_port }} on {{ inventory_hostname }}.
           Last 80 Patroni journal lines:
           {{ _pg_standby_journal.stdout | default('(no journal output)') }}
+
+# Standbys need the same restart treatment as the primary, for a subtler
+# reason: on recover of a cluster whose connection limit changed (e.g. it was
+# registered in the DCS by add-member), the standbys are already running the
+# OLD value when the primary above restarts with the new one. PostgreSQL then
+# PAUSES WAL replay on every such standby the moment it replays the primary's
+# parameter-change record ("insufficient parameter settings" — visible as
+# receive_lag 0 with replay_lag climbing), no sync standby can be elected, and
+# verify_cluster times out. Restarting each lagging standby (primary first,
+# then standbys — the safe order for increases) resumes replay. Fresh deploys
+# skip this: standbys bootstrap from the DCS and already match.
+- name: Read live max_connections on the standbys
+  no_log: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    psql -h {{ ansible_host }} -p {{ postgres_port }} -U {{ postgres_superuser }} -d postgres -Atqc "SHOW max_connections;"
+  args:
+    executable: /bin/bash
+  environment:
+    PGPASSWORD: "{{ postgres_superuser_password }}"
+  register: _standby_live_max_connections
+  changed_when: false
+  when:
+    - inventory_hostname in groups['pgsql_standby']
+    - (postgres_max_connections | default(0) | int) >= 25
+  tags: ["cluster_bootstrap"]
+
+- name: Apply max_connections on standbys with a restart when required
+  when:
+    - inventory_hostname in groups['pgsql_standby']
+    - (postgres_max_connections | default(0) | int) >= 25
+    - (_standby_live_max_connections.stdout | trim | int) != (postgres_max_connections | int)
+  tags: ["cluster_bootstrap"]
+  block:
+    # ignore_errors (failed_when cannot rescue an exhausted until-loop): the
+    # verify below is the authoritative check, and its rescue carries the
+    # diagnosis.
+    - name: Wait for Patroni to flag the pending restart on the standby
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/patroni"
+        return_content: true
+      register: _standby_patroni_pending
+      until: (_standby_patroni_pending.json | default({})).pending_restart | default(false)
+      retries: 15
+      delay: 2
+      changed_when: false
+      ignore_errors: true
+
+    - name: Restart PostgreSQL via Patroni on the standby to apply max_connections
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/restart"
+        method: POST
+        body_format: json
+        body: {"restart_pending": true}
+        status_code: [200, 503]
+      changed_when: true
+      throttle: 1
+      when: (_standby_patroni_pending.json | default({})).pending_restart | default(false)
+
+    - name: Verify live max_connections on the standby matches the requested limit
+      no_log: true
+      ansible.builtin.shell: |
+        set -euo pipefail
+        psql -h {{ ansible_host }} -p {{ postgres_port }} -U {{ postgres_superuser }} -d postgres -Atqc "SHOW max_connections;"
+      args:
+        executable: /bin/bash
+      environment:
+        PGPASSWORD: "{{ postgres_superuser_password }}"
+      register: _standby_verify_max_connections
+      until: (_standby_verify_max_connections.stdout | trim | int) == (postgres_max_connections | int)
+      retries: 30
+      delay: 2
+      changed_when: false
+  rescue:
+    - name: Fail with standby connection-limit diagnosis
+      ansible.builtin.fail:
+        msg: >-
+          PostgreSQL on standby {{ ansible_host }} is running
+          max_connections={{ _standby_verify_max_connections.stdout | default(_standby_live_max_connections.stdout | default('unknown')) | trim }}
+          instead of the requested connection_limit={{ postgres_max_connections }},
+          and Patroni did not flag/complete the pending restart. Until it
+          restarts with the new value, WAL replay on this standby stays paused
+          ("insufficient parameter settings") and no sync standby can be
+          elected. Check `patronictl list` and the Patroni journal on
+          {{ ansible_host }}.
