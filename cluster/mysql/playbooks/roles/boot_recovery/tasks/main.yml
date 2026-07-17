@@ -97,6 +97,13 @@
 # rebootClusterFromCompleteOutage for cluster metadata locks (observed: starts
 # stalling to the 300s mysqlsh timeout). Pause it for the duration and always
 # resume, even on failure, so a half-recovered cluster can still self-heal.
+#
+# ignore_errors/ignore_unreachable on the watchdog/exporter tasks: these are
+# best-effort, but failed_when only overrides *module* results — a transient
+# sudo-prompt timeout or connection drop fails the host (and the whole job)
+# anyway. Observed in production: recovery succeeded, then standby_1 died on
+# "Resume GR watchdog" with "Timeout (12s) waiting for privilege escalation
+# prompt" and the job was marked failed.
 - name: Pause GR watchdog during recovery
   ansible.builtin.systemd:
     name: "{{ item }}"
@@ -105,6 +112,8 @@
     - erawan-gr-watchdog.timer
     - erawan-gr-watchdog.service
   failed_when: false
+  ignore_errors: true
+  ignore_unreachable: true
   tags: ["boot_recovery"]
 
 - name: Run recovery with the watchdog paused
@@ -127,6 +136,8 @@
         name: erawan-gr-watchdog.timer
         state: started
       failed_when: false
+      ignore_errors: true
+      ignore_unreachable: true
 
     # The mysqld exporter ships in the VM image with its unit tied to
     # mysql.service, so stopping the cluster kills it and nothing restarts it
@@ -146,3 +157,5 @@
         executable: /bin/bash
       changed_when: false
       failed_when: false
+      ignore_errors: true
+      ignore_unreachable: true

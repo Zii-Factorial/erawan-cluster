@@ -47,6 +47,11 @@
         executable: /bin/bash
       changed_when: true
       failed_when: false
+      # failed_when only overrides module results; a sudo/SSH-layer timeout on
+      # one node would still fail the whole stop job. This task is best-effort
+      # by design — the systemd stop plays below are the real signal.
+      ignore_errors: true
+      ignore_unreachable: true
 
 # ---------------------------------------------------------------------------
 # PLAY 2 — Stop MySQL on secondary nodes
