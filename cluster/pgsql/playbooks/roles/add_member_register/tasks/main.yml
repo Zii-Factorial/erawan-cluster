@@ -103,6 +103,25 @@
           Last 60 Patroni journal lines on the primary:
           {{ _leader_journal.stdout | default('(no journal output)') }}
 
+# The new replica generates its PostgreSQL config from the Patroni DCS, so the
+# spec's connection limit must be registered there before the node joins — on
+# clusters whose DCS predates the limit (or the deploy-time enforcement of
+# it), the member would otherwise come up with the engine default. Running
+# members are deliberately NOT restarted here: this play runs against a live
+# primary, so nodes already running another value just gain Patroni's
+# pending_restart flag and converge on their next restart (or via the
+# connection-limit API).
+- name: Ensure the spec connection limit is registered in the Patroni DCS
+  ansible.builtin.uri:
+    url: "http://{{ primary_ip }}:{{ patroni_rest_port }}/config"
+    method: PATCH
+    body_format: json
+    body: >-
+      {{ {'postgresql': {'parameters': {'max_connections': postgres_max_connections | int}}} }}
+    status_code: [200]
+  when: (postgres_max_connections | default(0) | int) > 0
+  tags: ["add_member_register"]
+
 # Stale members (destroyed nodes that never went through the remove-member
 # API) and unstarted members (name == "") from prior failed attempts cause
 # "etcdserver: unhealthy cluster" on the next member add. Remove them before

@@ -330,6 +330,73 @@
   when: inventory_hostname in groups['pgsql_primary']
   tags: ["cluster_bootstrap"]
 
+# max_connections only takes effect at postmaster start: the bootstrap start
+# happens before the DCS PATCH above lands, so Patroni just flags
+# pending_restart and the primary keeps running the engine default — and every
+# standby bootstrapped afterwards inherits the mismatch. Restart the primary
+# here, while the standbys have not started yet and no application traffic
+# exists, but only when the live value actually differs from the requested one
+# (on recover of an already-converged cluster this whole block is a no-op).
+- name: Read live max_connections on the primary
+  no_log: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    psql -h {{ primary_ip }} -p {{ postgres_port }} -U {{ postgres_superuser }} -d postgres -Atqc "SHOW max_connections;"
+  args:
+    executable: /bin/bash
+  environment:
+    PGPASSWORD: "{{ postgres_superuser_password }}"
+  register: _live_max_connections
+  changed_when: false
+  when:
+    - inventory_hostname in groups['pgsql_primary']
+    - (postgres_max_connections | default(0) | int) > 0
+  tags: ["cluster_bootstrap"]
+
+- name: Apply max_connections on the primary with a restart when required
+  when:
+    - inventory_hostname in groups['pgsql_primary']
+    - (postgres_max_connections | default(0) | int) > 0
+    - (_live_max_connections.stdout | trim | int) != (postgres_max_connections | int)
+  tags: ["cluster_bootstrap"]
+  block:
+    - name: Wait for Patroni to flag the pending restart
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/patroni"
+        return_content: true
+      register: _patroni_pending
+      until: (_patroni_pending.json | default({})).pending_restart | default(false)
+      retries: 15
+      delay: 2
+      changed_when: false
+
+    # Conditional restart: Patroni restarts PostgreSQL in place only while a
+    # restart is actually pending (503 = the flag cleared in between, nothing
+    # left to do) and the call blocks until PostgreSQL is back up.
+    - name: Restart PostgreSQL via Patroni to apply max_connections
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/restart"
+        method: POST
+        body_format: json
+        body: {"restart_pending": true}
+        status_code: [200, 503]
+      changed_when: true
+
+    - name: Verify live max_connections matches the requested limit
+      no_log: true
+      ansible.builtin.shell: |
+        set -euo pipefail
+        psql -h {{ primary_ip }} -p {{ postgres_port }} -U {{ postgres_superuser }} -d postgres -Atqc "SHOW max_connections;"
+      args:
+        executable: /bin/bash
+      environment:
+        PGPASSWORD: "{{ postgres_superuser_password }}"
+      register: _verify_max_connections
+      until: (_verify_max_connections.stdout | trim | int) == (postgres_max_connections | int)
+      retries: 30
+      delay: 2
+      changed_when: false
+
 - name: Start Patroni on standby nodes
   ansible.builtin.systemd:
     name: patroni
