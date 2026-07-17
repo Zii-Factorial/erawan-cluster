@@ -387,6 +387,19 @@
       changed_when: _primary_restart.status == 200
       ignore_errors: true
 
+    - name: Wait until Patroni has applied the configuration
+      ansible.builtin.uri:
+        url: "http://{{ primary_ip }}:{{ patroni_rest_port }}/patroni"
+        return_content: true
+        status_code: 200
+      register: _patroni_status
+      until:
+        - _patroni_status.json.state == "running"
+        - (_patroni_status.json.pending_restart | default(false)) == false
+      retries: 60
+      delay: 5
+      changed_when: false
+
     - name: Verify live PostgreSQL max_connections
       no_log: true
       ansible.builtin.shell: |
@@ -408,6 +421,41 @@
       delay: 5
       changed_when: false
 
+    - name: Verify replication is healthy
+      no_log: true
+      ansible.builtin.shell: |
+        set -euo pipefail
+        psql \
+          -h {{ primary_ip }} \
+          -p {{ postgres_port }} \
+          -U {{ postgres_superuser }} \
+          -d postgres \
+          -Atqc "
+          SELECT COUNT(*)
+          FROM pg_stat_replication
+          WHERE state='streaming';
+          "
+      args:
+        executable: /bin/bash
+      environment:
+        PGPASSWORD: "{{ postgres_superuser_password }}"
+      register: _replication_count
+      until: (_replication_count.stdout | int) >= 2
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    - name: Fail with connection-limit diagnosis
+      ansible.builtin.fail:
+        msg: |
+          PostgreSQL configuration was not applied.
+
+          Expected max_connections : {{ postgres_max_connections }}
+          Actual max_connections   : {{ _verify_max_connections.stdout | trim }}
+
+          Patroni status:
+          {{ _patroni_status.json | to_nice_json }}
+      when: (_verify_max_connections.stdout | trim | int) != (postgres_max_connections | int)
   rescue:
     - name: Fail with connection-limit diagnosis
       ansible.builtin.fail:
