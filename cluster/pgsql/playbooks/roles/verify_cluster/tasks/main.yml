@@ -65,7 +65,7 @@
 
 - name: Wait for sync_standby to be elected
   ansible.builtin.uri:
-    url: "http://{{ primary_ip }}:{{ patroni_rest_port }}/cluster"  selectattr('state', 'equalto', 'streaming')
+    url: "http://{{ primary_ip }}:{{ patroni_rest_port }}/cluster"
     return_content: true
   register: _sync_check
   until: (_sync_check.json | default({})).members | default([]) | selectattr('role', 'equalto', 'sync_standby') | selectattr('state', 'equalto', 'streaming') | list | length > 0
