@@ -525,20 +525,20 @@
     # failed here in production. The window is generous; converged standbys
     # never enter this block at all. throttle serializes the polling so at
     # most one standby restarts at a time.
-    - name: Restart the standby via Patroni once its pending restart is flagged
+    - name: Restart the standby via Patroni if a restart is pending
       ansible.builtin.uri:
         url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/restart"
         method: POST
         body_format: json
-        body: {"restart_pending": true}
-        status_code: [200, 503]
+        body:
+          restart_pending: true
+        status_code:
+          - 200
+          - 503
       register: _standby_restart
-      until: _standby_restart.status == 200
-      retries: 45
-      delay: 3
       changed_when: _standby_restart.status == 200
+      failed_when: false
       throttle: 1
-      ignore_errors: true
 
     - name: Verify live max_connections on the standby matches the requested limit
       no_log: true
