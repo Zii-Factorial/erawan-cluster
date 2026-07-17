@@ -488,7 +488,9 @@ POST   /cluster/mysql/jobs/{jobID}/rollback</pre>
             <pre class="mt-5 overflow-x-auto rounded-2xl bg-slate-950 p-4 font-mono text-xs leading-7 text-slate-100">POST   /cluster/mysql/users
 DELETE /cluster/mysql/users
 POST   /cluster/mysql/databases
-DELETE /cluster/mysql/databases</pre>
+DELETE /cluster/mysql/databases
+GET    /cluster/mysql/connection-limit
+PUT    /cluster/mysql/connection-limit</pre>
           </div>
 
           <div class="reveal rounded-[30px] border border-slate-200 bg-white p-6 shadow-card transition-colors duration-300 dark:border-white/10 dark:bg-white/5">
@@ -502,7 +504,9 @@ POST   /cluster/pgsql/jobs/{jobID}/resume</pre>
             <pre class="mt-5 overflow-x-auto rounded-2xl bg-slate-950 p-4 font-mono text-xs leading-7 text-slate-100">POST   /cluster/pgsql/users
 DELETE /cluster/pgsql/users
 POST   /cluster/pgsql/databases
-DELETE /cluster/pgsql/databases</pre>
+DELETE /cluster/pgsql/databases
+GET    /cluster/pgsql/connection-limit
+PUT    /cluster/pgsql/connection-limit</pre>
           </div>
         </div>
       </section>
@@ -689,6 +693,17 @@ DELETE /cluster/pgsql/databases</pre>
   "admin_password": "&lt;admin password&gt;",
   "dbname": "newdb"
 }
+
+<span class="text-slate-400">// PUT /cluster/mysql/connection-limit  or  PUT /cluster/pgsql/connection-limit</span>
+<span class="text-slate-400">// Applies max_connections on every node and persists it in the job spec</span>
+<span class="text-slate-400">// (PostgreSQL: cluster-wide via Patroni DCS + rolling restart)</span>
+{
+  "job_id": "&lt;deploy job id&gt;",
+  "connection_limit": 500
+}
+
+<span class="text-slate-400">// GET /cluster/mysql/connection-limit?job_id=&lt;deploy job id&gt;</span>
+<span class="text-slate-400">// Returns the configured limit plus the live per-node values</span>
 
 <span class="text-slate-400">// Notes</span>
 <span class="text-slate-400">// port: defaults to 3306 (MySQL) or 5432 (PostgreSQL) if omitted</span>

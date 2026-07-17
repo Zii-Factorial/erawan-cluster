@@ -168,3 +168,25 @@ func (req *DeleteDatabaseRequest) validate() error {
 	}
 	return nil
 }
+
+/**
+ * validate.
+ *
+ * Receiver:
+ *   req *SetConnectionLimitRequest - pointer receiver; the method may mutate this SetConnectionLimitRequest instance
+ *
+ * Returns:
+ *   error - error value; non-nil when the operation fails
+ */
+func (req *SetConnectionLimitRequest) validate() error {
+	req.JobID = strings.TrimSpace(req.JobID)
+	if req.JobID == "" {
+		return fmt.Errorf("job_id is required")
+	}
+	// Same bounds as the deploy-time connection_limit, but an edit must be
+	// explicit: 0 (engine default) is only meaningful at deploy time.
+	if req.ConnectionLimit < 10 || req.ConnectionLimit > 100000 {
+		return fmt.Errorf("connection_limit must be between 10 and 100000")
+	}
+	return nil
+}

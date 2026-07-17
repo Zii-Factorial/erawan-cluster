@@ -1813,6 +1813,68 @@
               ]
             }
           }
+        },
+        {
+          "name": "Get Connection Limit",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "Reports the configured connection limit from the job spec (`connection_limit`, 0 = engine default) plus the live `max_connections` value read from every cluster node. Nodes that are unreachable carry a per-node `error` instead.\n\n| Query param | Type | Required | Description |\n|-------------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/connection-limit?job_id={{JOB_ID}}",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "mysql",
+                "connection-limit"
+              ],
+              "query": [
+                {
+                  "key": "job_id",
+                  "value": "{{JOB_ID}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Set Connection Limit",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"connection_limit\": 500\n}"
+            },
+            "description": "Changes `max_connections` on every node of the cluster (`SET PERSIST`, effective immediately and across restarts) and persists the value into the job spec so recover/rejoin/add-member re-apply it.\n\nReturns per-node results. If some nodes are unreachable the response is 422 with the per-node detail as `data`; the persisted spec heals those nodes on the next recover/rejoin. If no node is reachable (cluster stopped) nothing is changed.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `connection_limit` | int | yes | New max_connections (10–100000) |\n",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/mysql/connection-limit",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "mysql",
+                "connection-limit"
+              ]
+            }
+          }
         }
       ]
     },
@@ -2062,6 +2124,68 @@
                 "cluster",
                 "pgsql",
                 "databases"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Connection Limit",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "description": "Reports the configured connection limit from the job spec (`connection_limit`, 0 = engine default) plus the live `max_connections` value and Patroni `pending_restart` flag of every cluster node. Nodes that are unreachable carry a per-node `error` instead.\n\n| Query param | Type | Required | Description |\n|-------------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/connection-limit?job_id={{JOB_ID}}",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "pgsql",
+                "connection-limit"
+              ],
+              "query": [
+                {
+                  "key": "job_id",
+                  "value": "{{JOB_ID}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Set Connection Limit",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              },
+              "raw": "{\n  \"job_id\": \"{{JOB_ID}}\",\n  \"connection_limit\": 500\n}"
+            },
+            "description": "Changes `max_connections` cluster-wide through the Patroni DCS (PATCH `/config` on the current primary), persists the value into the job spec, then performs the rolling PostgreSQL restarts the change requires (increases restart standbys first, primary last; decreases restart the primary first).\n\nReturns per-node results including live values and `pending_restart` flags. If some nodes have not converged the response is 422 with the per-node detail as `data`; those nodes apply the DCS value on their next restart. Expect a brief write interruption while the primary restarts.\n\n| Field | Type | Required | Description |\n|-------|------|----------|-------------|\n| `job_id` | string | yes | Deploy job ID |\n| `connection_limit` | int | yes | New max_connections (10–100000) |\n",
+            "url": {
+              "raw": "http://{{API_HOST}}:{{API_PORT}}/cluster/pgsql/connection-limit",
+              "protocol": "http",
+              "host": [
+                "{{API_HOST}}"
+              ],
+              "port": "{{API_PORT}}",
+              "path": [
+                "cluster",
+                "pgsql",
+                "connection-limit"
               ]
             }
           }

@@ -462,6 +462,68 @@ func (h *Handler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 }
 
 /**
+ * GetConnectionLimit reports the configured connection limit of the cluster
+ * owned by the job_id query parameter, plus the live max_connections value on
+ * every node.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
+func (h *Handler) GetConnectionLimit(w http.ResponseWriter, r *http.Request) {
+	jobID := strings.TrimSpace(r.URL.Query().Get("job_id"))
+	if jobID == "" {
+		render.Error(w, http.StatusBadRequest, "job_id query parameter is required")
+		return
+	}
+	status, err := h.dbmanager.GetConnectionLimit(r.Context(), jobID)
+	if err != nil {
+		render.Error(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	render.OK(w, "connection limit", status)
+}
+
+/**
+ * SetConnectionLimit changes max_connections on every node of the cluster
+ * owned by the job_id in the request body and persists the new value into the
+ * job spec. Partial failures (some nodes unreachable) return 422 with the
+ * per-node results as data, mirroring the Deploy error contract.
+ *
+ * Receiver:
+ *   h *Handler - pointer receiver; the method may mutate this Handler instance
+ *
+ * Params:
+ *   w http.ResponseWriter - the HTTP response writer the result is written to
+ *   r *http.Request - the incoming HTTP request
+ */
+func (h *Handler) SetConnectionLimit(w http.ResponseWriter, r *http.Request) {
+	var req mysqldbmanager.SetConnectionLimitRequest
+	if err := render.DecodeJSON(r, &req); err != nil {
+		render.Error(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	status, err := h.dbmanager.SetConnectionLimit(r.Context(), req)
+	if err != nil {
+		if status != nil {
+			render.JSON(w, http.StatusUnprocessableEntity, render.Envelope{
+				"status":  "error",
+				"message": err.Error(),
+				"data":    status,
+			})
+			return
+		}
+		render.Error(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	render.OK(w, "connection limit updated", status)
+}
+
+/**
  * CreateDatabase.
  *
  * Receiver:
