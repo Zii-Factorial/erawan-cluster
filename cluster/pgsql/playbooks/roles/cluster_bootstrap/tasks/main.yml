@@ -364,33 +364,25 @@
     - (_live_max_connections.stdout | trim | int) != (postgres_max_connections | int)
   tags: ["cluster_bootstrap"]
   block:
-    # ignore_errors (failed_when cannot rescue an exhausted until-loop): when
-    # Patroni never flags the restart — e.g. it rejected the value — the play
-    # must fall through to the verify below, whose rescue reports the live
-    # value instead of a bare retry dump.
-    - name: Wait for Patroni to flag the pending restart
-      ansible.builtin.uri:
-        url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/patroni"
-        return_content: true
-      register: _patroni_pending
-      until: (_patroni_pending.json | default({})).pending_restart | default(false)
-      retries: 15
-      delay: 2
-      changed_when: false
-      ignore_errors: true
-
-    # Conditional restart: Patroni restarts PostgreSQL in place only while a
-    # restart is actually pending (503 = the flag cleared in between, nothing
-    # left to do) and the call blocks until PostgreSQL is back up.
-    - name: Restart PostgreSQL via Patroni to apply max_connections
+    # Patroni's conditional restart is the atomic "if a restart is pending,
+    # restart now": 503 means not pending yet, 200 means PostgreSQL was
+    # restarted (the call blocks until it is back up). Polling it directly
+    # cannot lose the race between checking the flag and acting on it.
+    # ignore_errors because an exhausted until-loop cannot be rescued by
+    # failed_when — the verify below is the authoritative check either way.
+    - name: Restart PostgreSQL via Patroni once its pending restart is flagged
       ansible.builtin.uri:
         url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/restart"
         method: POST
         body_format: json
         body: {"restart_pending": true}
         status_code: [200, 503]
-      changed_when: true
-      when: (_patroni_pending.json | default({})).pending_restart | default(false)
+      register: _primary_restart
+      until: _primary_restart.status == 200
+      retries: 15
+      delay: 2
+      changed_when: _primary_restart.status == 200
+      ignore_errors: true
 
     - name: Verify live max_connections matches the requested limit
       no_log: true
@@ -523,30 +515,30 @@
     - (_standby_live_max_connections.stdout | trim | int) != (postgres_max_connections | int)
   tags: ["cluster_bootstrap"]
   block:
-    # ignore_errors (failed_when cannot rescue an exhausted until-loop): the
-    # verify below is the authoritative check, and its rescue carries the
-    # diagnosis.
-    - name: Wait for Patroni to flag the pending restart on the standby
-      ansible.builtin.uri:
-        url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/patroni"
-        return_content: true
-      register: _standby_patroni_pending
-      until: (_standby_patroni_pending.json | default({})).pending_restart | default(false)
-      retries: 15
-      delay: 2
-      changed_when: false
-      ignore_errors: true
-
-    - name: Restart PostgreSQL via Patroni on the standby to apply max_connections
+    # Patroni's conditional restart is the atomic "if a restart is pending,
+    # restart now" (503 = not pending yet, 200 = restarted). Polling it beats
+    # waiting for the flag separately, because on a DECREASE the flag only
+    # appears after this standby has replayed the restarted primary's
+    # parameter-change record (hot-standby rule: replica max_connections must
+    # stay >= the primary's) — walreceiver reconnect + replay + Patroni's run
+    # loop can take well over 30s, which is exactly how a lagging standby got
+    # failed here in production. The window is generous; converged standbys
+    # never enter this block at all. throttle serializes the polling so at
+    # most one standby restarts at a time.
+    - name: Restart the standby via Patroni once its pending restart is flagged
       ansible.builtin.uri:
         url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/restart"
         method: POST
         body_format: json
         body: {"restart_pending": true}
         status_code: [200, 503]
-      changed_when: true
+      register: _standby_restart
+      until: _standby_restart.status == 200
+      retries: 45
+      delay: 3
+      changed_when: _standby_restart.status == 200
       throttle: 1
-      when: (_standby_patroni_pending.json | default({})).pending_restart | default(false)
+      ignore_errors: true
 
     - name: Verify live max_connections on the standby matches the requested limit
       no_log: true
@@ -569,8 +561,11 @@
           PostgreSQL on standby {{ ansible_host }} is running
           max_connections={{ _standby_verify_max_connections.stdout | default(_standby_live_max_connections.stdout | default('unknown')) | trim }}
           instead of the requested connection_limit={{ postgres_max_connections }},
-          and Patroni did not flag/complete the pending restart. Until it
-          restarts with the new value, WAL replay on this standby stays paused
-          ("insufficient parameter settings") and no sync standby can be
-          elected. Check `patronictl list` and the Patroni journal on
-          {{ ansible_host }}.
+          and Patroni did not flag/complete the pending restart in time.
+          For an increase this leaves the standby's WAL replay paused
+          ("insufficient parameter settings"); for a decrease the flag only
+          appears after the standby replays the restarted primary's
+          parameter-change record, so a lagging or disconnected replica takes
+          longer. Check `patronictl list` (pending restart column, replication
+          state) and the Patroni journal on {{ ansible_host }}, then re-run
+          start/recover — the enforcement is idempotent.
