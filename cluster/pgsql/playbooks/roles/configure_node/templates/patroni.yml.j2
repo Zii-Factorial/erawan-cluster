@@ -24,7 +24,9 @@ bootstrap:
       use_pg_rewind: true
       use_slots: true
       parameters:
-{% if (postgres_max_connections | default(0) | int) > 0 %}
+{# Patroni validates max_connections with IntValidator(min=25) and silently
+   ignores lower values, so only seed values it will actually accept. #}
+{% if (postgres_max_connections | default(0) | int) >= 25 %}
         max_connections: {{ postgres_max_connections | int }}
 {% endif %}
         wal_level: replica

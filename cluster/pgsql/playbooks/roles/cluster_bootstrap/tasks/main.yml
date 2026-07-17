@@ -325,7 +325,7 @@
     body: >-
       {{ {'synchronous_mode': true, 'synchronous_mode_strict': false}
          | combine({'postgresql': {'parameters': {'max_connections': postgres_max_connections | int}}}
-                   if (postgres_max_connections | default(0) | int) > 0 else {}) }}
+                   if (postgres_max_connections | default(0) | int) >= 25 else {}) }}
     status_code: [200]
   when: inventory_hostname in groups['pgsql_primary']
   tags: ["cluster_bootstrap"]
@@ -337,6 +337,10 @@
 # here, while the standbys have not started yet and no application traffic
 # exists, but only when the live value actually differs from the requested one
 # (on recover of an already-converged cluster this whole block is a no-op).
+# The >= 25 guard matches Patroni's IntValidator(min=25) for max_connections:
+# lower values are silently ignored by Patroni, so waiting for them to apply
+# would spin forever (API validation rejects them; this also covers specs
+# stored before that floor existed).
 - name: Read live max_connections on the primary
   no_log: true
   ansible.builtin.shell: |
@@ -350,16 +354,20 @@
   changed_when: false
   when:
     - inventory_hostname in groups['pgsql_primary']
-    - (postgres_max_connections | default(0) | int) > 0
+    - (postgres_max_connections | default(0) | int) >= 25
   tags: ["cluster_bootstrap"]
 
 - name: Apply max_connections on the primary with a restart when required
   when:
     - inventory_hostname in groups['pgsql_primary']
-    - (postgres_max_connections | default(0) | int) > 0
+    - (postgres_max_connections | default(0) | int) >= 25
     - (_live_max_connections.stdout | trim | int) != (postgres_max_connections | int)
   tags: ["cluster_bootstrap"]
   block:
+    # ignore_errors (failed_when cannot rescue an exhausted until-loop): when
+    # Patroni never flags the restart — e.g. it rejected the value — the play
+    # must fall through to the verify below, whose rescue reports the live
+    # value instead of a bare retry dump.
     - name: Wait for Patroni to flag the pending restart
       ansible.builtin.uri:
         url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/patroni"
@@ -369,6 +377,7 @@
       retries: 15
       delay: 2
       changed_when: false
+      ignore_errors: true
 
     # Conditional restart: Patroni restarts PostgreSQL in place only while a
     # restart is actually pending (503 = the flag cleared in between, nothing
@@ -381,6 +390,7 @@
         body: {"restart_pending": true}
         status_code: [200, 503]
       changed_when: true
+      when: (_patroni_pending.json | default({})).pending_restart | default(false)
 
     - name: Verify live max_connections matches the requested limit
       no_log: true
@@ -396,6 +406,18 @@
       retries: 30
       delay: 2
       changed_when: false
+  rescue:
+    - name: Fail with connection-limit diagnosis
+      ansible.builtin.fail:
+        msg: >-
+          PostgreSQL on the primary is running
+          max_connections={{ _verify_max_connections.stdout | default('unknown') | trim }}
+          instead of the requested connection_limit={{ postgres_max_connections }}.
+          Patroni never flagged a pending restart for the DCS change — it
+          silently ignores max_connections values it considers invalid
+          (minimum 25), and a value equal to the running one needs no restart.
+          Check `patronictl show-config` and the Patroni journal on
+          {{ primary_ip }}.
 
 - name: Start Patroni on standby nodes
   ansible.builtin.systemd:

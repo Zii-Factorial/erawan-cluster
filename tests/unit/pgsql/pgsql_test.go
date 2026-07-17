@@ -62,6 +62,7 @@ func TestValidateDeployRequestRejectsBadInput(t *testing.T) {
 		"bad standby ip":            {PrimaryIP: "10.0.0.1", StandbyIPs: []string{"x"}},
 		"unsupported pg version":    {PrimaryIP: "10.0.0.1", PostgresVersion: 99},
 		"connection limit too low":  {PrimaryIP: "10.0.0.1", ConnectionLimit: 5},
+		"connection limit below patroni minimum": {PrimaryIP: "10.0.0.1", ConnectionLimit: 20},
 		"connection limit too high": {PrimaryIP: "10.0.0.1", ConnectionLimit: 100001},
 	}
 	for name, req := range cases {
@@ -350,6 +351,7 @@ func TestSetConnectionLimitRejectsInvalidRequests(t *testing.T) {
 		"missing job_id":            {ConnectionLimit: 500},
 		"zero limit (deploy-only)":  {JobID: testJobID, ConnectionLimit: 0},
 		"connection limit too low":  {JobID: testJobID, ConnectionLimit: 5},
+		"connection limit below patroni minimum": {JobID: testJobID, ConnectionLimit: 20},
 		"connection limit too high": {JobID: testJobID, ConnectionLimit: 100001},
 	}
 	for name, req := range cases {
