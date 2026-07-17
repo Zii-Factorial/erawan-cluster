@@ -65,10 +65,10 @@
 
 - name: Wait for sync_standby to be elected
   ansible.builtin.uri:
-    url: "http://{{ primary_ip }}:{{ patroni_rest_port }}/cluster"
+    url: "http://{{ primary_ip }}:{{ patroni_rest_port }}/cluster"  selectattr('state', 'equalto', 'streaming')
     return_content: true
   register: _sync_check
-  until: (_sync_check.json | default({})).members | default([]) | selectattr('role', 'equalto', 'sync_standby', 'streaming', 'state') | list | length > 0
+  until: (_sync_check.json | default({})).members | default([]) | selectattr('role', 'equalto', 'sync_standby') | selectattr('state', 'equalto', 'streaming') | list | length > 0
   # 1/3 share of the process budget — see the comment on the previous wait.
   retries: "{{ ((step_timeout_seconds | default(900) | int) / 3) | int }}"
   delay: 1
