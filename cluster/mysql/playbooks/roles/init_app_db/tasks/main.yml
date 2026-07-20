@@ -99,8 +99,36 @@
   args:
     executable: /bin/bash
   register: init_app_db_result
-  changed_when: "'application database and user initialized' in init_app_db_result.stdout"
+  # Retried because this fails intermittently right after cluster bootstrap
+  # (observed: first deploy of a cluster fails here in ~2s, an identical
+  # rerun minutes later succeeds — e.g. a transient super_read_only/primary
+  # window just after Group Replication converges). failed_when: false so an
+  # exhausted retry falls through to the fail task below, which can print a
+  # redacted diagnosis — with no_log here, a direct failure is fully censored
+  # and undebuggable.
+  failed_when: false
+  until: init_app_db_result.rc == 0
+  retries: 6
+  delay: 5
+  changed_when: "'application database and user initialized' in (init_app_db_result.stdout | default(''))"
   when:
     - (new_user | default('') | string | length) > 0
     - (new_db | default('') | string | length) > 0
+  tags: ["init_app_db"]
+
+# Surfaces the failure despite no_log above (needed there because the rendered
+# script embeds the app user's password). The password is redacted from the
+# output before printing; mysqlsh/SQL error text itself never contains it
+# (the CREATE/ALTER USER statements pass it as a bound parameter).
+- name: Fail with init_app_db diagnostics (secrets redacted)
+  vars:
+    _init_diag: "{{ (init_app_db_result.stderr | default('')) ~ '\n' ~ (init_app_db_result.stdout | default('')) }}"
+  ansible.builtin.fail:
+    msg: |
+      Application database initialization failed on {{ inventory_hostname }} (rc={{ init_app_db_result.rc | default('?') }}, {{ init_app_db_result.attempts | default(1) }} attempts):
+      {{ (new_user_password | default('') | length > 0) | ternary(_init_diag | replace(new_user_password | default(''), '***'), _init_diag) }}
+  when:
+    - (new_user | default('') | string | length) > 0
+    - (new_db | default('') | string | length) > 0
+    - (init_app_db_result.rc | default(0)) != 0
   tags: ["init_app_db"]

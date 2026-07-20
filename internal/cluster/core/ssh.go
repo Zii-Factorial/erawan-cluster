@@ -51,7 +51,8 @@ type SSHPolicy struct {
 
 /**
  * AnsibleEnv returns the environment overrides that switch Ansible's global host
- * key checking on or off to match the policy.
+ * key checking on or off to match the policy, plus the connection timeout shared
+ * by every engine run.
  *
  * Receiver:
  *   p SSHPolicy - value receiver; the method operates on a copy of the SSHPolicy
@@ -60,10 +61,15 @@ type SSHPolicy struct {
  *   []string - the resulting []string
  */
 func (p SSHPolicy) AnsibleEnv() []string {
+	// ANSIBLE_TIMEOUT also bounds the privilege-escalation (sudo) prompt wait.
+	// The 10s default is too tight for nodes under recovery/rejoin load and
+	// produced spurious "Timeout (12s) waiting for privilege escalation prompt"
+	// failures; the SSH keepalives still bound truly hung sessions.
+	const timeout = "ANSIBLE_TIMEOUT=30"
 	if p.VerifyHostKeys {
-		return []string{"ANSIBLE_HOST_KEY_CHECKING=True"}
+		return []string{"ANSIBLE_HOST_KEY_CHECKING=True", timeout}
 	}
-	return []string{"ANSIBLE_HOST_KEY_CHECKING=False"}
+	return []string{"ANSIBLE_HOST_KEY_CHECKING=False", timeout}
 }
 
 /**

@@ -163,3 +163,80 @@
           (last Patroni state: {{ (_patroni_replica.json | default({})).state | default('unknown') }}).
           Last 100 Patroni journal lines:
           {{ _join_journal.stdout | default('(no journal output)') }}
+
+# ── Connection-limit audit on the new member ─────────────────────────────────
+# The replica generates its PostgreSQL config from the Patroni DCS (the
+# register play made sure the spec's connection limit is there), so it should
+# start with the requested max_connections out of the box. Two cases still
+# leave it on another value: Patroni started postgres before the DCS config
+# applied (flagged pending_restart — healed right here with a conditional
+# restart, safe because the node serves no traffic yet), or the PRIMARY
+# itself is not running the DCS value (hot-standby clamp: a replica may not
+# run below the primary's live value). The latter cannot be fixed from this
+# node, so it is reported loudly instead of failing an otherwise-successful
+# join — the member is already part of the cluster at this point, and a
+# start/recover or the connection-limit API converges everything.
+- name: Read live max_connections on the new member
+  no_log: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    psql -h {{ ansible_host }} -p {{ postgres_port }} -U {{ postgres_superuser }} -d postgres -Atqc "SHOW max_connections;"
+  args:
+    executable: /bin/bash
+  environment:
+    PGPASSWORD: "{{ postgres_superuser_password }}"
+  register: _member_live_max_connections
+  changed_when: false
+  when: (postgres_max_connections | default(0) | int) >= 25
+
+- name: Converge the new member's connection limit
+  when:
+    - (postgres_max_connections | default(0) | int) >= 25
+    - (_member_live_max_connections.stdout | trim | int) != (postgres_max_connections | int)
+  block:
+    # Patroni's conditional restart: 503 while no restart is pending (the
+    # clamp case — polling would never succeed, so the window is short),
+    # 200 once it restarted.
+    - name: Restart the new member via Patroni once its pending restart is flagged
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/restart"
+        method: POST
+        body_format: json
+        body: {"restart_pending": true}
+        status_code: [200, 503]
+      register: _member_restart
+      until: _member_restart.status == 200
+      retries: 10
+      delay: 3
+      changed_when: _member_restart.status == 200
+      ignore_errors: true
+
+    - name: Re-read live max_connections on the new member
+      no_log: true
+      ansible.builtin.shell: |
+        set -euo pipefail
+        psql -h {{ ansible_host }} -p {{ postgres_port }} -U {{ postgres_superuser }} -d postgres -Atqc "SHOW max_connections;"
+      args:
+        executable: /bin/bash
+      environment:
+        PGPASSWORD: "{{ postgres_superuser_password }}"
+      register: _member_verify_max_connections
+      until: (_member_verify_max_connections.stdout | trim | int) == (postgres_max_connections | int)
+      retries: 5
+      delay: 2
+      changed_when: false
+      ignore_errors: true
+
+    - name: WARNING - new member is not running the requested connection limit
+      ansible.builtin.debug:
+        msg: >-
+          New member {{ ansible_host }} joined successfully but is running
+          max_connections={{ _member_verify_max_connections.stdout | default(_member_live_max_connections.stdout) | trim }}
+          instead of the requested connection_limit={{ postgres_max_connections }}.
+          Most likely the primary itself is not running that value yet
+          (a replica may not run below the primary's live value), so this
+          node was clamped to match. Run the start/recover API or
+          PUT /cluster/pgsql/connection-limit for this cluster to converge
+          every node; the new member then applies the value on its
+          Patroni-triggered restart.
+      when: (_member_verify_max_connections.stdout | default('') | trim) != (postgres_max_connections | string)

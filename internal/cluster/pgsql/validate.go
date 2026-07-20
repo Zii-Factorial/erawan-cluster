@@ -96,8 +96,11 @@ func ValidateDeployRequest(req *DeployRequest) error {
 	default:
 		return fmt.Errorf("postgres_version %d is not supported; valid: 14, 15, 16, 17, 18", req.PostgresVersion)
 	}
-	if req.ConnectionLimit != 0 && (req.ConnectionLimit < 10 || req.ConnectionLimit > 100000) {
-		return fmt.Errorf("connection_limit must be between 10 and 100000 (0 = engine default)")
+	// Patroni validates max_connections with a hard minimum of 25 and silently
+	// ignores lower values (PostgreSQL would then run the engine default), so
+	// reject them here instead of deploying a cluster that never converges.
+	if req.ConnectionLimit != 0 && (req.ConnectionLimit < 25 || req.ConnectionLimit > 100000) {
+		return fmt.Errorf("connection_limit must be between 25 and 100000 (0 = engine default; Patroni enforces a minimum of 25)")
 	}
 	if req.StepTimeoutSeconds == 0 {
 		req.StepTimeoutSeconds = 900

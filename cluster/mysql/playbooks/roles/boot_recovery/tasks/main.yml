@@ -97,6 +97,13 @@
 # rebootClusterFromCompleteOutage for cluster metadata locks (observed: starts
 # stalling to the 300s mysqlsh timeout). Pause it for the duration and always
 # resume, even on failure, so a half-recovered cluster can still self-heal.
+#
+# ignore_errors/ignore_unreachable on the watchdog/exporter tasks: these are
+# best-effort, but failed_when only overrides *module* results — a transient
+# sudo-prompt timeout or connection drop fails the host (and the whole job)
+# anyway. Observed in production: recovery succeeded, then standby_1 died on
+# "Resume GR watchdog" with "Timeout (12s) waiting for privilege escalation
+# prompt" and the job was marked failed.
 - name: Pause GR watchdog during recovery
   ansible.builtin.systemd:
     name: "{{ item }}"
@@ -105,6 +112,8 @@
     - erawan-gr-watchdog.timer
     - erawan-gr-watchdog.service
   failed_when: false
+  ignore_errors: true
+  ignore_unreachable: true
   tags: ["boot_recovery"]
 
 - name: Run recovery with the watchdog paused
@@ -127,14 +136,22 @@
         name: erawan-gr-watchdog.timer
         state: started
       failed_when: false
+      ignore_errors: true
+      ignore_unreachable: true
 
     # The mysqld exporter ships in the VM image with its unit tied to
     # mysql.service, so stopping the cluster kills it and nothing restarts it
     # — every metrics call then reports "mysqld_exporter unreachable on all
-    # nodes". The unit name varies by image, so probe the common ones.
-    - name: Ensure mysqld exporter is running
+    # nodes". The unit name varies by image, so probe the common ones. The
+    # primary-check endpoint is started here too for the same reason: HAProxy
+    # routes by it, so a recovered-but-checkerless node is healthy yet
+    # unreachable for clients ("no server available").
+    - name: Ensure mysqld exporter and primary-check are running
       ansible.builtin.shell: |
         set -euo pipefail
+        if systemctl list-unit-files --no-legend erawan-mysql-primary-check.service 2>/dev/null | grep -q .; then
+          systemctl start erawan-mysql-primary-check.service || true
+        fi
         for unit in mysqld_exporter mysql_exporter prometheus-mysqld-exporter; do
           if systemctl list-unit-files --no-legend "${unit}.service" 2>/dev/null | grep -q .; then
             systemctl start "${unit}.service"
@@ -146,3 +163,5 @@
         executable: /bin/bash
       changed_when: false
       failed_when: false
+      ignore_errors: true
+      ignore_unreachable: true

@@ -386,6 +386,14 @@ func (s *Service) recoveryStepsFor() []step {
 	return []step{
 		{Name: "boot_recovery", Tag: "boot_recovery"},
 		{Name: "verify_cluster", Tag: "verify_cluster"},
+		// A recovered cluster is only reachable through HAProxy if the
+		// primary-check endpoint (its health-check target) is up on every
+		// node. Nodes recreated by a scale come from a stock image where the
+		// service may be missing entirely, and a bare reboot can leave it
+		// dead — either way the cluster verifies healthy while every client
+		// connection fails with "no server available". Idempotent and ~5s
+		// when already running.
+		{Name: "primary_check", Tag: "primary_check"},
 	}
 }
 

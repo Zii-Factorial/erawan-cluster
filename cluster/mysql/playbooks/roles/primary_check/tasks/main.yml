@@ -47,3 +47,50 @@
   delay: 2
   until: _primary_check_probe is succeeded
   tags: ["primary_check"]
+
+# HAProxy routes by these endpoints, so a cluster is only reachable for
+# clients when every node answers and exactly one advertises primary (200).
+# Runs here — after the checker was just (re)started on every node — so the
+# happy path is a single ~1s round; the retry budget is only consumed when
+# routing is genuinely broken (observed after a scale recreated the node
+# VMs: cluster healthy, checkers dead, every client got "no server
+# available" while the job reported green).
+- name: Verify primary-check endpoints route exactly one primary
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 - <<'PYEOF'
+    import sys, time, urllib.request, urllib.error
+
+    nodes = [n for n in "{{ ([primary_ip] + (standby_ips | default([]))) | join(',') }}".split(',') if n]
+    port = {{ primary_check_port | int }}
+    deadline = time.time() + {{ primary_check_routing_budget_seconds | int }}
+
+    while True:
+        results = {}
+        for n in nodes:
+            try:
+                with urllib.request.urlopen(f"http://{n}:{port}/", timeout=4) as r:
+                    results[n] = r.status
+            except urllib.error.HTTPError as e:
+                results[n] = e.code
+            except Exception as e:
+                results[n] = f"unreachable ({e})"
+        ok = all(v in (200, 503) for v in results.values())
+        primaries = sum(1 for v in results.values() if v == 200)
+        if ok and primaries == 1:
+            print(f"primary-check routing OK: {results}")
+            sys.exit(0)
+        if time.time() >= deadline:
+            print(
+                "primary-check endpoints are not routable for HAProxy "
+                f"(need every node answering and exactly one 200): {results}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        time.sleep(3)
+    PYEOF
+  args:
+    executable: /bin/bash
+  changed_when: false
+  run_once: true
+  tags: ["primary_check"]

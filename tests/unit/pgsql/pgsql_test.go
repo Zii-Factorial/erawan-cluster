@@ -62,6 +62,7 @@ func TestValidateDeployRequestRejectsBadInput(t *testing.T) {
 		"bad standby ip":            {PrimaryIP: "10.0.0.1", StandbyIPs: []string{"x"}},
 		"unsupported pg version":    {PrimaryIP: "10.0.0.1", PostgresVersion: 99},
 		"connection limit too low":  {PrimaryIP: "10.0.0.1", ConnectionLimit: 5},
+		"connection limit below patroni minimum": {PrimaryIP: "10.0.0.1", ConnectionLimit: 20},
 		"connection limit too high": {PrimaryIP: "10.0.0.1", ConnectionLimit: 100001},
 	}
 	for name, req := range cases {
@@ -335,5 +336,35 @@ func TestDBManagerRejectsInvalidRequests(t *testing.T) {
 	}
 	if err := db.CreateDatabase(ctx, dbmanager.CreateDatabaseRequest{JobID: testJobID, DBName: "bad name!"}); err == nil {
 		t.Fatal("expected create-database to reject an invalid name")
+	}
+}
+
+func TestSetConnectionLimitRejectsInvalidRequests(t *testing.T) {
+	store, err := pgsql.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	db := dbmanager.NewService(store)
+	ctx := context.Background()
+
+	cases := map[string]dbmanager.SetConnectionLimitRequest{
+		"missing job_id":            {ConnectionLimit: 500},
+		"zero limit (deploy-only)":  {JobID: testJobID, ConnectionLimit: 0},
+		"connection limit too low":  {JobID: testJobID, ConnectionLimit: 5},
+		"connection limit below patroni minimum": {JobID: testJobID, ConnectionLimit: 20},
+		"connection limit too high": {JobID: testJobID, ConnectionLimit: 100001},
+	}
+	for name, req := range cases {
+		if status, err := db.SetConnectionLimit(ctx, req); err == nil || status != nil {
+			t.Fatalf("expected %s to be rejected before touching any node", name)
+		}
+	}
+
+	// Valid request against a job that does not exist must fail on job lookup.
+	if _, err := db.SetConnectionLimit(ctx, dbmanager.SetConnectionLimitRequest{JobID: testJobID, ConnectionLimit: 500}); err == nil {
+		t.Fatal("expected set-connection-limit on an unknown job to fail")
+	}
+	if _, err := db.GetConnectionLimit(ctx, testJobID); err == nil {
+		t.Fatal("expected get-connection-limit on an unknown job to fail")
 	}
 }

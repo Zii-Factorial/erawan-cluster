@@ -243,8 +243,8 @@ func TestNewJobIDAndRandomSecret(t *testing.T) {
 
 func TestSSHPolicySecureByDefault(t *testing.T) {
 	p := core.SSHPolicy{VerifyHostKeys: true, KnownHostsFile: "/etc/erawan/known_hosts"}
-	if env := p.AnsibleEnv(); len(env) != 1 || env[0] != "ANSIBLE_HOST_KEY_CHECKING=True" {
-		t.Fatalf("expected host key checking enabled, got %v", env)
+	if env := p.AnsibleEnv(); len(env) != 2 || env[0] != "ANSIBLE_HOST_KEY_CHECKING=True" || env[1] != "ANSIBLE_TIMEOUT=30" {
+		t.Fatalf("expected host key checking enabled and connection timeout set, got %v", env)
 	}
 	args := p.SSHCommonArgs()
 	if !strings.Contains(args, "StrictHostKeyChecking=yes") || !strings.Contains(args, "UserKnownHostsFile=/etc/erawan/known_hosts") {
