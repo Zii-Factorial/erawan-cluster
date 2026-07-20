@@ -17,9 +17,3 @@ mysqlsh_verify_timeout_seconds: 60
 # process-level timeout fires.
 verify_cluster_budget_seconds: "{{ [(step_timeout_seconds | default(900) | int) - 120, 180] | max }}"
 verify_cluster_retry_delay_seconds: 2
-
-# Wall-clock budget for the primary-check routing assertion. The service is a
-# tiny local HTTP checker that systemd starts in seconds; 60s covers a node
-# where it is still coming up after a reboot without eating into the budget
-# above (which has already proven the cluster itself healthy by then).
-primary_check_verify_budget_seconds: 60

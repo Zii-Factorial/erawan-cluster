@@ -1,2 +1,7 @@
 ---
 primary_check_port: 9200
+
+# Wall-clock ceiling for the cross-node routing assertion at the end of this
+# role. The checkers were just restarted, so the normal case is one ~1s round;
+# this budget is only consumed when routing is actually broken.
+primary_check_routing_budget_seconds: 45
