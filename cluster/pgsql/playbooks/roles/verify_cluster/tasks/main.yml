@@ -31,13 +31,19 @@
   failed_when: patroni_active.rc != 0
   tags: ["verify_cluster"]
 
+# Retried because after a vertical resize the node reboots and Patroni's REST
+# listener can lag systemd's "active" state by several seconds; a single-shot
+# probe here failed whole verify runs on otherwise healthy clusters. The 60s
+# ceiling stays inside verifyClusterExecBuffer (see service.go).
 - name: Check local Patroni REST API
   ansible.builtin.uri:
     url: "http://{{ ansible_host }}:{{ patroni_rest_port }}/patroni"
     return_content: true
   register: patroni_status
+  until: patroni_status.status == 200
+  retries: 30
+  delay: 2
   changed_when: false
-  failed_when: patroni_status.status != 200
   tags: ["verify_cluster"]
 
 - name: Wait for all cluster nodes to be registered in Patroni
@@ -63,12 +69,34 @@
   delegate_to: "{{ groups['pgsql_primary'][0] }}"
   tags: ["verify_cluster"]
 
+# primary_ip is the *stored* primary from the portal spec. A vertical resize
+# reboots that VM and Patroni fails over, so the actual leader may be any
+# member by the time verify runs. All leader-dependent checks below must use
+# this discovered address, not primary_ip (REST /cluster reads DCS, so the
+# wait above is safe from any member; psql against pg_stat_replication is not).
+- name: Determine current Patroni leader address
+  ansible.builtin.set_fact:
+    patroni_leader_ip: >-
+      {{ patroni_cluster_view.json.members
+         | selectattr('role', 'equalto', 'leader')
+         | map(attribute='host', default=primary_ip)
+         | first | default(primary_ip) }}
+  run_once: true
+  tags: ["verify_cluster"]
+
+# state is 'streaming' only on Patroni >= 3.0.4; older builds report a healthy
+# streaming replica as 'running', which made this wait time out on perfectly
+# healthy clusters. Accept both.
 - name: Wait for sync_standby to be elected
   ansible.builtin.uri:
-    url: "http://{{ primary_ip }}:{{ patroni_rest_port }}/cluster"
+    url: "http://{{ patroni_leader_ip | default(primary_ip) }}:{{ patroni_rest_port }}/cluster"
     return_content: true
   register: _sync_check
-  until: (_sync_check.json | default({})).members | default([]) | selectattr('role', 'equalto', 'sync_standby') | selectattr('state', 'equalto', 'streaming') | list | length > 0
+  until: >-
+    (_sync_check.json | default({})).members | default([])
+    | selectattr('role', 'equalto', 'sync_standby')
+    | selectattr('state', 'in', ['streaming', 'running'])
+    | list | length > 0
   # 1/3 share of the process budget — see the comment on the previous wait.
   retries: "{{ ((step_timeout_seconds | default(900) | int) / 3) | int }}"
   delay: 1
@@ -78,18 +106,25 @@
   when: standby_ips | length > 0
   tags: ["verify_cluster"]
 
-- name: Wait for expected replication connections on primary
+# Must query the discovered leader: pg_stat_replication only has rows on the
+# node actually sending WAL. Querying the stored primary_ip after a failover
+# returns 0 forever and burned the whole retry budget on healthy clusters.
+# stdout is defaulted because a failed attempt inside the retry loop (psql
+# refused mid-switchover, privilege escalation timeout) can register a result
+# without stdout — the bare access made `until` raise and abort instantly
+# instead of retrying.
+- name: Wait for expected replication connections on current leader
   no_log: true
   ansible.builtin.shell: |
     set -euo pipefail
-    psql -h {{ primary_ip }} -p {{ postgres_port }} -U {{ postgres_superuser }} -d postgres -Atqc "SELECT count(*) FROM pg_stat_replication;"
+    psql -h {{ patroni_leader_ip | default(primary_ip) }} -p {{ postgres_port }} -U {{ postgres_superuser }} -d postgres -Atqc "SELECT count(*) FROM pg_stat_replication;"
   args:
     executable: /bin/bash
   environment:
     PGPASSWORD: "{{ postgres_superuser_password }}"
   register: pgsql_replication_count
   changed_when: false
-  until: pgsql_replication_count.stdout | int >= (standby_ips | length)
+  until: (pgsql_replication_count.stdout | default('0')) | int >= (standby_ips | length)
   # 1/3 share of the process budget, polled at 2s instead of 10s — see the
   # comment on the first wait above for why this is no longer a full share.
   retries: "{{ (((step_timeout_seconds | default(900) | int) / 3) / 2) | int }}"
