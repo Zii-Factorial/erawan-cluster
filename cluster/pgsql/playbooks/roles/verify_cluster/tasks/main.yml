@@ -15,20 +15,30 @@
   failed_when: patroni_enabled.rc != 0
   tags: ["verify_cluster"]
 
+# Both is-active checks tolerate a short transitional window: a service can
+# legitimately pass through activating/deactivating right after an operation
+# (Restart=on-failure cycles on 5s, and verify can start seconds after the
+# previous play touched the service). 30s covers one full crash-restart cycle
+# while a genuinely stopped node still fails fast enough to keep its real
+# cause (e.g. an external VM stop) visible in the run that hit it.
 - name: Check etcd is active
   ansible.builtin.command:
     argv: [systemctl, is-active, etcd]
   register: etcd_active
+  until: etcd_active.rc == 0
+  retries: 10
+  delay: 3
   changed_when: false
-  failed_when: etcd_active.rc != 0
   tags: ["verify_cluster"]
 
 - name: Check Patroni is active
   ansible.builtin.command:
     argv: [systemctl, is-active, patroni]
   register: patroni_active
+  until: patroni_active.rc == 0
+  retries: 10
+  delay: 3
   changed_when: false
-  failed_when: patroni_active.rc != 0
   tags: ["verify_cluster"]
 
 # Retried because after a vertical resize the node reboots and Patroni's REST
