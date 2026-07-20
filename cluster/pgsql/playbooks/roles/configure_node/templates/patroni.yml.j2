@@ -75,6 +75,13 @@ postgresql:
   data_dir: {{ erawan_pg_data_directory }}
   bin_dir: {{ erawan_pg_bindir }}
   pgpass: {{ patroni_pgpass_path }}
+  # Without this, pg_basebackup runs with its default --checkpoint=spread and
+  # the FIRST replica clone after a bootstrap waits ~1.5-2min for the leader's
+  # paced checkpoint (measured: member 1 add = 2m17s of which ~98s was
+  # "creating replica"; member 2 = 35s because the checkpoint had already
+  # happened). fast forces an immediate checkpoint so every clone starts now.
+  basebackup:
+    checkpoint: 'fast'
   authentication:
     replication:
       username: {{ replication_user }}
