@@ -142,10 +142,16 @@
     # The mysqld exporter ships in the VM image with its unit tied to
     # mysql.service, so stopping the cluster kills it and nothing restarts it
     # — every metrics call then reports "mysqld_exporter unreachable on all
-    # nodes". The unit name varies by image, so probe the common ones.
-    - name: Ensure mysqld exporter is running
+    # nodes". The unit name varies by image, so probe the common ones. The
+    # primary-check endpoint is started here too for the same reason: HAProxy
+    # routes by it, so a recovered-but-checkerless node is healthy yet
+    # unreachable for clients ("no server available").
+    - name: Ensure mysqld exporter and primary-check are running
       ansible.builtin.shell: |
         set -euo pipefail
+        if systemctl list-unit-files --no-legend erawan-mysql-primary-check.service 2>/dev/null | grep -q .; then
+          systemctl start erawan-mysql-primary-check.service || true
+        fi
         for unit in mysqld_exporter mysql_exporter prometheus-mysqld-exporter; do
           if systemctl list-unit-files --no-legend "${unit}.service" 2>/dev/null | grep -q .; then
             systemctl start "${unit}.service"
